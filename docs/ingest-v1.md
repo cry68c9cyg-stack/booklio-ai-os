@@ -1,6 +1,6 @@
 # Příjem dat z pokladny · kontrakt v1
 
-Pokladna (Pexeso, později i jiné) posílá AI OS uzavřené účty a uzávěrky hotovosti. AI OS se k pokladně nikdy nepřipojuje; spojení vždy otevírá pokladna. Pokladna tak nemusí být vystavená do internetu.
+Pokladna (Pexeso, později i jiné) posílá AI OS uzavřené účty, uzávěrky hotovosti a ranní kontroly lahví. AI OS se k pokladně nikdy nepřipojuje; spojení vždy otevírá pokladna. Pokladna tak nemusí být vystavená do internetu.
 
 ## Spárování
 
@@ -48,6 +48,25 @@ Pokladna (Pexeso, později i jiné) posílá AI OS uzavřené účty a uzávěrk
 
 Ranní přehled čeká, až přijdou uzávěrky všech pokladen z konfigurace (`registers`).
 
+### Ranní kontrola lahví (`bottle_check`)
+
+Doplněno 9. 10. 2026 zpětně kompatibilně: nový typ záznamu, stávající `bill` a `cash_closing` se nemění. Starší verze AI OS tento typ odmítne (400 pro celou dávku), proto se AI OS musí nasadit dřív, než pokladna začne kontroly posílat.
+
+`{type: "bottle_check", id, version, businessDate, countedAt, items: [...]}`
+
+| Pole | Typ | Poznámka |
+|---|---|---|
+| `businessDate` | `YYYY-MM-DD` | provozní den, jehož spotřebu kontrola uzavírá: ranní kontrola v provozní den X má `businessDate` X−1, tedy den, o kterém je ranní přehled |
+| `countedAt` | ISO čas | dokončení počítání |
+| `items[]` | `{itemId, name, countedMl, expectedMl, costPerLitreCents}` | nejvýše 50, `itemId` se v jedné kontrole neopakuje |
+| `itemId` | string | skladová položka pokladny (surovina), ne prodejní produkt |
+| `countedMl`, `expectedMl` | int ≥ 0 | celé mililitry; `expectedMl` = očekávaný stav vypočtený pokladnou (poslední potvrzený stav + příjemky − prodej podle receptur) |
+| `costPerLitreCents` | int ≥ 0 | nákupní cena za litr v haléřích ze skladové karty pokladny (bez rozlišení DPH, na rozdíl od tržeb) |
+
+Očekávaný stav počítá pokladna, protože zná receptury, prodeje a příjemky; AI OS kontrolu jen ukládá a vykresluje. Opakované počítání téhož rána = nový záznam nebo vyšší `version`; ranní přehled použije kontrolu s nejpozdějším `countedAt`.
+
+Manko lahve = `expectedMl − countedMl` (přebytky se s mankem nesčítají), v Kč `manko × costPerLitreCents / 1000`. Ranní přehled vypíše jen lahve s mankem od prahu `bottleCheck.minLossCents` v konfiguraci provozovny (výchozí 10 000 haléřů = 100 Kč), seřazené podle Kč, nejvýše pět řádků se ⚠. Je-li `bottleCheck` nastavené a kontrola za den chybí, přehled to uvede. Na kontrolu lahví přehled nečeká.
+
 ## Kdy posílat
 
-Po uzavření každého účtu nebo v intervalu 5–15 minut, a vždy hned po uzávěrce. Neodeslané dávky drží pokladna ve své frontě a posílá je s opakováním.
+Po uzavření každého účtu nebo v intervalu 5–15 minut, a vždy hned po uzávěrce a po dokončení kontroly lahví. Neodeslané dávky drží pokladna ve své frontě a posílá je s opakováním.

@@ -4,7 +4,7 @@ import {buildBriefing, renderBriefing} from './briefing.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate} from './schedule.ts';
 import {addDays, isDate} from './time.ts';
-import {InputError, validateBatch, validateConfig, validateHistory, type Bill, type CashClosing, type TenantConfig} from './validate.ts';
+import {InputError, validateBatch, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type TenantConfig} from './validate.ts';
 
 type Env = DeliveryEnv & {TENANTS: DurableObjectNamespace<TenantObject>; REGISTRY: DurableObjectNamespace<Registry>; ADMIN_SECRET: string};
 type Result = {status: number; body: unknown};
@@ -40,7 +40,8 @@ export class TenantObject extends DurableObject<Env> {
 
   private config(): TenantConfig | null {
     const row = this.sql.exec<{json: string}>('SELECT json FROM config WHERE id=1').toArray()[0];
-    return row ? JSON.parse(row.json) as TenantConfig : null;
+    // Configs saved before the bottle check have no `bottleCheck` key.
+    return row ? {bottleCheck: null, ...JSON.parse(row.json)} as TenantConfig : null;
   }
 
   async handle(tenant: string, route: string, method: string, body: unknown, token: string | null, query: Record<string, string>): Promise<Result> {
@@ -102,7 +103,7 @@ export class TenantObject extends DurableObject<Env> {
         const changed = this.sql.exec(`INSERT INTO records(type, id, version, business_date, register_id, json, installation_id, received_at) VALUES(?,?,?,?,?,?,?,?)
           ON CONFLICT(type, id) DO UPDATE SET version=excluded.version, business_date=excluded.business_date, register_id=excluded.register_id,
           json=excluded.json, installation_id=excluded.installation_id, received_at=excluded.received_at WHERE excluded.version > records.version`,
-        record.type, record.id, record.version, record.businessDate, record.registerId, JSON.stringify(record), batch.installationId, now).rowsWritten;
+        record.type, record.id, record.version, record.businessDate, record.type === 'bottle_check' ? '' : record.registerId, JSON.stringify(record), batch.installationId, now).rowsWritten;
         if (changed) accepted++; else stale++;
       }
       const result = {batchId: batch.batchId, accepted, stale};
@@ -141,7 +142,8 @@ export class TenantObject extends DurableObject<Env> {
 
   private briefingFor(config: TenantConfig, date: string, incomplete: boolean) {
     const planHistory = [7, 14, 21, 28].map(days => this.dayRevenue(addDays(date, -days))).filter((value): value is number => value !== null).map(revenueCents => ({revenueCents}));
-    const briefing = buildBriefing({businessDate: date, config, bills: this.day<Bill>('bill', date), closings: this.day<CashClosing>('cash_closing', date), planHistory, incomplete});
+    const briefing = buildBriefing({businessDate: date, config, bills: this.day<Bill>('bill', date), closings: this.day<CashClosing>('cash_closing', date),
+      bottleChecks: this.day<BottleCheck>('bottle_check', date), planHistory, incomplete});
     return {briefing, text: renderBriefing(config.name, briefing)};
   }
 

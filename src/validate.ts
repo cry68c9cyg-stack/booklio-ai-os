@@ -16,13 +16,21 @@ export type CashClosing = {
   type: 'cash_closing'; id: string; version: number; businessDate: string; closedAt: string;
   registerId: string; expectedCents: number; countedCents: number;
 };
-export type IngestRecord = Bill | CashClosing;
+/** One watched bottle. Volumes in whole millilitres, purchase price per litre in haléře. */
+export type BottleCheckItem = {itemId: string; name: string; countedMl: number; expectedMl: number; costPerLitreCents: number};
+/** Morning bottle count; `expectedMl` is computed by the POS, AI OS only stores and renders. */
+export type BottleCheck = {type: 'bottle_check'; id: string; version: number; businessDate: string; countedAt: string; items: BottleCheckItem[]};
+export type IngestRecord = Bill | CashClosing | BottleCheck;
 export type Batch = {batchId: string; installationId: string; records: IngestRecord[]};
 
 export type TenantConfig = {
   name: string; timeZone: string; businessDayCutoffHour: number; sendHours: number[];
   registers: string[]; sections: Record<string, string>; recipients: string[];
+  /** Set = the venue counts bottles every morning: show losses from `minLossCents` up and say when the count is missing. */
+  bottleCheck: {minLossCents: number} | null;
 };
+/** Loss threshold when a check arrives but the venue has no `bottleCheck` setting. */
+export const DEFAULT_BOTTLE_LOSS_CENTS = 10000;
 export type HistoryRow = {businessDate: string; revenueCents: number; bills: number | null; guests: number | null};
 
 type Obj = Record<string, unknown>;
@@ -99,6 +107,16 @@ function cashClosing(raw: Obj): CashClosing {
   };
 }
 
+function bottleCheck(raw: Obj): BottleCheck {
+  const value = object(raw, ['type', 'id', 'version', 'businessDate', 'countedAt', 'items']);
+  const items = list(value.items, 50, item => {
+    const row = object(item, ['itemId', 'name', 'countedMl', 'expectedMl', 'costPerLitreCents']);
+    return {itemId: id(row.itemId), name: text(row.name), countedMl: int(row.countedMl, 0, 1e7), expectedMl: int(row.expectedMl, 0, 1e7), costPerLitreCents: int(row.costPerLitreCents, 0, 1e8)};
+  });
+  if (new Set(items.map(item => item.itemId)).size !== items.length) fail();
+  return {type: 'bottle_check', id: id(value.id), version: int(value.version, 1), businessDate: date(value.businessDate), countedAt: instant(value.countedAt), items};
+}
+
 export function validateBatch(raw: unknown): Batch {
   const value = object(raw, ['batchId', 'installationId', 'records']);
   if (typeof value.batchId !== 'string' || !/^[\w-]{8,128}$/.test(value.batchId)) fail();
@@ -108,13 +126,14 @@ export function validateBatch(raw: unknown): Batch {
       const row = item as Obj;
       if (row?.type === 'bill') return bill(row);
       if (row?.type === 'cash_closing') return cashClosing(row);
+      if (row?.type === 'bottle_check') return bottleCheck(row);
       return fail();
     }),
   };
 }
 
 export function validateConfig(raw: unknown): TenantConfig {
-  const value = object(raw, ['name', 'timeZone', 'businessDayCutoffHour', 'sendHours', 'registers', 'sections', 'recipients']);
+  const value = object(raw, ['name', 'timeZone', 'businessDayCutoffHour', 'sendHours', 'registers', 'sections', 'recipients'], ['bottleCheck']);
   const timeZone = text(value.timeZone, 60);
   try { new Intl.DateTimeFormat('en', {timeZone}); } catch { fail(); }
   const sendHours = list(value.sendHours, 6, hour => int(hour, 0, 23));
@@ -129,6 +148,7 @@ export function validateConfig(raw: unknown): TenantConfig {
       if (typeof item !== 'string' || !/^\+\d{8,15}$/.test(item)) fail();
       return item as string;
     }),
+    bottleCheck: value.bottleCheck == null ? null : {minLossCents: int(object(value.bottleCheck, ['minLossCents']).minLossCents, 0, 1e7)},
   };
 }
 

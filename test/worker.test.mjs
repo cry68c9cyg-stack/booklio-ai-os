@@ -64,18 +64,29 @@ try {
   assert.equal((await tick('2026-10-09T04:00:00Z')).decision, 'wait'); // 6:00 local
   assert.equal((await tick('2026-10-09T05:00:00Z')).decision, 'wait'); // 7:00 local, closing missing
   assert.equal((await ingest('batch-0003', [closing])).status, 200);
+  // Morning bottle check (expected stock computed by the POS); a recount is a higher version.
+  const bottles = (version, countedMl) => ({type: 'bottle_check', id: 'px-bottle-7', version, businessDate: '2026-10-08', countedAt: '2026-10-09T05:30:00Z', items: [
+    {itemId: '1', name: 'Jägermeister', countedMl, expectedMl: 4100, costPerLitreCents: 45000},
+    {itemId: '2', name: 'Tequila', countedMl: 880, expectedMl: 900, costPerLitreCents: 55000},
+  ]});
+  assert.equal((await ingest('batch-0003b', [{...bottles(1, 3000), registerId: 'bar'}])).status, 400, 'unknown field in bottle_check');
+  assert.deepEqual(await (await ingest('batch-0003c', [bottles(1, 3000)])).json(), {batchId: 'batch-0003c', accepted: 1, stale: 0});
+  assert.deepEqual(await (await ingest('batch-0003d', [bottles(2, 3650)])).json(), {batchId: 'batch-0003d', accepted: 1, stale: 0});
   const sent = await tick('2026-10-09T06:00:00Z'); // 8:00 local
   assert.equal(sent.decision, 'send');
   assert.equal(sent.businessDate, '2026-10-08');
   assert.match(sent.text, /Tržba: 1 200 Kč \(plán 1 200 Kč, \+0 %\)/);
+  assert.match(sent.text, /\nLahve: manko 214 Kč \(2 spočítáno\)\n⚠ Jägermeister −450 ml \(203 Kč\)$/, 'recount wins, small loss hidden');
   assert.equal((await tick('2026-10-09T07:00:00Z')).decision, 'skip');
 
-  // Next day nothing closes: 10:00 sends anyway, marked incomplete.
+  // Next day nothing closes: 10:00 sends anyway, marked incomplete. The venue now expects a bottle check.
+  assert.equal((await call('PUT', '/admin/t/test-venue/config', {...config, bottleCheck: {minLossCents: 10000}})).status, 200);
   await ingest('batch-0004', [bill('b3', 1, 30000, '2026-10-09')]);
   assert.equal((await tick('2026-10-10T07:00:00Z')).decision, 'wait'); // 9:00 local
   const late = await tick('2026-10-10T08:00:00Z'); // 10:00 local
   assert.equal(late.decision, 'send-incomplete');
   assert.match(late.text, /⚠ Uzávěrka chybí: bar\./);
+  assert.match(late.text, /\n⚠ Ranní kontrola lahví chybí\.$/);
 
   // Everything survives a restart; stored briefings are listed without guest data.
   await mf.dispose();

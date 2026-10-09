@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {buildBriefing, crowns, renderBriefing} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, crowns, renderBriefing} from '../src/briefing.ts';
 import {briefingDecision, reportDate} from '../src/schedule.ts';
 import {businessDate} from '../src/time.ts';
-import {InputError, validateBatch, validateConfig, type Bill, type TenantConfig} from '../src/validate.ts';
+import {InputError, validateBatch, validateConfig, type Bill, type BottleCheck, type TenantConfig} from '../src/validate.ts';
 
 const config: TenantConfig = {
   name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9, 10],
-  registers: ['bar', 'klub'], sections: {diner: 'Diner', bar: 'Bar', club: 'Klub'}, recipients: [],
+  registers: ['bar', 'klub'], sections: {diner: 'Diner', bar: 'Bar', club: 'Klub'}, recipients: [], bottleCheck: null,
 };
 const bill = (id: string, extra: Partial<Bill> = {}): Bill => ({
   type: 'bill', id, version: 1, businessDate: '2026-10-08', closedAt: '2026-10-08T20:00:00.000Z', registerId: 'bar', section: 'bar',
@@ -91,4 +91,64 @@ test('config accepts the James Dean setup and rejects bad phone numbers', () => 
   assert.deepEqual(validateConfig({...config, sendHours: [10, 7, 8, 9]}).sendHours, [7, 8, 9, 10]);
   assert.throws(() => validateConfig({...config, recipients: ['606979797']}), InputError);
   assert.throws(() => validateConfig({...config, timeZone: 'Mars/Base'}), InputError);
+});
+
+const bottleCheck = (extra: Partial<BottleCheck> = {}): BottleCheck => ({
+  type: 'bottle_check', id: 'px-bottle-1', version: 1, businessDate: '2026-10-08', countedAt: '2026-10-09T07:30:00.000Z',
+  items: [
+    {itemId: '1', name: 'Jameson', countedMl: 2300, expectedMl: 2450, costPerLitreCents: 52000}, // −150 ml = 78 Kč
+    {itemId: '2', name: 'Jägermeister', countedMl: 3650, expectedMl: 4100, costPerLitreCents: 45000}, // −450 ml = 202,50 Kč
+    {itemId: '3', name: 'Tequila', countedMl: 880, expectedMl: 900, costPerLitreCents: 55000}, // −20 ml = 11 Kč
+    {itemId: '4', name: 'Aperol', countedMl: 3500, expectedMl: 3400, costPerLitreCents: 28000}, // surplus, ignored
+    {itemId: '5', name: 'Jack Daniel’s', countedMl: 2500, expectedMl: 2800, costPerLitreCents: 60000}, // −300 ml = 180 Kč
+  ], ...extra,
+});
+
+test('bottle_check is part of the contract: whole ml, haléře per litre, no unknown fields, unique items', () => {
+  const batch = (record: unknown) => ({batchId: 'batch-0001', installationId: 'pos-1', records: [record]});
+  assert.deepEqual(validateBatch(batch(bottleCheck())).records[0], bottleCheck());
+  assert.throws(() => validateBatch(batch({...bottleCheck(), registerId: 'bar'})), InputError);
+  assert.throws(() => validateBatch(batch(bottleCheck({items: [{...bottleCheck().items[0], countedMl: 1.5}]}))), InputError);
+  assert.throws(() => validateBatch(batch(bottleCheck({items: [{...bottleCheck().items[0], costPerLitreCents: -1}]}))), InputError);
+  assert.throws(() => validateBatch(batch(bottleCheck({items: [{...bottleCheck().items[0], note: 'x'} as never]}))), InputError);
+  assert.throws(() => validateBatch(batch(bottleCheck({items: [bottleCheck().items[0], bottleCheck().items[0]]}))), InputError);
+  assert.throws(() => validateBatch(batch(bottleCheck({items: Array.from({length: 51}, (_, i) => ({...bottleCheck().items[0], itemId: String(i)}))}))), InputError);
+  assert.throws(() => validateBatch(batch({...bottleCheck(), countedAt: 'yesterday'})), InputError);
+});
+
+test('bottle losses: expected − counted at purchase price, surpluses ignored, threshold filters small ones', () => {
+  const {lossCents, losses} = bottleLosses(bottleCheck(), 10000);
+  assert.equal(lossCents, 7800 + 20250 + 1100 + 18000);
+  assert.deepEqual(losses.map(row => [row.name, row.lossMl, row.lossCents]), [['Jägermeister', 450, 20250], ['Jack Daniel’s', 300, 18000]]);
+  assert.deepEqual(bottleLosses(bottleCheck(), 0).losses.map(row => row.name), ['Jägermeister', 'Jack Daniel’s', 'Jameson', 'Tequila']);
+});
+
+test('briefing lists only meaningful bottle losses, sorted by CZK, with ⚠', () => {
+  const day = {businessDate: '2026-10-08', incomplete: false, bills: [bill('1')], closings: [], planHistory: []};
+  const text = renderBriefing('James Dean', buildBriefing({...day, config, bottleChecks: [bottleCheck()]}));
+  assert.match(text, /\nLahve: manko 472 Kč \(5 spočítáno\)\n⚠ Jägermeister −450 ml \(203 Kč\)\n⚠ Jack Daniel’s −300 ml \(180 Kč\)$/);
+  assert.doesNotMatch(text, /Jameson|Tequila|Aperol/);
+  // The owner's threshold and the latest recount win.
+  const strict = buildBriefing({...day, config: {...config, bottleCheck: {minLossCents: 5000}}, bottleChecks: [
+    bottleCheck({id: 'early', countedAt: '2026-10-09T06:00:00.000Z', items: [{itemId: '9', name: 'Rum', countedMl: 0, expectedMl: 700, costPerLitreCents: 40000}]}),
+    bottleCheck(),
+  ]});
+  assert.deepEqual(strict.bottles?.losses.map(row => row.name), ['Jägermeister', 'Jack Daniel’s', 'Jameson']);
+  // No loss over the threshold, no check at all, and a missing check the venue expects.
+  assert.match(renderBriefing('X', buildBriefing({...day, config, bottleChecks: [bottleCheck({items: [bottleCheck().items[2]]})]})), /\nLahve: 1 spočítáno, bez manka nad 100 Kč\.$/);
+  assert.doesNotMatch(renderBriefing('X', buildBriefing({...day, config})), /Lahve|lahví/);
+  assert.match(renderBriefing('X', buildBriefing({...day, config: {...config, bottleCheck: {minLossCents: 10000}}})), /\n⚠ Ranní kontrola lahví chybí\.$/);
+  // At most five lines, then a count of the rest.
+  const many = bottleCheck({items: Array.from({length: 7}, (_, i) => ({itemId: String(i), name: `Láhev ${i}`, countedMl: 0, expectedMl: 1000, costPerLitreCents: 20000 + i}))});
+  const lines = renderBriefing('X', buildBriefing({...day, config, bottleChecks: [many]})).split('\n');
+  assert.equal(lines.filter(line => line.startsWith('⚠ Láhev')).length, 5);
+  assert.equal(lines.at(-1), '… a další 2');
+});
+
+test('config: bottleCheck is optional and validated', () => {
+  const {bottleCheck: _omit, ...legacy} = config;
+  assert.equal(validateConfig(legacy).bottleCheck, null, 'configs without the key stay valid');
+  assert.deepEqual(validateConfig({...config, bottleCheck: {minLossCents: 20000}}).bottleCheck, {minLossCents: 20000});
+  assert.throws(() => validateConfig({...config, bottleCheck: {minLossCents: 1.5}}), InputError);
+  assert.throws(() => validateConfig({...config, bottleCheck: {minLossCents: 100, minLossMl: 5}}), InputError);
 });

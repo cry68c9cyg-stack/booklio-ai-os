@@ -8,6 +8,7 @@ Samostatná služba, která čte data z pokladny (Pexeso) a rezervačního syst�
 - **Ranní přehled tržeb** za včerejší provozní den: tržba, plán, střediska, účty, hosté, průměrný účet, platby, slevy, storna (zvlášť storna po zaplacení), rozdíly v hotovosti a nejprodávanější položky.
 - **Pravidlo odeslání**: v 7:00, když jsou uzávěrky všech pokladen; jinak znovu v 8:00 a 9:00; v 10:00 odejde vždy, s upozorněním „Uzávěrka chybí“. Za jeden den nikdy dvakrát.
 - **Plán** = průměr stejného dne v týdnu za předchozí 4 týdny (min. 2 dny dat). Starší dny lze doplnit jednorázovým importem denních tržeb (např. export z rkeeperu).
+- **Ranní kontrola lahví**: pokladna pošle spočítaný a očekávaný stav sledovaných lahví (`bottle_check`, viz kontrakt). Přehled vypíše jen lahve s mankem od prahu `bottleCheck.minLossCents` (výchozí 100 Kč), seřazené podle Kč se ⚠; s nastaveným `bottleCheck` upozorní, když kontrola chybí.
 
 - **Odeslání SMS přes Twilio** na čísla v `recipients`. Bez nastaveného Twilia se přehled jen uloží a je k dispozici přes správní API. Nepovedené odeslání se zkusí znovu v další celou hodinu. Nastavení: `TWILIO_ACCOUNT_SID` a `TWILIO_FROM` jako proměnné, `TWILIO_AUTH_TOKEN` jako Cloudflare secret (lokálně v `.dev.vars`).
 
@@ -19,7 +20,7 @@ Vše vyžaduje `Authorization: Bearer <ADMIN_SECRET>` (min. 32 znaků).
 
 | | |
 |---|---|
-| `PUT /admin/t/{tenant}/config` | název, časová zóna, hranice provozního dne, hodiny odeslání, pokladny, střediska, příjemci |
+| `PUT /admin/t/{tenant}/config` | název, časová zóna, hranice provozního dne, hodiny odeslání, pokladny, střediska, příjemci, volitelně `bottleCheck: {minLossCents}` |
 | `POST /admin/t/{tenant}/pair` | spárování pokladny (`installationId`, `token`) |
 | `POST /admin/t/{tenant}/history` | import denních tržeb `{rows: [{businessDate, revenueCents, bills?, guests?}]}` |
 | `GET /admin/t/{tenant}/briefing?date=YYYY-MM-DD` | náhled přehledu za den |
@@ -30,7 +31,8 @@ Příklad konfigurace James Dean:
 
 ```json
 {"name": "James Dean", "timeZone": "Europe/Prague", "businessDayCutoffHour": 6, "sendHours": [7, 8, 9, 10],
- "registers": ["bar", "klub"], "sections": {"diner": "Diner", "bar": "Bar", "club": "Klub"}, "recipients": []}
+ "registers": ["bar", "klub"], "sections": {"diner": "Diner", "bar": "Bar", "club": "Klub"}, "recipients": [],
+ "bottleCheck": {"minLossCents": 10000}}
 ```
 
 ## Vývoj
