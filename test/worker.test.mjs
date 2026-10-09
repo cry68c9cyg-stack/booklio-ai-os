@@ -90,6 +90,31 @@ try {
   // The hourly cron wakes every configured venue.
   const worker = await mf.getWorker();
   await worker.scheduled({scheduledTime: new Date('2026-10-11T05:00:00Z'), cron: '0 * * * *'});
+  // SMS delivery through Twilio: a failed send is retried at the next hour, then marked delivered.
+  await mf.dispose();
+  const sms = [];
+  mf = new Miniflare({...options,
+    bindings: {...options.bindings, TWILIO_ACCOUNT_SID: 'AC-test', TWILIO_AUTH_TOKEN: 'test-only-token', TWILIO_FROM: '+420700000000'},
+    outboundService: async request => {
+      sms.push({url: request.url, auth: request.headers.get('authorization'), body: new URLSearchParams(await request.text())});
+      return new Response('{}', {status: sms.length === 1 ? 500 : 201});
+    },
+  });
+  await call('PUT', '/admin/t/sms-venue/config', {...config, registers: [], recipients: ['+420600000001']});
+  await call('POST', '/admin/t/sms-venue/pair', {installationId: 'pos-installation-1', token});
+  await ingest('batch-sms-1', [bill('s1'), closing], 'Bearer ' + token, 'sms-venue');
+  const tickSms = async at => (await call('POST', '/admin/t/sms-venue/tick', {at})).json();
+  assert.equal((await tickSms('2026-10-09T05:00:00Z')).status, 'failed');
+  const delivered = await tickSms('2026-10-09T06:00:00Z');
+  assert.equal(delivered.status, 'delivered');
+  assert.equal((await tickSms('2026-10-09T07:00:00Z')).decision, 'skip');
+  assert.equal(sms.length, 2);
+  assert.equal(sms[1].url, 'https://api.twilio.com/2010-04-01/Accounts/AC-test/Messages.json');
+  assert.equal(sms[1].auth, 'Basic ' + btoa('AC-test:test-only-token'));
+  assert.equal(sms[1].body.get('To'), '+420600000001');
+  assert.equal(sms[1].body.get('Body'), delivered.text);
+  // Venues without recipients stay 'stored' even with Twilio configured.
+  assert.deepEqual((await (await call('GET', '/admin/t/test-venue/briefings')).json()).map(row => row.status), ['stored', 'stored']);
   console.log('worker tests passed');
 } finally {
   await mf?.dispose();

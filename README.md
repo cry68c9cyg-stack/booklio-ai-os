@@ -9,7 +9,9 @@ Samostatná služba, která čte data z pokladny (Pexeso) a rezervačního syst�
 - **Pravidlo odeslání**: v 7:00, když jsou uzávěrky všech pokladen; jinak znovu v 8:00 a 9:00; v 10:00 odejde vždy, s upozorněním „Uzávěrka chybí“. Za jeden den nikdy dvakrát.
 - **Plán** = průměr stejného dne v týdnu za předchozí 4 týdny (min. 2 dny dat). Starší dny lze doplnit jednorázovým importem denních tržeb (např. export z rkeeperu).
 
-Zatím **není** napojený kanál WhatsApp/SMS: přehled se uloží a je k dispozici přes správní API. Nic není nasazené.
+- **Odeslání SMS přes Twilio** na čísla v `recipients`. Bez nastaveného Twilia se přehled jen uloží a je k dispozici přes správní API. Nepovedené odeslání se zkusí znovu v další celou hodinu. Nastavení: `TWILIO_ACCOUNT_SID` a `TWILIO_FROM` jako proměnné, `TWILIO_AUTH_TOKEN` jako Cloudflare secret (lokálně v `.dev.vars`).
+
+WhatsApp zatím napojený není. Nic není nasazené.
 
 ## Správní API
 

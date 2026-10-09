@@ -1,11 +1,12 @@
 import {DurableObject} from 'cloudflare:workers';
 import {createHash, timingSafeEqual} from 'node:crypto';
 import {buildBriefing, renderBriefing} from './briefing.ts';
+import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate} from './schedule.ts';
 import {addDays, isDate} from './time.ts';
 import {InputError, validateBatch, validateConfig, validateHistory, type Bill, type CashClosing, type TenantConfig} from './validate.ts';
 
-type Env = {TENANTS: DurableObjectNamespace<TenantObject>; REGISTRY: DurableObjectNamespace<Registry>; ADMIN_SECRET: string};
+type Env = DeliveryEnv & {TENANTS: DurableObjectNamespace<TenantObject>; REGISTRY: DurableObjectNamespace<Registry>; ADMIN_SECRET: string};
 type Result = {status: number; body: unknown};
 
 const ok = (body: unknown): Result => ({status: 200, body});
@@ -163,12 +164,13 @@ export class TenantObject extends DurableObject<Env> {
     });
     if (decision !== 'send' && decision !== 'send-incomplete') return {decision, businessDate: date};
     const {briefing, text} = this.briefingFor(config, date, decision === 'send-incomplete');
-    // No message channel is connected yet: the briefing is stored and readable through the admin API.
-    // A WhatsApp/SMS adapter will deliver it here and set the status to 'delivered' or 'failed'.
+    // Without a configured channel the briefing is 'stored' and readable through the admin API.
+    // A 'failed' delivery is not counted as sent, so the next hourly tick tries again.
+    const status = await deliver(this.env, config.recipients, text);
     this.sql.exec(`INSERT INTO briefings VALUES(?,?,?,?,?,?) ON CONFLICT(business_date) DO UPDATE SET
       status=excluded.status, incomplete=excluded.incomplete, text=excluded.text, json=excluded.json, created_at=excluded.created_at`,
-    date, 'stored', briefing.incomplete ? 1 : 0, text, JSON.stringify(briefing), at.toISOString());
-    return {decision, businessDate: date, text};
+    date, status, briefing.incomplete ? 1 : 0, text, JSON.stringify(briefing), at.toISOString());
+    return {decision, businessDate: date, status, text};
   }
 }
 
