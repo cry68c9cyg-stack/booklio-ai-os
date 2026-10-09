@@ -53,3 +53,16 @@ jobs:
             node scripts/admin.ts config "$tenant" "$RUNNER_TEMP/$tenant.json" | jq -c 'del(.recipients)'
             rm "$RUNNER_TEMP/$tenant.json"
           done
+      - name: Twilio (SMS), jen když jsou tajemství vyplněná
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          FROM: ${{ vars.TWILIO_FROM || 'JamesDean' }}
+        run: |
+          if [ -z "$SID" ] || [ -z "$TOKEN" ]; then echo "Twilio zatím není nastavené."; exit 0; fi
+          f="$RUNNER_TEMP/twilio.json"
+          jq -n --arg s "$(printf '%s' "$SID" | tr -d '[:space:]')" --arg t "$(printf '%s' "$TOKEN" | tr -d '[:space:]')" --arg f "$FROM" \
+            '{TWILIO_ACCOUNT_SID: $s, TWILIO_AUTH_TOKEN: $t, TWILIO_FROM: $f}' > "$f"
+          npx wrangler secret bulk "$f" --env production
+          rm "$f"
