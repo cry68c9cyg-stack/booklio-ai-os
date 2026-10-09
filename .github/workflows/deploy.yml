@@ -25,7 +25,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           r=$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/client/v4/accounts)
-          echo "$r" | jq -c '{success, errors, accounts: [.result[]?.name]}'
+          echo "$r" | jq -c '{success, errors, accounts: (.result | length)}'
           echo "CLOUDFLARE_ACCOUNT_ID=$(echo "$r" | jq -r '.result[0].id')" >> "$GITHUB_ENV"
       - run: npx wrangler deploy --env production
         env:
