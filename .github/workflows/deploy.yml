@@ -30,3 +30,10 @@ jobs:
       - run: npx wrangler deploy --env production
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Správní heslo (odvozené z tokenu, nikde se neukládá)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          S=$(printf '%s' oko1-admin | openssl dgst -sha256 -hmac "$CLOUDFLARE_API_TOKEN" -r | cut -d' ' -f1)
+          echo "::add-mask::$S"
+          printf '%s' "$S" | npx wrangler secret put ADMIN_SECRET --env production
