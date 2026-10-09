@@ -37,3 +37,19 @@ jobs:
           S=$(printf '%s' oko1-admin | openssl dgst -sha256 -hmac "$CLOUDFLARE_API_TOKEN" -r | cut -d' ' -f1)
           echo "::add-mask::$S"
           printf '%s' "$S" | npx wrangler secret put ADMIN_SECRET --env production
+      - name: Nastavení provozoven (šifrované soubory v .github/oko1)
+        env:
+          SEAL_SEED: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AI_OS_URL: https://oko1.rr7whdyyhf.workers.dev
+        run: |
+          pip install -q cryptography
+          echo "Veřejný klíč pro šifrování: $(python3 -I .github/scripts/sealed.py pubkey)"
+          export AI_OS_ADMIN_SECRET=$(printf '%s' oko1-admin | openssl dgst -sha256 -hmac "$CLOUDFLARE_API_TOKEN" -r | cut -d' ' -f1)
+          for f in .github/oko1/*.config.enc; do
+            [ -e "$f" ] || continue
+            tenant=$(basename "$f" .config.enc)
+            python3 -I .github/scripts/sealed.py open "$f" "$RUNNER_TEMP/$tenant.json"
+            node scripts/admin.ts config "$tenant" "$RUNNER_TEMP/$tenant.json" | jq -c 'del(.recipients)'
+            rm "$RUNNER_TEMP/$tenant.json"
+          done
