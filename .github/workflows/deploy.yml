@@ -1,0 +1,25 @@
+name: Nasazení OKO1
+
+# Nasadí worker `oko1` (env production) na Cloudflare.
+# Potřebuje tajemství repozitáře CLOUDFLARE_API_TOKEN.
+on:
+  push:
+    branches: [claude/project-thread-sywvkg]
+  workflow_dispatch:
+
+concurrency: deploy-production
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npx wrangler deploy --env production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
