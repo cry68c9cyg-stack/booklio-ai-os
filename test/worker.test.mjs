@@ -75,11 +75,22 @@ try {
   assert.equal((await ingest('batch-0003b', [{...bottles(1, 3000), registerId: 'bar'}])).status, 400, 'unknown field in bottle_check');
   assert.deepEqual(await (await ingest('batch-0003c', [bottles(1, 3000)])).json(), {batchId: 'batch-0003c', accepted: 1, stale: 0});
   assert.deepEqual(await (await ingest('batch-0003d', [bottles(2, 3650)])).json(), {batchId: 'batch-0003d', accepted: 1, stale: 0});
+  // Bookings from the reservation system: counts only, no guest names. A later change is a higher version.
+  const booking = (id, version, businessDate, section, partySize, status, arrival) =>
+    ({type: 'reservation', id, version, businessDate, startsAt: `${businessDate}T18:00:00Z`, section, partySize, status, arrival, source: 'web'});
+  assert.equal((await ingest('batch-0003e', [{...booking('r1', 1, '2026-10-08', 'diner', 4, 'confirmed', null), name: 'Jan'}])).status, 400, 'guest data refused');
+  assert.deepEqual(await (await ingest('batch-0003f', [
+    booking('r1', 1, '2026-10-08', 'diner', 4, 'confirmed', null), booking('r2', 1, '2026-10-08', 'club', 2, 'confirmed', 'no_show'),
+    booking('r3', 1, '2026-10-09', 'diner', 3, 'confirmed', null), booking('r4', 1, '2026-10-09', 'club', 6, 'confirmed', null),
+    booking('r5', 1, '2026-10-09', 'club', 2, 'pending', null),
+  ])).json(), {batchId: 'batch-0003f', accepted: 5, stale: 0});
+  await ingest('batch-0003g', [booking('r1', 2, '2026-10-08', 'diner', 4, 'confirmed', 'arrived')]);
   const sent = await tick('2026-10-09T06:00:00Z'); // 8:00 local
   assert.equal(sent.decision, 'send');
   assert.equal(sent.businessDate, '2026-10-08');
   assert.match(sent.text, /Tržba: 1 200 Kč \(plán 1 200 Kč, \+0 %\)/);
-  assert.match(sent.text, /\nLahve: manko 214 Kč \(2 spočítáno\)\n⚠ Jägermeister −450 ml \(203 Kč\)$/, 'recount wins, small loss hidden');
+  assert.match(sent.text, /\nLahve: manko 214 Kč \(2 spočítáno\)\n⚠ Jägermeister −450 ml \(203 Kč\)\n/, 'recount wins, small loss hidden');
+  assert.match(sent.text, /\nRezervace: 2 \(6 hostů\), nedorazilo 1 \(2 hosté\)\nDnes rezervováno: 2 \(9 hostů\) · club 1 · diner 1, čeká na potvrzení 1$/, 'unknown sections keep their key');
   assert.equal((await tick('2026-10-09T07:00:00Z')).decision, 'skip');
 
   // Next day nothing closes: 10:00 sends anyway, marked incomplete. The venue now expects a bottle check.
@@ -89,7 +100,7 @@ try {
   const late = await tick('2026-10-10T08:00:00Z'); // 10:00 local
   assert.equal(late.decision, 'send-incomplete');
   assert.match(late.text, /⚠ Uzávěrka chybí: bar\./);
-  assert.match(late.text, /\n⚠ Ranní kontrola lahví chybí\.$/);
+  assert.match(late.text, /\n⚠ Ranní kontrola lahví chybí\.\n/);
 
   // Everything survives a restart; stored briefings are listed without guest data.
   await mf.dispose();

@@ -1,4 +1,4 @@
-import {DEFAULT_BOTTLE_LOSS_CENTS, type Bill, type BottleCheck, type CashClosing, type TenantConfig} from './validate.ts';
+import {DEFAULT_BOTTLE_LOSS_CENTS, type Bill, type BottleCheck, type CashClosing, type Reservation, type TenantConfig} from './validate.ts';
 import {weekday} from './time.ts';
 
 export type Briefing = {
@@ -19,8 +19,39 @@ export type Briefing = {
   /** Morning bottle check: only meaningful losses, largest in CZK first. `null` = no check for this day. */
   bottles: {countedAt: string; checked: number; minLossCents: number; lossCents: number; losses: BottleLoss[]} | null;
   bottleCheckMissing: boolean;
+  /** Bookings of the reported day and of the day that is starting. `null` = the reservation system sent nothing for either day. */
+  reservations: {
+    day: {confirmed: number; guests: number; arrived: number; noShows: number; noShowGuests: number; cancelled: number};
+    today: {confirmed: number; guests: number; pending: number; bySection: {section: string; label: string; confirmed: number; guests: number}[]};
+  } | null;
   incomplete: boolean;
 };
+
+/** Counts bookings: the reported day (who came, who did not) and today's outlook (confirmed and still waiting). */
+export function summarizeReservations(config: TenantConfig, day: Reservation[], today: Reservation[]): Briefing['reservations'] {
+  if (!day.length && !today.length) return null;
+  const confirmedDay = day.filter(row => row.status === 'confirmed');
+  const noShows = confirmedDay.filter(row => row.arrival === 'no_show');
+  const confirmedToday = today.filter(row => row.status === 'confirmed');
+  const sections = new Map<string, {confirmed: number; guests: number}>();
+  for (const row of confirmedToday) {
+    const section = sections.get(row.section) ?? {confirmed: 0, guests: 0};
+    section.confirmed++; section.guests += row.partySize; sections.set(row.section, section);
+  }
+  const order = Object.keys(config.sections);
+  const guests = (rows: Reservation[]) => rows.reduce((sum, row) => sum + row.partySize, 0);
+  return {
+    day: {
+      confirmed: confirmedDay.length, guests: guests(confirmedDay), arrived: confirmedDay.filter(row => row.arrival === 'arrived').length,
+      noShows: noShows.length, noShowGuests: guests(noShows), cancelled: day.filter(row => row.status === 'cancelled').length,
+    },
+    today: {
+      confirmed: confirmedToday.length, guests: guests(confirmedToday), pending: today.filter(row => row.status === 'pending').length,
+      bySection: [...sections].map(([section, row]) => ({section, label: config.sections[section] ?? section, ...row}))
+        .sort((a, b) => (order.indexOf(a.section) + 1 || 99) - (order.indexOf(b.section) + 1 || 99) || a.section.localeCompare(b.section)),
+    },
+  };
+}
 export type BottleLoss = {name: string; lossMl: number; lossCents: number};
 
 /**
@@ -47,6 +78,7 @@ export function planFrom(history: {revenueCents: number}[]): Briefing['plan'] {
 export function buildBriefing(input: {
   businessDate: string; config: TenantConfig; bills: Bill[]; closings: CashClosing[];
   planHistory: {revenueCents: number}[]; incomplete: boolean; bottleChecks?: BottleCheck[];
+  reservations?: Reservation[]; reservationsToday?: Reservation[];
 }): Briefing {
   const closed = input.bills.filter(bill => bill.status === 'closed');
   const add = <K>(map: Map<K, number>, key: K, value: number) => map.set(key, (map.get(key) ?? 0) + value);
@@ -93,6 +125,7 @@ export function buildBriefing(input: {
     topItems: [...items].map(([name, row]) => ({name, ...row})).sort((a, b) => b.revenueCents - a.revenueCents || a.name.localeCompare(b.name)).slice(0, 5),
     bottles: check ? {countedAt: check.countedAt, checked: check.items.length, minLossCents, ...bottleLosses(check, minLossCents)} : null,
     bottleCheckMissing: !check && !!input.config.bottleCheck,
+    reservations: summarizeReservations(input.config, input.reservations ?? [], input.reservationsToday ?? []),
     incomplete: input.incomplete,
   };
 }
@@ -135,6 +168,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   else if (briefing.cash.length) lines.push('Hotovost v pokladnách sedí.');
   if (briefing.topItems.length) lines.push('Nejvíc tržeb: ' + briefing.topItems.slice(0, 3).map(row => `${row.name} ${row.quantity}×`).join(', '));
   lines.push(...renderBottles(briefing));
+  lines.push(...renderReservations(briefing.reservations));
   return lines.join('\n');
 }
 
@@ -151,4 +185,18 @@ export function renderBottles(briefing: Pick<Briefing, 'bottles' | 'bottleCheckM
     ...shown.map(row => `⚠ ${row.name} −${group(row.lossMl)} ml (${crowns(row.lossCents)})`),
     ...(bottles.losses.length > shown.length ? [`… a další ${bottles.losses.length - shown.length}`] : []),
   ];
+}
+
+const guestsWord = (count: number) => count === 1 ? 'host' : count >= 2 && count <= 4 ? 'hosté' : 'hostů';
+/** Two short lines: how the reported day's bookings turned out, and what is booked for the day that is starting. */
+export function renderReservations(reservations: Briefing['reservations']): string[] {
+  if (!reservations) return [];
+  const {day, today} = reservations;
+  let past = `Rezervace: ${day.confirmed} (${day.guests} ${guestsWord(day.guests)})`;
+  if (day.noShows) past += `, nedorazilo ${day.noShows} (${day.noShowGuests} ${guestsWord(day.noShowGuests)})`;
+  if (day.cancelled) past += `, zrušeno ${day.cancelled}`;
+  let next = `Dnes rezervováno: ${today.confirmed} (${today.guests} ${guestsWord(today.guests)})`;
+  if (today.bySection.length > 1) next += ' · ' + today.bySection.map(row => `${row.label} ${row.confirmed}`).join(' · ');
+  if (today.pending) next += `, čeká na potvrzení ${today.pending}`;
+  return [past, next];
 }

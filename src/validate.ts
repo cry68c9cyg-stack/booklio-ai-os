@@ -20,7 +20,13 @@ export type CashClosing = {
 export type BottleCheckItem = {itemId: string; name: string; countedMl: number; expectedMl: number; costPerLitreCents: number};
 /** Morning bottle count; `expectedMl` is computed by the POS, AI OS only stores and renders. */
 export type BottleCheck = {type: 'bottle_check'; id: string; version: number; businessDate: string; countedAt: string; items: BottleCheckItem[]};
-export type IngestRecord = Bill | CashClosing | BottleCheck;
+/** One table booking from the reservation system. No guest names or contacts, only counts. */
+export type Reservation = {
+  type: 'reservation'; id: string; version: number; businessDate: string; startsAt: string; section: string; partySize: number;
+  status: 'pending' | 'confirmed' | 'declined' | 'expired' | 'cancelled'; arrival: 'arrived' | 'no_show' | null; source: string | null;
+};
+export const RESERVATION_STATUSES = ['pending', 'confirmed', 'declined', 'expired', 'cancelled'] as const;
+export type IngestRecord = Bill | CashClosing | BottleCheck | Reservation;
 export type Batch = {batchId: string; installationId: string; records: IngestRecord[]};
 
 export type TenantConfig = {
@@ -117,6 +123,17 @@ function bottleCheck(raw: Obj): BottleCheck {
   return {type: 'bottle_check', id: id(value.id), version: int(value.version, 1), businessDate: date(value.businessDate), countedAt: instant(value.countedAt), items};
 }
 
+function reservation(raw: Obj): Reservation {
+  const value = object(raw, ['type', 'id', 'version', 'businessDate', 'startsAt', 'section', 'partySize', 'status'], ['arrival', 'source']);
+  if (!(RESERVATION_STATUSES as readonly unknown[]).includes(value.status)) fail();
+  if (value.arrival != null && value.arrival !== 'arrived' && value.arrival !== 'no_show') fail();
+  return {
+    type: 'reservation', id: id(value.id), version: int(value.version, 1), businessDate: date(value.businessDate), startsAt: instant(value.startsAt),
+    section: id(value.section), partySize: int(value.partySize, 1, 1000), status: value.status as Reservation['status'],
+    arrival: (value.arrival ?? null) as Reservation['arrival'], source: value.source == null ? null : id(value.source),
+  };
+}
+
 export function validateBatch(raw: unknown): Batch {
   const value = object(raw, ['batchId', 'installationId', 'records']);
   if (typeof value.batchId !== 'string' || !/^[\w-]{8,128}$/.test(value.batchId)) fail();
@@ -127,6 +144,7 @@ export function validateBatch(raw: unknown): Batch {
       if (row?.type === 'bill') return bill(row);
       if (row?.type === 'cash_closing') return cashClosing(row);
       if (row?.type === 'bottle_check') return bottleCheck(row);
+      if (row?.type === 'reservation') return reservation(row);
       return fail();
     }),
   };

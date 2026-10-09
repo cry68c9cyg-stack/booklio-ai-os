@@ -1,6 +1,6 @@
 # Příjem dat z pokladny · kontrakt v1
 
-Pokladna (Pexeso, později i jiné) posílá AI OS uzavřené účty, uzávěrky hotovosti a ranní kontroly lahví. AI OS se k pokladně nikdy nepřipojuje; spojení vždy otevírá pokladna. Pokladna tak nemusí být vystavená do internetu.
+Pokladna (Pexeso, později i jiné) posílá AI OS uzavřené účty, uzávěrky hotovosti a ranní kontroly lahví; rezervační systém posílá rezervace. AI OS se k pokladně nikdy nepřipojuje; spojení vždy otevírá pokladna. Pokladna tak nemusí být vystavená do internetu.
 
 ## Spárování
 
@@ -66,6 +66,25 @@ Doplněno 9. 10. 2026 zpětně kompatibilně: nový typ záznamu, stávající `
 Očekávaný stav počítá pokladna, protože zná receptury, prodeje a příjemky; AI OS kontrolu jen ukládá a vykresluje. Opakované počítání téhož rána = nový záznam nebo vyšší `version`; ranní přehled použije kontrolu s nejpozdějším `countedAt`.
 
 Manko lahve = `expectedMl − countedMl` (přebytky se s mankem nesčítají), v Kč `manko × costPerLitreCents / 1000`. Ranní přehled vypíše jen lahve s mankem od prahu `bottleCheck.minLossCents` v konfiguraci provozovny (výchozí 10 000 haléřů = 100 Kč), seřazené podle Kč, nejvýše pět řádků se ⚠. Je-li `bottleCheck` nastavené a kontrola za den chybí, přehled to uvede. Na kontrolu lahví přehled nečeká.
+
+### Rezervace (`reservation`)
+
+Doplněno 9. 10. 2026 zpětně kompatibilně, stejně jako kontrola lahví: AI OS se musí nasadit dřív, než rezervační systém začne rezervace posílat. Zdrojem je rezervační systém (Booklio), který se páruje jako samostatná instalace se svým `installationId` a tokenem.
+
+`{type: "reservation", id, version, businessDate, startsAt, section, partySize, status, arrival?, source?}`
+
+| Pole | Typ | Poznámka |
+|---|---|---|
+| `id`, `version` | string, int ≥ 1 | `version` roste s každou změnou rezervace (např. čas poslední změny v ms) |
+| `businessDate` | `YYYY-MM-DD` | provozní den; noční klub v 0:30 patří k předchozímu dni |
+| `startsAt` | ISO čas | začátek rezervace |
+| `section` | string | středisko stejným klíčem jako u účtů (`diner`, `bar`, `club`) |
+| `partySize` | int 1–1000 | počet osob |
+| `status` | `pending` \| `confirmed` \| `declined` \| `expired` \| `cancelled` | čeká, potvrzená, odmítnutá, propadlá, zrušená (hostem i obsluhou) |
+| `arrival` | `arrived` \| `no_show` \| `null` | zápis obsluhy, zda host dorazil |
+| `source` | string \| `null` | odkud rezervace přišla, např. `web`, `obsluha`, `mcp` |
+
+Jména, kontakty ani poznámky hostů se neposílají; AI OS potřebuje jen počty. Ranní přehled ukáže dva řádky: potvrzené rezervace za vykazovaný den s počtem hostů a no-show, a potvrzené rezervace na právě začínající den po střediscích s počtem čekajících na potvrzení. Na rezervace přehled nečeká.
 
 ## Kdy posílat
 
