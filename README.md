@@ -14,6 +14,10 @@ Samostatná služba, která čte data z pokladny (Pexeso) a rezervačního syst�
 
 WhatsApp zatím napojený není. Nic není nasazené.
 
+## Spuštění naostro
+
+Krok za krokem v [docs/spusteni.md](docs/spusteni.md): Cloudflare, Twilio, nastavení provozovny, import historie z rkeeperu (`npm run admin -- history`) a spárování Pexesa.
+
 ## Správní API
 
 Vše vyžaduje `Authorization: Bearer <ADMIN_SECRET>` (min. 32 znaků).

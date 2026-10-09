@@ -6,9 +6,15 @@ import {briefingDecision, localHour, reportDate} from './schedule.ts';
 import {addDays, isDate} from './time.ts';
 import {InputError, validateBatch, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type TenantConfig} from './validate.ts';
 
-type Env = DeliveryEnv & {TENANTS: DurableObjectNamespace<TenantObject>; REGISTRY: DurableObjectNamespace<Registry>; ADMIN_SECRET: string};
+type Env = DeliveryEnv & {TENANTS: DurableObjectNamespace<TenantObject>; REGISTRY: DurableObjectNamespace<Registry>; ADMIN_SECRET: string; DATA_JURISDICTION?: string};
 type Result = {status: number; body: unknown};
 
+// With DATA_JURISDICTION=eu (production) the venue data is created and stored only in the EU.
+// The local test runtime has no jurisdictions, so tests leave it unset.
+const scoped = <T extends Rpc.DurableObjectBranded | undefined>(env: Env, namespace: DurableObjectNamespace<T>) =>
+  env.DATA_JURISDICTION === 'eu' ? namespace.jurisdiction('eu') : namespace;
+const tenantStub = (env: Env, tenant: string) => { const ns = scoped(env, env.TENANTS); return ns.get(ns.idFromName(tenant)); };
+const registry = (env: Env) => { const ns = scoped(env, env.REGISTRY); return ns.get(ns.idFromName('registry')); };
 const ok = (body: unknown): Result => ({status: 200, body});
 const failure = (code: string, status: number): Result => ({status, body: {error: code}});
 const json = (result: Result) => Response.json(result.body, {status: result.status, headers: {'cache-control': 'no-store'}});
@@ -69,7 +75,7 @@ export class TenantObject extends DurableObject<Env> {
   private saveConfig(tenant: string, body: unknown): Result {
     const config = validateConfig(body);
     this.sql.exec('INSERT INTO config(id, json) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET json=excluded.json', JSON.stringify(config));
-    this.ctx.waitUntil(this.env.REGISTRY.get(this.env.REGISTRY.idFromName('registry')).add(tenant));
+    this.ctx.waitUntil(registry(this.env).add(tenant));
     return ok(config);
   }
 
@@ -232,12 +238,12 @@ export default {
       if (isResult(body)) return json(body);
     }
     const tenant = match[2];
-    const stub = env.TENANTS.get(env.TENANTS.idFromName(tenant));
+    const stub = tenantStub(env, tenant);
     return json(await stub.handle(tenant, route, request.method, body, token, Object.fromEntries(url.searchParams)));
   },
 
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    const tenants = await env.REGISTRY.get(env.REGISTRY.idFromName('registry')).list();
-    for (const tenant of tenants) ctx.waitUntil(env.TENANTS.get(env.TENANTS.idFromName(tenant)).tick(new Date(event.scheduledTime)));
+    const tenants = await registry(env).list();
+    for (const tenant of tenants) ctx.waitUntil(tenantStub(env, tenant).tick(new Date(event.scheduledTime)));
   },
 };

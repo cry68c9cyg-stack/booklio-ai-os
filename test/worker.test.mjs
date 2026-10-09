@@ -5,6 +5,9 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {build} from 'esbuild';
 import {Miniflare} from 'miniflare';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import {writeFile} from 'node:fs/promises';
 
 const dir = await mkdtemp(join(tmpdir(), 'ai-os-worker-'));
 const admin = 'local-test-only-admin-secret-32-characters';
@@ -126,6 +129,17 @@ try {
   assert.equal(sms[1].body.get('Body'), delivered.text);
   // Venues without recipients stay 'stored' even with Twilio configured.
   assert.deepEqual((await (await call('GET', '/admin/t/test-venue/briefings')).json()).map(row => row.status), ['stored', 'stored']);
+  // The admin script talks to a real HTTP endpoint: config, rkeeper-style CSV import, preview.
+  await mf.dispose();
+  mf = new Miniflare({...options, port: 0});
+  const url = (await mf.ready).href;
+  const runAdmin = (...args) => promisify(execFile)(process.execPath, ['scripts/admin.ts', ...args], {env: {...process.env, AI_OS_URL: url, AI_OS_ADMIN_SECRET: options.bindings.ADMIN_SECRET}});
+  await writeFile(join(dir, 'config.json'), JSON.stringify({...config, name: 'Skript'}));
+  await writeFile(join(dir, 'history.csv'), 'Datum;Pokladna;Tržba;Účty\n1.10.2026;Bar;"1 000,00";4\n1.10.2026;Klub;500;2\n24.9.2026;Bar;700;3\n');
+  assert.match((await runAdmin('config', 'script-venue', join(dir, 'config.json'))).stdout, /"name": "Skript"/);
+  assert.match((await runAdmin('history', 'script-venue', join(dir, 'history.csv'))).stdout, /Dnů: 2[\s\S]*imported: 2/);
+  assert.match((await runAdmin('preview', 'script-venue', '2026-10-08')).stdout, /Skript · čtvrtek 8\. 10\. 2026[\s\S]*plán 1 100 Kč/);
+  await assert.rejects(runAdmin('history', 'script-venue', join(dir, 'config.json')), /Soubor nemá hlavičku/);
   console.log('worker tests passed');
 } finally {
   await mf?.dispose();

@@ -11,5 +11,18 @@
     {"name": "TENANTS", "class_name": "TenantObject"},
     {"name": "REGISTRY", "class_name": "Registry"}
   ]},
-  "migrations": [{"tag": "v1", "new_sqlite_classes": ["TenantObject", "Registry"]}]
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["TenantObject", "Registry"]}],
+  "env": {
+    // Ostrý provoz: npx wrangler deploy --env production (viz docs/spusteni.md).
+    "production": {
+      "name": "booklio-ai-os",
+      "workers_dev": true,
+      "preview_urls": false,
+      "vars": {"DATA_JURISDICTION": "eu"},
+      "durable_objects": {"bindings": [
+        {"name": "TENANTS", "class_name": "TenantObject"},
+        {"name": "REGISTRY", "class_name": "Registry"}
+      ]}
+    }
+  }
 }
