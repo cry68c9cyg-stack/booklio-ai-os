@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "booklio-ai-os-development",
+  "name": "oko1-development",
   "main": "src/worker.ts",
   "compatibility_date": "2026-08-06",
   "compatibility_flags": ["nodejs_compat"],
@@ -15,7 +15,7 @@
   "env": {
     // Ostrý provoz: npx wrangler deploy --env production (viz docs/spusteni.md).
     "production": {
-      "name": "booklio-ai-os",
+      "name": "oko1",
       "workers_dev": true,
       "preview_urls": false,
       "vars": {"DATA_JURISDICTION": "eu"},

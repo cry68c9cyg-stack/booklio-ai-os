@@ -18,7 +18,7 @@ Návod pro první provozovnu (James Dean). Každý krok, který potřebuje pří
    npx wrangler secret put ADMIN_SECRET --env production
    ```
    Hodnotu si uložte do správce hesel. Bude potřeba pro správní příkazy.
-4. Nasazení: `npm run deploy`. Wrangler vypíše adresu služby, např. `https://booklio-ai-os.<účet>.workers.dev`.
+4. Nasazení: `npm run deploy`. Wrangler vypíše adresu služby, např. `https://oko1.<účet>.workers.dev`.
 
 Data provozoven jsou v produkci uložená jen v EU (`DATA_JURISDICTION=eu`).
 
@@ -40,7 +40,7 @@ Dokud Twilio není nastavené, přehledy se jen ukládají a lze je přečíst p
 Do terminálu nastavte adresu a tajemství jen pro aktuální okno:
 
 ```sh
-export AI_OS_URL=https://booklio-ai-os.<účet>.workers.dev
+export AI_OS_URL=https://oko1.<účet>.workers.dev
 export AI_OS_ADMIN_SECRET=<správní tajemství>
 ```
 
