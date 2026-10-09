@@ -66,3 +66,19 @@ jobs:
             '{TWILIO_ACCOUNT_SID: $s, TWILIO_AUTH_TOKEN: $t, TWILIO_FROM: $f}' > "$f"
           npx wrangler secret bulk "$f" --env production
           rm "$f"
+      - name: Zkušební SMS (jen když commit obsahuje [test-sms])
+        if: contains(github.event.head_commit.message, '[test-sms]')
+        env:
+          SEAL_SEED: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          FROM: ${{ vars.TWILIO_FROM || 'JamesDean' }}
+        run: |
+          SID=$(printf '%s' "$SID" | tr -d '[:space:]'); TOKEN=$(printf '%s' "$TOKEN" | tr -d '[:space:]')
+          python3 -I .github/scripts/sealed.py open .github/oko1/james-dean.config.enc "$RUNNER_TEMP/jd.json"
+          TO=$(jq -r '.recipients[0]' "$RUNNER_TEMP/jd.json"); rm "$RUNNER_TEMP/jd.json"
+          echo "::add-mask::$TO"
+          curl -sS -u "$SID:$TOKEN" "https://api.twilio.com/2010-04-01/Accounts/$SID/Messages.json" \
+            --data-urlencode "To=$TO" --data-urlencode "From=$FROM" \
+            --data-urlencode "Body=OKO1: zkušební zpráva. Ranní přehledy James Dean budou chodit sem." \
+            | jq -c '{status, error_code, error_message, code, message}'
