@@ -221,6 +221,59 @@ try {
   assert.equal((await call('GET', '/admin/t/excel-venue/report?date=11.10.2026')).status, 400);
   assert.deepEqual(await (await call('POST', '/admin/t/test-venue/fetch', {date: '2026-10-09'})).json(), {found: false, warnings: ['OneDrive: odkaz na složku není nastavený.']});
 
+  // Dashboard: page with a strict CSP, login by SMS code to the owner, session cookie, day data, logout.
+  await mf.dispose();
+  const codes = [];
+  mf = new Miniflare({...options,
+    bindings: {...options.bindings, TWILIO_ACCOUNT_SID: 'AC-test', TWILIO_AUTH_TOKEN: 'test-only-token', TWILIO_FROM: '+420700000000'},
+    outboundService: async request => { codes.push(new URLSearchParams(await request.text()).get('Body')); return new Response('{}', {status: 201}); },
+  });
+  await call('PUT', '/admin/t/excel-venue/config', {...excelConfig, recipients: ['+420600000003']});
+  const board = (method, path, body, headers = {}) => mf.dispatchFetch('http://local.test/d/excel-venue' + path, {method, headers: {'content-type': 'application/json', ...headers}, body: body === undefined ? undefined : JSON.stringify(body)});
+  const page = await board('GET', '');
+  assert.equal(page.status, 200);
+  const csp = page.headers.get('content-security-policy'), nonce = csp.match(/'nonce-([a-f0-9]+)'/)[1];
+  assert.match(csp, /default-src 'none'/);
+  assert.ok((await page.text()).includes(`<script nonce="${nonce}">`));
+  assert.equal((await board('GET', '/data')).status, 401);
+  assert.equal((await mf.dispatchFetch('http://local.test/d/excel-venue/login', {method: 'POST', body: 'x'})).status, 415);
+  // Only the owner's number gets a code; any other number and any unknown venue get the same answer and nothing is sent.
+  assert.deepEqual(await (await board('POST', '/login', {phone: '+420 600 000 999'})).json(), {sent: true});
+  assert.deepEqual(await (await mf.dispatchFetch('http://local.test/d/no-such-venue/login', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({phone: '+420600000003'})})).json(), {sent: true});
+  assert.equal(codes.length, 0);
+  assert.equal((await board('POST', '/login', {phone: '600 000 003'})).status, 200);
+  assert.equal(codes.length, 1);
+  const code = codes[0].match(/kód pro přihlášení (\d{6})/)[1];
+  const wrong = code === '000000' ? '111111' : '000000';
+  assert.equal((await board('POST', '/verify', {code: wrong})).status, 401);
+  const verified = await board('POST', '/verify', {code});
+  assert.equal(verified.status, 200);
+  const session = verified.headers.get('set-cookie');
+  assert.match(session, /^oko1_session=[a-f0-9]{64}; Path=\/d\/excel-venue; HttpOnly; Secure; SameSite=Strict/);
+  assert.equal((await board('POST', '/verify', {code})).status, 401, 'a code works once');
+  const cookieHeader = {cookie: session.split(';')[0]};
+  const data = await (await board('GET', '/data?date=2026-10-09', undefined, cookieHeader)).json();
+  assert.equal(data.briefing.revenueCents, 39000000);
+  assert.equal(data.days.length, 35);
+  assert.equal(data.days.at(-1).date, '2026-10-09');
+  assert.equal(data.balances.bank, 31000000);
+  assert.equal(data.todo[0].text, 'Trezor je v deníku záporný: −20 000 Kč');
+  assert.equal((await board('GET', '/data', undefined, {cookie: 'oko1_session=' + 'f'.repeat(64)})).status, 401);
+  assert.equal((await mf.dispatchFetch('http://local.test/d/excel-venue/data', {headers: cookieHeader})).status, 200, 'the session works without other headers');
+  assert.equal((await mf.dispatchFetch('http://local.test/d/other-venue/data', {headers: cookieHeader})).status, 401, 'a session is valid for its venue only');
+  // Parallel requests cannot pass the limit of five codes an hour (one is used already).
+  const burst = await Promise.all(Array.from({length: 10}, () => board('POST', '/login', {phone: '+420600000003'})));
+  assert.equal(burst.filter(r => r.status === 200).length, 4);
+  assert.equal(codes.length, 5);
+  // Guessing: after ten wrong codes in an hour (two above) the login closes, even for the right code.
+  const fresh = codes[4].match(/(\d{6})/)[1];
+  for (let i = 0; i < 8; i++) assert.equal((await board('POST', '/verify', {code: String(i).repeat(6) === fresh ? '999999' : String(i).repeat(6)})).status, 401);
+  assert.equal((await board('POST', '/verify', {code: fresh})).status, 429);
+  assert.equal((await board('POST', '/logout', {}, cookieHeader)).status, 200);
+  assert.equal((await board('GET', '/data', undefined, cookieHeader)).status, 401);
+  // Admin can end every session; a change of the allowed phones ends them too.
+  assert.deepEqual(await (await call('POST', '/admin/t/excel-venue/logout', {})).json(), {ended: 0});
+
   // The admin script talks to a real HTTP endpoint: config, rkeeper-style CSV import, preview.
   await mf.dispose();
   mf = new Miniflare({...options, port: 0});

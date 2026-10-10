@@ -1,6 +1,8 @@
 import {DurableObject} from 'cloudflare:workers';
-import {createHash, timingSafeEqual} from 'node:crypto';
-import {buildBriefing, renderBriefing} from './briefing.ts';
+import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
+import {buildBriefing, planFrom, renderBriefing} from './briefing.ts';
+import {dashboardHtml} from './dashboard.ts';
+import {todoList} from './todo.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate} from './schedule.ts';
 import {addDays, isDate} from './time.ts';
@@ -33,7 +35,9 @@ const same = (a: string, b: string) => {
   return left.length === right.length && timingSafeEqual(left, right);
 };
 
+const randomHex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
 const PREPARE_BUDGET_MS = 60000;
+const SESSION_MS = 30 * 86400000;
 /** Waits for `work` at most `ms`; errors and overruns are logged, never thrown. The work may still finish later. */
 async function withinBudget(work: Promise<unknown>, ms: number): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -69,13 +73,16 @@ export class TenantObject extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS report_notes(business_date TEXT PRIMARY KEY, status TEXT NOT NULL CHECK(status IN ('done','failed')),
         json TEXT, error TEXT, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS report_fetches(business_date TEXT NOT NULL, at TEXT NOT NULL, found INTEGER NOT NULL, warnings TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS login_codes(code_hash TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS login_failures(at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
     `));
   }
 
   private config(): TenantConfig | null {
     const row = this.sql.exec<{json: string}>('SELECT json FROM config WHERE id=1').toArray()[0];
     // Configs saved before the bottle check have no `bottleCheck` key.
-    return row ? {bottleCheck: null, reportsLink: null, ...JSON.parse(row.json)} as TenantConfig : null;
+    return row ? {bottleCheck: null, reportsLink: null, dashboardPhones: null, ...JSON.parse(row.json)} as TenantConfig : null;
   }
 
   async handle(tenant: string, route: string, method: string, body: unknown, token: string | null, query: Record<string, string>): Promise<Result> {
@@ -91,6 +98,7 @@ export class TenantObject extends DurableObject<Env> {
       if (route === 'admin/config' && method === 'PUT') return this.saveConfig(tenant, body);
       if (route === 'admin/config' && method === 'GET') return ok(this.config());
       if (route === 'admin/pair' && method === 'POST') return this.pair(body);
+      if (route === 'admin/logout' && method === 'POST') { const ended = this.sql.exec('DELETE FROM sessions').rowsWritten; return ok({ended}); }
       if (route === 'admin/history' && method === 'POST') return this.importHistory(body);
       if (route === 'admin/briefing' && method === 'GET') return this.preview(query.date);
       if (route === 'admin/briefings' && method === 'GET') return ok(this.sql.exec('SELECT business_date AS businessDate, status, incomplete, text, created_at AS createdAt FROM briefings ORDER BY business_date DESC LIMIT 60').toArray());
@@ -107,8 +115,98 @@ export class TenantObject extends DurableObject<Env> {
     }
   }
 
+  /** Phones allowed into the dashboard: `dashboardPhones`, or only the first briefing recipient (the owner). */
+  private dashboardPhones(config: TenantConfig): string[] {
+    return config.dashboardPhones ?? config.recipients.slice(0, 1);
+  }
+
+  /**
+   * Dashboard login, step 1: the visitor types the phone number. Only a number allowed into the dashboard gets a
+   * six-digit code by SMS; any other number gets the same answer and nothing is sent. At most 5 codes an hour and
+   * 10 a day; each code is counted before it is sent, so parallel requests cannot pass the limit.
+   */
+  async sendLoginCode(phone: unknown): Promise<Result> {
+    const config = this.config();
+    const now = Date.now();
+    const number = typeof phone === 'string' ? phone.replace(/[\s().-]/g, '').replace(/^00/, '+') : '';
+    const normalised = /^\d{9}$/.test(number) ? '+420' + number : number;
+    const target = config ? this.dashboardPhones(config).find(entry => same(entry, normalised)) : undefined;
+    if (!target) return ok({sent: true});
+    const code = String(randomInt(0, 1000000)).padStart(6, '0');
+    const allowed = this.ctx.storage.transactionSync(() => {
+      this.sql.exec('DELETE FROM login_codes WHERE created_at < ?', now - 86400000);
+      const hour = this.sql.exec<{n: number}>('SELECT COUNT(*) AS n FROM login_codes WHERE created_at >= ?', now - 3600000).one().n;
+      const day = this.sql.exec<{n: number}>('SELECT COUNT(*) AS n FROM login_codes').one().n;
+      if (hour >= 5 || day >= 10) return false;
+      this.sql.exec('INSERT INTO login_codes(code_hash, created_at, expires_at) VALUES(?,?,?)', sha256(code), now, now + 600000);
+      return true;
+    });
+    if (!allowed) return failure('TOO_MANY', 429);
+    const status = await deliver(this.env, [target], `OKO1: kód pro přihlášení ${code}. Platí 10 minut. Nikomu ho nesdělujte.`, {smsOnly: true});
+    // A code that did not go out stays counted but can never be used.
+    if (status !== 'delivered') { this.sql.exec('UPDATE login_codes SET expires_at=0 WHERE code_hash=?', sha256(code)); return failure('NOT_SENT', 503); }
+    return ok({sent: true});
+  }
+
+  /**
+   * Step 2: a valid code opens a 30-day session; only the token's hash is stored. Each code takes at most 5 tries,
+   * and after 10 wrong codes in an hour the venue's login is closed until the hour passes.
+   */
+  verifyLoginCode(code: unknown): Result {
+    const now = Date.now();
+    return this.ctx.storage.transactionSync(() => {
+      this.sql.exec('DELETE FROM login_failures WHERE at < ?', now - 3600000);
+      if (this.sql.exec<{n: number}>('SELECT COUNT(*) AS n FROM login_failures').one().n >= 10) return failure('TOO_MANY', 429);
+      const live = this.sql.exec<{code_hash: string}>('SELECT code_hash FROM login_codes WHERE expires_at > ? AND attempts < 5', now).toArray();
+      const match = typeof code === 'string' && /^\d{6}$/.test(code) ? live.find(row => same(row.code_hash, sha256(code))) : undefined;
+      if (!match) {
+        this.sql.exec('UPDATE login_codes SET attempts = attempts + 1 WHERE expires_at > ? AND attempts < 5', now);
+        this.sql.exec('INSERT INTO login_failures VALUES(?)', now);
+        return failure('INVALID_CODE', 401);
+      }
+      // A used code stays (expired) until the day is over, so it still counts toward the limits.
+      this.sql.exec('UPDATE login_codes SET expires_at=0 WHERE code_hash=?', match.code_hash);
+      const token = randomHex(32);
+      this.sql.exec('DELETE FROM sessions WHERE expires_at < ?', now);
+      this.sql.exec('INSERT INTO sessions VALUES(?,?,?)', sha256(token), now, now + SESSION_MS);
+      return ok({token});
+    });
+  }
+
+  validSession(token: string | null): boolean {
+    if (!token) return false;
+    return this.sql.exec('SELECT 1 FROM sessions WHERE token_hash=? AND expires_at > ?', sha256(token), Date.now()).toArray().length > 0;
+  }
+
+  logout(token: string | null) {
+    if (token) this.sql.exec('DELETE FROM sessions WHERE token_hash=?', sha256(token));
+  }
+
+  /** Everything the dashboard shows for one business day (default: the day of this morning's briefing). */
+  dashboardData(date: string | undefined): Result {
+    const config = this.config();
+    if (!config) return failure('NOT_CONFIGURED', 409);
+    const day = isDate(date) ? date : reportDate(new Date(), config.timeZone, config.businessDayCutoffHour);
+    const {briefing, text} = this.briefingFor(config, day, !this.ready(config, day));
+    const report = this.report(day);
+    // Each day's revenue is read once for the 35 shown days and the 4 weeks of plan before them.
+    const cache = new Map<string, number | null>();
+    const revenue = (entry: string) => { if (!cache.has(entry)) cache.set(entry, this.dayRevenue(entry)); return cache.get(entry)!; };
+    const series = Array.from({length: 35}, (_, i) => addDays(day, i - 34)).map(entry => ({
+      date: entry, revenueCents: revenue(entry),
+      planCents: planFrom([7, 14, 21, 28].map(back => revenue(addDays(entry, -back))).filter((value): value is number => value !== null).map(revenueCents => ({revenueCents})))?.revenueCents ?? null,
+    }));
+    const balances = Object.fromEntries((report?.lines ?? []).filter(line => line.kind === 'balance').map(line => [line.key, line.amountCents]));
+    const stored = this.sql.exec<{text: string}>('SELECT text FROM briefings WHERE business_date=?', day).toArray()[0];
+    return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo: todoList(briefing, report?.warnings ?? []),
+      briefingText: stored?.text ?? text});
+  }
+
   private saveConfig(tenant: string, body: unknown): Result {
     const config = validateConfig(body);
+    const old = this.config();
+    // Whoever is no longer allowed in loses the dashboard at once.
+    if (old && JSON.stringify(this.dashboardPhones(old)) !== JSON.stringify(this.dashboardPhones(config))) this.sql.exec('DELETE FROM sessions');
     this.sql.exec('INSERT INTO config(id, json) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET json=excluded.json', JSON.stringify(config));
     this.ctx.waitUntil(registry(this.env).add(tenant));
     return ok(config);
@@ -313,12 +411,13 @@ export class Registry extends DurableObject<Env> {
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS tenants(tenant TEXT PRIMARY KEY)');
   }
   async add(tenant: string) { this.ctx.storage.sql.exec('INSERT OR IGNORE INTO tenants VALUES(?)', tenant); }
+  async has(tenant: string): Promise<boolean> { return this.ctx.storage.sql.exec('SELECT 1 FROM tenants WHERE tenant=?', tenant).toArray().length > 0; }
   async list(): Promise<string[]> { return this.ctx.storage.sql.exec<{tenant: string}>('SELECT tenant FROM tenants ORDER BY tenant').toArray().map(row => row.tenant); }
 }
 
 const routes: Record<string, string[]> = {
   'v1/ingest': ['POST'], 'admin/config': ['GET', 'PUT'], 'admin/pair': ['POST'], 'admin/history': ['POST'],
-  'admin/briefing': ['GET'], 'admin/briefings': ['GET'], 'admin/tick': ['POST'], 'admin/report': ['GET', 'PUT'], 'admin/fetch': ['POST'],
+  'admin/briefing': ['GET'], 'admin/briefings': ['GET'], 'admin/tick': ['POST'], 'admin/report': ['GET', 'PUT'], 'admin/fetch': ['POST'], 'admin/logout': ['POST'],
 };
 
 async function readBody(request: Request, limit: number): Promise<unknown | Result> {
@@ -341,11 +440,52 @@ async function readBody(request: Request, limit: number): Promise<unknown | Resu
   try { return JSON.parse(new TextDecoder().decode(bytes)); } catch { return failure('INVALID_REQUEST', 400); }
 }
 
+const SESSION_COOKIE = 'oko1_session';
+function cookie(request: Request): string | null {
+  const value = (request.headers.get('cookie') ?? '').split(/;\s*/).find(part => part.startsWith(SESSION_COOKIE + '='))?.slice(SESSION_COOKIE.length + 1);
+  return value && /^[a-f0-9]{64}$/.test(value) ? value : null;
+}
+
+/** Dashboard routes under /d/{tenant}: the page, login by SMS code, logout and the day's data. */
+async function dashboard(request: Request, env: Env, tenant: string, action: string | undefined): Promise<Response> {
+  // An unknown venue answers exactly like a known one without a session, and no storage is created for it.
+  const known = await registry(env).has(tenant);
+  const stub = tenantStub(env, tenant);
+  const path = `/d/${tenant}`;
+  if (!action && request.method === 'GET') {
+    const nonce = randomHex(16);
+    return new Response(dashboardHtml(tenant, nonce), {headers: {
+      'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer',
+      'content-security-policy': `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+    }});
+  }
+  if (action === 'data' && request.method === 'GET') {
+    if (!known || !await stub.validSession(cookie(request))) return json(failure('UNAUTHORIZED', 401));
+    return json(await stub.dashboardData(new URL(request.url).searchParams.get('date') ?? undefined));
+  }
+  if (request.method !== 'POST' || !['login', 'verify', 'logout'].includes(action ?? '')) return json(failure('NOT_FOUND', 404));
+  // Only same-site JSON posts: a form on another site cannot send them.
+  if (!(request.headers.get('content-type') ?? '').startsWith('application/json')) return json(failure('UNSUPPORTED_MEDIA_TYPE', 415));
+  const body = await readBody(request, 1024);
+  if (isResult(body)) return json(body);
+  if (action === 'login') return json(known ? await stub.sendLoginCode((body as {phone?: unknown})?.phone) as Result : ok({sent: true}));
+  if (action === 'logout') {
+    if (known) await stub.logout(cookie(request));
+    return Response.json({ok: true}, {headers: {'set-cookie': `${SESSION_COOKIE}=; Path=${path}; HttpOnly; Secure; SameSite=Strict; Max-Age=0`}});
+  }
+  const result = known ? await stub.verifyLoginCode((body as {code?: unknown})?.code) as Result : failure('INVALID_CODE', 401);
+  if (result.status !== 200) return json(result);
+  const token = (result.body as {token: string}).token;
+  return Response.json({ok: true}, {headers: {'cache-control': 'no-store', 'set-cookie': `${SESSION_COOKIE}=${token}; Path=${path}; HttpOnly; Secure; SameSite=Strict; Max-Age=${SESSION_MS / 1000}`}});
+}
+
 const isResult = (value: unknown): value is Result => !!value && typeof value === 'object' && 'status' in value && 'body' in value && Object.keys(value).length === 2;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    const board = url.pathname.match(/^\/d\/([a-z0-9-]{3,64})(?:\/([a-z]+))?$/);
+    if (board) return dashboard(request, env, board[1], board[2]);
     const match = url.pathname.match(/^\/(v1|admin)\/t\/([a-z0-9-]{3,64})\/([a-z]+)$/);
     const route = match ? `${match[1]}/${match[3]}` : '';
     if (!match || !routes[route]) return json(failure('NOT_FOUND', 404));
