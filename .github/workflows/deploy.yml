@@ -28,13 +28,21 @@ jobs:
           echo "$r" | jq -c '{success, errors, accounts: (.result | length)}'
           echo "CLOUDFLARE_ACCOUNT_ID=$(echo "$r" | jq -r '.result[0].id')" >> "$GITHUB_ENV"
       - name: Archiv R2 v EU (vytvoří se jen poprvé)
+        id: archive
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          out=$(npx wrangler r2 bucket create oko1-archive --jurisdiction eu 2>&1) && echo "Kbelík oko1-archive vytvořen." && exit 0
-          echo "$out" | grep -qi 'already exists' && echo "Kbelík oko1-archive už existuje." && exit 0
-          echo "$out"; exit 1
-      - run: npx wrangler deploy --env production
+          if out=$(npx wrangler r2 bucket create oko1-archive --jurisdiction eu 2>&1); then echo "Kbelík oko1-archive vytvořen."; echo "ok=true" >> "$GITHUB_OUTPUT"
+          elif echo "$out" | grep -qi 'already exists'; then echo "Kbelík oko1-archive už existuje."; echo "ok=true" >> "$GITHUB_OUTPUT"
+          else echo "$out" | tail -5; echo "::warning::Archiv R2 nejde vytvořit, OKO1 se nasadí bez archivu."; echo "ok=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Nasazení
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ "${{ steps.archive.outputs.ok }}" = true ]; then npx wrangler deploy --env production; exit; fi
+          # Without the bucket the R2 binding would stop the deploy: deploy the same config without it.
+          node -e 'const fs=require("fs");const c=JSON.parse(fs.readFileSync("wrangler.jsonc","utf8").split("\n").filter(l=>!/^\s*\/\//.test(l)).join("\n"));delete c.env.production.r2_buckets;fs.writeFileSync("wrangler.noarchive.json",JSON.stringify(c))'
+          npx wrangler deploy --env production --config wrangler.noarchive.json
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       - name: Správní heslo (odvozené z tokenu, nikde se neukládá)
@@ -63,7 +71,13 @@ jobs:
             if [ "$tenant" = james-dean ] && [ -n "$link" ]; then
               jq --arg l "$link" '.reportsLink = $l' "$RUNNER_TEMP/$tenant.json" > "$RUNNER_TEMP/$tenant.tmp" && mv "$RUNNER_TEMP/$tenant.tmp" "$RUNNER_TEMP/$tenant.json"
             fi
-            node scripts/admin.ts config "$tenant" "$RUNNER_TEMP/$tenant.json" | jq -c '(.reportsLink |= (if . then "nastaven" else null end)) | del(.recipients)'
+            # A wrong link must not stop the other venues and steps: store the config without it and warn.
+            if ! out=$(node scripts/admin.ts config "$tenant" "$RUNNER_TEMP/$tenant.json"); then
+              echo "::warning::Nastavení $tenant odmítnuto, zkouším bez odkazu na OneDrive."
+              jq 'del(.reportsLink)' "$RUNNER_TEMP/$tenant.json" > "$RUNNER_TEMP/$tenant.tmp" && mv "$RUNNER_TEMP/$tenant.tmp" "$RUNNER_TEMP/$tenant.json"
+              out=$(node scripts/admin.ts config "$tenant" "$RUNNER_TEMP/$tenant.json")
+            fi
+            echo "$out" | jq -c '(.reportsLink |= (if . then "nastaven" else null end)) | del(.recipients)'
             rm "$RUNNER_TEMP/$tenant.json"
           done
       - name: SMS brána (BulkGate, případně Twilio), jen když jsou tajemství vyplněná

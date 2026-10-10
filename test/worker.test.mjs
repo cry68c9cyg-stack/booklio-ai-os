@@ -162,7 +162,7 @@ try {
   // Managers' Excel on OneDrive: fetched only at 7, 8 and 9, archived, stored as the day's report; "Report dne" goes to Claude without names.
   await mf.dispose();
   const outbound = [];
-  const files = {'https://files.test/report.xlsx': await xlsx(reportSheets()), 'https://files.test/book.xlsx': await xlsx(bookSheets())};
+  const files = {'https://test.files.1drv.com/report.xlsx': await xlsx(reportSheets()), 'https://test.files.1drv.com/book.xlsx': await xlsx(bookSheets())};
   mf = new Miniflare({...options,
     bindings: {...options.bindings, ANTHROPIC_API_KEY: 'test-only-anthropic'},
     outboundService: async request => {
@@ -171,11 +171,11 @@ try {
       if (url.hostname === 'api.onedrive.com') {
         const day = outbound.filter(entry => entry.url.includes('onedrive')).length;
         return Response.json({name: 'Reporty', folder: {}, children: [
-          {name: 'Peněžní deník.xlsx', file: {}, size: 5000, '@content.downloadUrl': 'https://files.test/book.xlsx'},
-          ...(day >= 1 ? [{name: 'Denní report 9.10.2026.xlsx', file: {}, size: 5000, '@content.downloadUrl': 'https://files.test/report.xlsx'}] : []),
+          {name: 'Peněžní deník.xlsx', file: {}, size: 5000, '@content.downloadUrl': 'https://test.files.1drv.com/book.xlsx'},
+          ...(day >= 2 ? [{name: 'Denní report 9.10.2026.xlsx', file: {}, size: 5000, '@content.downloadUrl': 'https://test.files.1drv.com/report.xlsx'}] : []),
         ]});
       }
-      if (url.hostname === 'files.test') return new Response(files[request.url]);
+      if (url.hostname === 'test.files.1drv.com') return new Response(files[request.url]);
       if (url.hostname === 'api.anthropic.com') return Response.json({content: [{type: 'tool_use', name: 'report_points', input: {
         summary: '[X2] rozbil sklenici.', points: [{kind: 'task', text: 'Objednat led', amountCents: null}, {kind: 'incident', text: 'Host [X2] rozbil sklenici', amountCents: null}],
       }}]});
@@ -188,7 +188,9 @@ try {
   const tickExcel = async at => (await call('POST', '/admin/t/excel-venue/tick', {at})).json();
   assert.equal((await tickExcel('2026-10-10T04:00:00Z')).decision, 'wait'); // 6:00 local: nothing is fetched
   assert.equal(outbound.length, 0);
-  const excelSent = await tickExcel('2026-10-10T05:00:00Z'); // 7:00 local
+  // 7:00: only the cash book is there, which is not the day's report: wait and look again at 8:00.
+  assert.equal((await tickExcel('2026-10-10T05:00:00Z')).decision, 'wait');
+  const excelSent = await tickExcel('2026-10-10T06:00:00Z'); // 8:00 local
   assert.equal(excelSent.decision, 'send');
   assert.equal(excelSent.businessDate, '2026-10-09');
   assert.match(excelSent.text, /Tržba: 390 000 Kč\nDiner 60 000 Kč · Bar 150 000 Kč · Klub 180 000 Kč\n/);
@@ -196,7 +198,7 @@ try {
   assert.match(excelSent.text, /\nReport dne:\n⚠ Host Novák rozbil sklenici\n• Objednat led$/);
   const claude = outbound.find(entry => entry.url.startsWith('https://api.anthropic.com/'));
   assert.equal(claude.key, 'test-only-anthropic');
-  assert.ok(!claude.body.includes('Novák') && !claude.body.includes('Pavel') && claude.body.includes('[X1]'), 'names are replaced before the text leaves OKO1');
+  assert.ok(!claude.body.includes('Novák') && !claude.body.includes('Zdeněk') && claude.body.includes('[X1]'), 'names are replaced before the text leaves OKO1');
   const stored = await (await call('GET', '/admin/t/excel-venue/report?date=2026-10-09')).json();
   assert.equal(stored.report.source, 'onedrive');
   assert.deepEqual(stored.report.files, ['Denní report 9.10.2026.xlsx', 'Peněžní deník.xlsx']);

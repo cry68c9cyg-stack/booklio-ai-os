@@ -29,6 +29,7 @@ export type Briefing = {
   notes: {points: NotePoint[]; summary: string | null; raw: string | null} | null;
   incomplete: boolean;
 };
+const positive = (report: DailyReport, kind: 'expense' | 'payout') => report.lines.filter(entry => entry.kind === kind && entry.amountCents > 0).reduce((sum, entry) => sum + entry.amountCents, 0);
 export type BottleLoss = {name: string; lossMl: number; lossCents: number};
 
 /**
@@ -118,7 +119,7 @@ export function buildBriefing(input: {
     bottleCheckMissing: !check && !!input.config.bottleCheck,
     source,
     report: report ? {
-      expensesCents: total(report, 'expense'), payoutsCents: total(report, 'payout'), safeCents: line(report, 'balance', 'safe')?.amountCents ?? null,
+      expensesCents: positive(report, 'expense'), payoutsCents: positive(report, 'payout'), safeCents: line(report, 'balance', 'safe')?.amountCents ?? null,
       discounts: report.lines.filter(entry => entry.kind === 'discount' && entry.amountCents > 0).sort((a, b) => b.amountCents - a.amountCents)
         .map(({label, count, amountCents}) => ({label, count, amountCents})),
     } : null,
@@ -193,7 +194,7 @@ export function renderReport(briefing: Pick<Briefing, 'report'>): string[] {
   if (!report) return [];
   const lines: string[] = [];
   if (report.discounts.length) lines.push('Slevy a odpisy: ' + report.discounts.slice(0, 3).map(row => `${row.label} ${count(row.count)}${crowns(row.amountCents)}`).join(', '));
-  if (report.expensesCents || report.payoutsCents) lines.push(`Výdaje z kasy ${crowns(Math.abs(report.expensesCents))} · výplaty v hotovosti ${crowns(Math.abs(report.payoutsCents))}`);
+  if (report.expensesCents || report.payoutsCents) lines.push(`Výdaje z kasy ${crowns(report.expensesCents)} · výplaty v hotovosti ${crowns(report.payoutsCents)}`);
   if (report.safeCents !== null && report.safeCents < 0) lines.push(`⚠ Trezor je v deníku záporný: ${crowns(report.safeCents)}`);
   return lines;
 }

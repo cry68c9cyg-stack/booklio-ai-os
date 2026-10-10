@@ -3,7 +3,7 @@ import {test} from 'node:test';
 import {buildBriefing, renderBriefing} from '../src/briefing.ts';
 import {extractCashBook, extractDailyReport, line, toCents, total, validateDailyReport, type DailyReport} from '../src/daily-report.ts';
 import {parseAnalysis, pseudonymise, restore} from '../src/notes.ts';
-import {pickFiles, reportFromFiles, shareId} from '../src/onedrive.ts';
+import {allowedUrl, pickFiles, reportFromFiles, shareId} from '../src/onedrive.ts';
 import {InputError, validateConfig, type TenantConfig} from '../src/validate.ts';
 import {excelDate, readXlsx} from '../src/xlsx.ts';
 import {unzip} from '../src/zip.ts';
@@ -32,10 +32,10 @@ test('xlsx: stored and deflated workbooks, shared strings, numbers, Excel dates'
 });
 
 test('amounts from Excel: crowns to whole haléře', () => {
-  assert.equal(toCents(67532), 6753200);
+  assert.equal(toCents(12345), 1234500);
   assert.equal(toCents(1200.505), 120051);
-  assert.equal(toCents('67 532 Kč'), 6753200);
-  assert.equal(toCents('−1 600,50'), -160050);
+  assert.equal(toCents('12 345 Kč'), 1234500);
+  assert.equal(toCents('−2 345,50'), -234550);
   assert.equal(toCents('Hotovost'), null);
 });
 
@@ -51,7 +51,10 @@ test('daily report: sections, registers, payments, discounts with counts, notes,
   assert.equal(line(report, 'discount', 'sleva-20')!.amountCents, 120050);
   assert.deepEqual([line(report, 'total', 'discounts')!.count, line(report, 'total', 'discounts')!.amountCents], [21, 570050]);
   assert.equal(line(report, 'unmapped', 'neznamy-radek')!.amountCents, 12300, 'unknown rows are kept');
-  assert.deepEqual(notes, ['DJ: Pavel', 'Host Novák rozbil sklenici u stolu 4. Na baru došel led, objednat. Kontrola hygieny v pondělí.']);
+  const outside = extractDailyReport(await readXlsx(await xlsx({List: [['Celkem', 99], ['Slevy a odpisy'], ['Personál', 1, 50], ['Celkem', 1, 50]]}))).lines;
+  assert.deepEqual(outside.map(entry => [entry.kind, entry.key, entry.amountCents]), [['unmapped', 'celkem', 9900], ['discount', 'personal', 5000], ['total', 'discounts', 5000]],
+    'a bare "Celkem" is the discount total only inside the discount block');
+  assert.deepEqual(notes, ['DJ: Zdeněk', 'Host Novák rozbil sklenici u stolu 4. Na baru došel led, objednat. Kontrola hygieny v pondělí.']);
 });
 
 test('cash book: only the column of the business day, blocks for expenses, payouts and the cash count', async () => {
@@ -61,6 +64,9 @@ test('cash book: only the column of the business day, blocks for expenses, payou
   assert.equal(line(report, 'balance', 'bank')!.amountCents, 31000000);
   assert.equal(total(report, 'expense'), 130000);
   assert.equal(line(report, 'movement', 'vklad-jd')!.amountCents, -5000000);
+  assert.equal(line(report, 'movement', 'karty-odecet')!.amountCents, 38000000, 'the card deduction is not a cash expense');
+  assert.equal(line(report, 'movement', 'oprava-zapisu')!.amountCents, -70000, 'a negative row among expenses is not spending');
+  assert.equal(line(report, 'total', 'celkem')!.amountCents, 200);
   assert.deepEqual(lines.filter(entry => entry.kind === 'payout').map(entry => [entry.label, entry.amountCents]), [['Security', 800000], ['DJ', 500000]]);
   assert.deepEqual(lines.filter(entry => entry.kind === 'cash_count').map(entry => entry.key), ['euro', 'dolar']);
   assert.ok(!lines.some(entry => entry.amountCents === 4630400), 'the date header is not an amount');
@@ -70,8 +76,8 @@ test('cash book: only the column of the business day, blocks for expenses, payou
 test('OneDrive: share id, picking the day\'s files, report from the downloaded workbooks', async () => {
   assert.equal(shareId('https://1drv.ms/f/s!abc?e=x'), 'u!' + Buffer.from('https://1drv.ms/f/s!abc?e=x').toString('base64url'));
   const names = ['Denní report 8.10.2026.xlsx', 'Denní report 9.10.2026.xlsx', 'Denní report 19.10.2026.xlsx', 'Peněžní deník 2026.xlsx', '~$Denní report 9.10.2026.xlsx'];
-  assert.deepEqual(pickFiles(names, '2026-10-09'), {report: 'Denní report 9.10.2026.xlsx', book: 'Peněžní deník 2026.xlsx'});
-  assert.deepEqual(pickFiles(['Denni report 09_10_26.xlsx'], '2026-10-09'), {report: 'Denni report 09_10_26.xlsx', book: null});
+  assert.deepEqual(pickFiles(names, '2026-10-09'), {report: 'Denní report 9.10.2026.xlsx', books: ['Peněžní deník 2026.xlsx']});
+  assert.deepEqual(pickFiles(['Denni report 09_10_26.xlsx'], '2026-10-09'), {report: 'Denni report 09_10_26.xlsx', books: []});
   const report = (await reportFromFiles([
     {name: 'Denní report 9.10.2026.xlsx', bytes: await xlsx(reportSheets())},
     {name: 'Peněžní deník 2026.xlsx', bytes: await xlsx(bookSheets())},
@@ -83,6 +89,8 @@ test('OneDrive: share id, picking the day\'s files, report from the downloaded w
   assert.deepEqual(report.warnings, ['Soubor rozbité.xlsx není čitelný sešit Excelu.']);
   assert.equal(validateDailyReport(JSON.parse(JSON.stringify(report))).lines.length, report.lines.length, 'what the reader builds passes the contract');
   assert.equal(await reportFromFiles([], '2026-10-09'), null);
+  assert.ok(allowedUrl('https://public.bn1304.files.1drv.com/y4m/x.xlsx') && allowedUrl('https://firma.sharepoint.com/x'));
+  assert.ok(!allowedUrl('https://169.254.169.254/') && !allowedUrl('http://1drv.ms/x') && !allowedUrl('https://1drv.ms.evil.example/'));
 });
 
 test('daily report contract rejects anything unexpected', () => {
@@ -106,6 +114,7 @@ test('"Report dne": names, phones and e-mails never leave OKO1', () => {
   const {text, names} = pseudonymise('Host Novák volal z +420 777 123 456, psal na x.y@example.com. Pavla zaskočila za Petra. V Klubu bylo plno.', ['James Dean']);
   assert.equal(text, 'Host [X1] volal z [telefon], psal na [e-mail]. [X2] zaskočila za [X3]. V [X4] bylo plno.');
   assert.equal(restore('[X2] a [X1] · [X9]', names), 'Pavla a Novák · [X9]');
+  assert.equal(pseudonymise('volat 777-123-456 nebo 777/123/456, tržba 1 184 382 Kč, 2 345,50 Kč').text, 'volat [telefon] nebo [telefon], tržba 1 184 382 Kč, 2 345,50 Kč');
   assert.deepEqual(parseAnalysis({summary: 'Klid.', points: [{kind: 'task', text: 'Objednat led', amountCents: null}]}), {summary: 'Klid.', points: [{kind: 'task', text: 'Objednat led', amountCents: null}]});
   assert.equal(parseAnalysis({summary: 'x', points: [{kind: 'order', text: 'y', amountCents: null}]}), null);
   assert.equal(parseAnalysis({summary: 'x', points: [{kind: 'task', text: 'y', amountCents: 1.5}]}), null);
@@ -126,10 +135,10 @@ test('briefing from the managers\' report: revenue, payments, discounts, cash, n
   assert.doesNotMatch(text, /Účty 0/);
   assert.match(text, /\nSlevy a odpisy: Personál 15× 3 600 Kč, Sleva 20 % 4× 1 201 Kč, Odpisy Club 2× 900 Kč\n/);
   assert.match(text, /\nVýdaje z kasy 1 300 Kč · výplaty v hotovosti 13 000 Kč\n⚠ Trezor je v deníku záporný: −20 000 Kč\n/);
-  assert.match(text, /\nReport dne: DJ: Pavel \/ Host Novák rozbil sklenici/);
+  assert.match(text, /\nReport dne: DJ: Zdeněk \/ Host Novák rozbil sklenici/);
   const analysed = renderBriefing('Testovací podnik', buildBriefing({...base, notes: {summary: 'Rozbitá sklenice, došel led.', points: [
     {kind: 'task', text: 'Objednat led', amountCents: null}, {kind: 'incident', text: 'Host rozbil sklenici', amountCents: null},
-    {kind: 'info', text: 'DJ Pavel', amountCents: null}, {kind: 'task', text: 'Hygiena v pondělí', amountCents: null},
+    {kind: 'info', text: 'DJ Zdeněk', amountCents: null}, {kind: 'task', text: 'Hygiena v pondělí', amountCents: null},
   ]}}));
   assert.match(analysed, /\nReport dne:\n⚠ Host rozbil sklenici\n• Objednat led\n• Hygiena v pondělí\n… a další 1$/);
 });

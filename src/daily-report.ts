@@ -50,7 +50,7 @@ export function validateDailyReport(raw: unknown): DailyReport {
     lines, notes: (value.notes as string | null)?.trim() || null, warnings: strings(value.warnings, 50, 300)};
 }
 
-/** Crowns as Excel stores them (number or text like "67 532 Kč" / "−1 600,50") → haléře. */
+/** Crowns as Excel stores them (number or text like "12 345 Kč" / "−2 345,50") → haléře. */
 export function toCents(value: CellValue | undefined): number | null {
   if (typeof value === 'number') return Number.isFinite(value) ? Math.round(value * 100) : null;
   if (typeof value !== 'string') return null;
@@ -99,8 +99,10 @@ const REPORT_RULES: Rule[] = [
   {match: /^celkem podle vyjezdu\b/, kind: 'total', key: 'payments'},
   {match: /^storn/, kind: 'void', key: 'void'},
   {match: /^(odpis|promo|personal|sleva|slevy \d|mz$|ig$|cosmo)/, kind: 'discount', key: label => slug(label)},
-  {match: /^(slevy a odpisy )?celkem\b/, kind: 'total', key: 'discounts'},
+  {match: /^slevy a odpisy celkem\b/, kind: 'total', key: 'discounts'},
 ];
+/** A bare "Celkem" is the discount total only inside the block that starts with the "Slevy a odpisy" header. */
+const DISCOUNT_HEADER = /^slevy a odpisy\b/;
 
 /** Rows of the "Peněžní deník" sheet, read in the column of the business day. Headers open blocks. */
 const BOOK_BLOCKS: {match: RegExp; block: 'expense' | 'payout' | 'cash_count' | 'total'}[] = [
@@ -110,6 +112,9 @@ const BOOK_BLOCKS: {match: RegExp; block: 'expense' | 'payout' | 'cash_count' | 
   {match: /^(prepocet|prepocitani|euro\b)/, block: 'cash_count'},
 ];
 const BOOK_RULES: Rule[] = [
+  // The card total is deducted in the "Náklady" block, but it is not cash spent; same for advances.
+  {match: /^karty\b/, kind: 'movement', key: 'karty-odecet'},
+  {match: /^zaloh/, kind: 'movement', key: label => slug(label)},
   {match: /^banka\b/, kind: 'balance', key: 'bank'},
   {match: /^trezor\b/, kind: 'balance', key: 'safe'},
   {match: /^pokladna\b/, kind: 'balance', key: 'register'},
@@ -130,18 +135,23 @@ const NOTE_LABEL = /^(report dne|poznamk|udalosti)/;
 /** The "Denní report" workbook of one day. */
 export function extractDailyReport(sheets: Sheet[]): {lines: ReportLine[]; notes: string[]} {
   const lines: ReportLine[] = [], notes: string[] = [];
-  const seen = new Set<string>();
+  const seen = new Map<string, number>();
   for (const sheet of sheets) {
+    let discounts = false;
     for (const row of rows(sheet)) {
       const text = norm(row.label);
+      if (DISCOUNT_HEADER.test(text) && !row.numbers.length) { discounts = true; continue; }
       if (NOTE_LABEL.test(text)) { if (row.texts.length) notes.push(row.texts.join(' ')); continue; }
       if (/^dj\b/.test(text)) { if (row.texts.length) notes.push(`DJ: ${row.texts.join(', ')}`); continue; }
       if (!row.numbers.length) continue;
-      const rule = apply(REPORT_RULES, row.label) ?? {kind: 'unmapped' as const, key: slug(row.label)};
-      // The same label repeated (charts, copies on other sheets) counts once.
-      const id = `${rule.kind}:${rule.key}`;
-      if (seen.has(id)) continue;
-      seen.add(id);
+      let rule = apply(REPORT_RULES, row.label);
+      if (!rule && discounts && /^celkem\b/.test(text)) rule = {kind: 'total', key: 'discounts'};
+      rule ??= {kind: 'unmapped', key: slug(row.label)};
+      // A known label repeated (charts, copies on other sheets) counts once; unknown rows are all kept.
+      const id = `${rule.kind}:${rule.key}`, n = (seen.get(id) ?? 0) + 1;
+      seen.set(id, n);
+      if (n > 1 && rule.kind !== 'unmapped') continue;
+      if (n > 1) rule = {kind: 'unmapped', key: `${rule.key}-${n}`.slice(0, 60)};
       // Discount rows carry count and amount; every other row only an amount.
       const counted = rule.kind === 'discount' || rule.kind === 'void' || rule.key === 'discounts';
       const [count, amount] = counted && row.numbers.length >= 2 ? [row.numbers[0] / 100, row.numbers[1]] : [null, row.numbers[0]];
@@ -178,6 +188,8 @@ export function extractCashBook(sheets: Sheet[], businessDate: string): ReportLi
       if (!row.numbers.length) continue;
       let rule = apply(BOOK_RULES, row.label);
       if (!rule || block === 'cash_count') rule = block ? {kind: block === 'total' ? 'total' : block, key: slug(row.label)} : {kind: 'unmapped', key: slug(row.label)};
+      // A negative row among expenses (a deposit, a correction) is money moved, not spent.
+      if (rule.kind === 'expense' && row.numbers[0] < 0) rule = {kind: 'movement', key: rule.key};
       // Rows without an amount for the day are skipped; repeated labels get a suffix so nothing overwrites.
       if (row.numbers[0] === 0) continue;
       const n = (used.get(`${rule.kind}:${rule.key}`) ?? 0) + 1;

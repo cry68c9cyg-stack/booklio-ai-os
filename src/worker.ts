@@ -33,6 +33,17 @@ const same = (a: string, b: string) => {
   return left.length === right.length && timingSafeEqual(left, right);
 };
 
+const PREPARE_BUDGET_MS = 60000;
+/** Waits for `work` at most `ms`; errors and overruns are logged, never thrown. The work may still finish later. */
+async function withinBudget(work: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    work.catch(error => console.error('prepare failed', String(error))),
+    new Promise(resolve => { timer = setTimeout(() => { console.error('prepare over budget'); resolve(null); }, ms); }),
+  ]);
+  clearTimeout(timer);
+}
+
 /** One SQLite Durable Object per venue (tenant). Nothing here is shared between venues. */
 export class TenantObject extends DurableObject<Env> {
   private sql: SqlStorage;
@@ -202,10 +213,10 @@ export class TenantObject extends DurableObject<Env> {
     return {found, warnings};
   }
 
-  /** "Report dne" through Claude, once per text. A failure is kept and the briefing shows the raw text instead. */
+  /** "Report dne" through Claude, once per text. A failure is tried again at the next send hour; meanwhile the briefing shows the raw text. */
   private async analyse(config: TenantConfig, date: string) {
     const notes = this.report(date)?.notes, key = this.env.ANTHROPIC_API_KEY;
-    if (!notes || !key || this.sql.exec('SELECT 1 FROM report_notes WHERE business_date=?', date).toArray().length) return;
+    if (!notes || !key || this.sql.exec("SELECT 1 FROM report_notes WHERE business_date=? AND status='done'", date).toArray().length) return;
     const now = new Date().toISOString();
     try {
       const analysis = await analyseNotes(key, notes, [config.name, ...Object.values(config.sections)]);
@@ -228,9 +239,14 @@ export class TenantObject extends DurableObject<Env> {
     return this.sql.exec<{revenue_cents: number}>('SELECT revenue_cents FROM history WHERE business_date=?', date).toArray()[0]?.revenue_cents ?? null;
   }
 
+  /** A stored report counts only when it has revenue: a cash book column alone is not the day's report. */
+  private hasReport(date: string): boolean {
+    return this.sql.exec("SELECT 1 FROM report_lines WHERE business_date=? AND kind='revenue_section' LIMIT 1", date).toArray().length > 0;
+  }
+
   /** The day is ready when the managers' report is in, or when every register has closed. */
   private ready(config: TenantConfig, date: string): boolean {
-    if (this.report(date)) return true;
+    if (this.hasReport(date)) return true;
     const closings = this.day<CashClosing>('cash_closing', date);
     if (!config.registers.length) return closings.length > 0;
     const closed = new Set(closings.map(closing => closing.registerId));
@@ -259,8 +275,13 @@ export class TenantObject extends DurableObject<Env> {
     const sent = this.sql.exec<{status: string}>("SELECT status FROM briefings WHERE business_date=? AND status IN ('stored','delivered')", date).toArray().length > 0;
     const hour = localHour(at, config.timeZone);
     // The managers' report is fetched only at the send hours (7, 8, 9) and only until it is in (rule of 10. 10. 2026).
-    if (!sent && config.sendHours.includes(hour) && config.reportsLink && !this.report(date)) await this.fetchReport(tenant, date);
-    if (!sent && config.sendHours.includes(hour)) await this.analyse(config, date);
+    // Fetching and analysis get a time budget, so a slow OneDrive or API can never stop the 9:00 send.
+    if (!sent && config.sendHours.includes(hour)) {
+      await withinBudget((async () => {
+        if (config.reportsLink && !this.hasReport(date)) await this.fetchReport(tenant, date);
+        await this.analyse(config, date);
+      })(), PREPARE_BUDGET_MS);
+    }
     const decision = briefingDecision({localHour: hour, sendHours: config.sendHours, alreadySent: sent, ready: this.ready(config, date)});
     if (decision !== 'send' && decision !== 'send-incomplete') return {decision, businessDate: date};
     const {briefing, text} = this.briefingFor(config, date, decision === 'send-incomplete');
