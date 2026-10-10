@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, crowns, renderBriefing} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, crowns, renderBriefing, renderReservations, summarizeReservations} from '../src/briefing.ts';
 import {briefingDecision, reportDate} from '../src/schedule.ts';
 import {businessDate} from '../src/time.ts';
-import {InputError, validateBatch, validateConfig, type Bill, type BottleCheck, type TenantConfig} from '../src/validate.ts';
+import {InputError, validateBatch, validateConfig, type Bill, type BottleCheck, type Reservation, type TenantConfig} from '../src/validate.ts';
 
 const config: TenantConfig = {
   name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9, 10],
@@ -151,4 +151,21 @@ test('config: bottleCheck is optional and validated', () => {
   assert.deepEqual(validateConfig({...config, bottleCheck: {minLossCents: 20000}}).bottleCheck, {minLossCents: 20000});
   assert.throws(() => validateConfig({...config, bottleCheck: {minLossCents: 1.5}}), InputError);
   assert.throws(() => validateConfig({...config, bottleCheck: {minLossCents: 100, minLossMl: 5}}), InputError);
+});
+
+test('reservations: the reported day counts confirmed bookings and no-shows, today shows sections and pending ones', () => {
+  const booking = (id: string, businessDate: string, section: string, partySize: number, status: Reservation['status'], arrival: Reservation['arrival'] = null): Reservation =>
+    ({type: 'reservation', id, version: 1, businessDate, startsAt: `${businessDate}T18:00:00.000Z`, section, partySize, status, arrival, source: null});
+  assert.equal(summarizeReservations(config, [], []), null);
+  assert.deepEqual(renderReservations(null), []);
+  const summary = summarizeReservations(config, [
+    booking('a', '2026-10-08', 'diner', 4, 'confirmed', 'arrived'), booking('b', '2026-10-08', 'club', 1, 'confirmed', 'no_show'),
+    booking('c', '2026-10-08', 'club', 5, 'cancelled'), booking('d', '2026-10-08', 'bar', 2, 'declined'),
+  ], [booking('e', '2026-10-09', 'club', 6, 'confirmed'), booking('f', '2026-10-09', 'diner', 2, 'confirmed'), booking('g', '2026-10-09', 'diner', 2, 'pending')]);
+  assert.deepEqual(summary?.day, {confirmed: 2, guests: 5, arrived: 1, noShows: 1, noShowGuests: 1, cancelled: 1});
+  assert.deepEqual(renderReservations(summary), [
+    'Rezervace: 2 (5 hostů), nedorazilo 1 (1 host), zrušeno 1',
+    'Dnes rezervováno: 2 (8 hostů) · Diner 1 · Klub 1, čeká na potvrzení 1',
+  ]);
+  assert.throws(() => validateBatch({batchId: 'batch-0001', installationId: 'booklio', records: [{...booking('x', '2026-10-09', 'diner', 2, 'confirmed'), status: 'seated'}]}), InputError);
 });
