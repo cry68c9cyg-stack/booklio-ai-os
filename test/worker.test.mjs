@@ -127,15 +127,15 @@ try {
   assert.equal(sms[1].auth, 'Basic ' + btoa('AC-test:test-only-token'));
   assert.equal(sms[1].body.get('To'), '+420600000001');
   assert.equal(sms[1].body.get('Body'), delivered.text);
-  // BulkGate wins over Twilio when both are configured; a text sender goes out as gText with Unicode.
+  // BulkGate wins over Twilio: WhatsApp template first, then a 7-bit SMS from a text sender (gText).
   await mf.dispose();
   const bulk = [];
   mf = new Miniflare({...options,
     bindings: {...options.bindings, TWILIO_ACCOUNT_SID: 'AC-test', TWILIO_AUTH_TOKEN: 'test-only-token', TWILIO_FROM: '+420700000000',
-      BULKGATE_APP_ID: '12345', BULKGATE_TOKEN: 'test-only-bulkgate'},
+      BULKGATE_APP_ID: '12345', BULKGATE_TOKEN: 'test-only-bulkgate', WHATSAPP_SENDER: '+420 700 000 009'},
     outboundService: async request => {
       bulk.push({url: request.url, body: await request.json()});
-      return Response.json(bulk.length === 1 ? {error: 'low_credit'} : {data: {status: 'accepted', sms_id: 'x'}}, {status: bulk.length === 1 ? 400 : 200});
+      return Response.json(bulk.length === 1 ? {error: 'low_credit'} : {data: {response: [{status: 'accepted', number: '420600000002', channel: 'whatsapp'}]}}, {status: bulk.length === 1 ? 400 : 200});
     },
   });
   await call('PUT', '/admin/t/bulk-venue/config', {...config, registers: [], recipients: ['+420600000002']});
@@ -146,9 +146,16 @@ try {
   const bulkDelivered = await tickBulk('2026-10-09T06:00:00Z');
   assert.equal(bulkDelivered.status, 'delivered');
   assert.equal(bulk.length, 2);
-  assert.equal(bulk[1].url, 'https://portal.bulkgate.com/api/1.0/simple/transactional');
-  assert.deepEqual(bulk[1].body, {application_id: '12345', application_token: 'test-only-bulkgate', number: '420600000002',
-    text: bulkDelivered.text, unicode: true, sender_id: 'gText', sender_id_value: 'JamesDean'});
+  assert.equal(bulk[1].url, 'https://portal.bulkgate.com/api/2.0/advanced/transactional');
+  const bulkBody = bulk[1].body;
+  assert.deepEqual(bulkBody.number, ['420600000002']);
+  assert.deepEqual(Object.keys(bulkBody.channel), ['whatsapp', 'sms']);
+  assert.equal(bulkBody.channel.whatsapp.sender, '420700000009');
+  assert.equal(bulkBody.channel.whatsapp.template.template, 'ranni_prehled');
+  assert.equal(bulkBody.channel.whatsapp.template.body[0].text, bulkDelivered.text.split('\n').join(' | '));
+  assert.deepEqual(bulkBody.channel.sms, {sender_id: 'gText', sender_id_value: 'JamesDean', unicode: false});
+  assert.match(bulkBody.text, /^[\x20-\x7e\n]+$/);
+  assert.ok(bulkBody.text.includes('Trzba'));
   // Venues without recipients stay 'stored' even with Twilio configured.
   assert.deepEqual((await (await call('GET', '/admin/t/test-venue/briefings')).json()).map(row => row.status), ['stored', 'stored']);
   // The admin script talks to a real HTTP endpoint: config, rkeeper-style CSV import, preview.

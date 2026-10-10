@@ -22,11 +22,13 @@ Návod pro první provozovnu (James Dean). Každý krok, který potřebuje pří
 
 Data provozoven jsou v produkci uložená jen v EU (`DATA_JURISDICTION=eu`).
 
-## 2. SMS (BulkGate, případně Twilio)
+## 2. WhatsApp a SMS (BulkGate)
 
-Přednostně se posílá přes **BulkGate** (stejná aplikace Simple API jako web James Dean). Do tajemství repozitáře na GitHubu uložte `BULKGATE_APP_ID` a `BULKGATE_TOKEN`; nasazení je samo předá do Cloudflare. Odesílatel je `JamesDean` (změna přes proměnnou repozitáře `SMS_SENDER`; číslo se pošle jako vlastní číslo `gOwn`).
+Posílá se přes **BulkGate Advanced API** (vlastní aplikace „OKO1“, ne aplikace webu). Do tajemství repozitáře na GitHubu uložte `BULKGATE_APP_ID` a `BULKGATE_TOKEN`; nasazení je samo předá do Cloudflare.
 
-Twilio zůstává jako záloha: `TWILIO_ACCOUNT_SID` a `TWILIO_AUTH_TOKEN` (zkušební účet Twilia posílá jen na ověřená čísla).
+- **WhatsApp:** po registraci odesílatele u podpory BulkGate a schválení šablony `ranni_prehled` (jazyk `cs`, jeden textový parametr) nastavte proměnnou repozitáře `WHATSAPP_SENDER` (číslo odesílatele). Přehled pak jde do WhatsAppu a když se nedoručí do 10 minut, přijde jako SMS.
+- **SMS:** odesílatel `JamesDean` (změna přes proměnnou `SMS_SENDER`), text bez diakritiky, nejvýš 612 znaků.
+- Twilio (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`) zůstává jen jako záloha.
 
 Dokud není nastavená žádná brána, přehledy se jen ukládají a lze je přečíst příkazem `briefings`.
 

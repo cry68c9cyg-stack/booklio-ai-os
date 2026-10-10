@@ -61,13 +61,15 @@ jobs:
           SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
           TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
           FROM: ${{ vars.SMS_SENDER || 'JamesDean' }}
+          WA: ${{ vars.WHATSAPP_SENDER }}
         run: |
           c() { printf '%s' "$1" | tr -d '[:space:]'; }
           f="$RUNNER_TEMP/sms.json"
-          jq -n --arg bi "$(c "$BG_ID")" --arg bt "$(c "$BG_TOKEN")" --arg s "$(c "$SID")" --arg t "$(c "$TOKEN")" --arg f "$FROM" \
+          jq -n --arg bi "$(c "$BG_ID")" --arg bt "$(c "$BG_TOKEN")" --arg s "$(c "$SID")" --arg t "$(c "$TOKEN")" --arg f "$FROM" --arg wa "$(c "$WA")" \
             '{SMS_SENDER: $f, TWILIO_FROM: $f}
              + (if $bi != "" and $bt != "" then {BULKGATE_APP_ID: $bi, BULKGATE_TOKEN: $bt} else {} end)
-             + (if $s != "" and $t != "" then {TWILIO_ACCOUNT_SID: $s, TWILIO_AUTH_TOKEN: $t} else {} end)' > "$f"
+             + (if $s != "" and $t != "" then {TWILIO_ACCOUNT_SID: $s, TWILIO_AUTH_TOKEN: $t} else {} end)
+             + (if $wa != "" then {WHATSAPP_SENDER: $wa} else {} end)' > "$f"
           jq -r 'keys | join(", ")' "$f"
           npx wrangler secret bulk "$f" --env production
           rm "$f"
@@ -83,7 +85,8 @@ jobs:
           TO=$(jq -r '.recipients[0]' "$RUNNER_TEMP/jd.json" | tr -d '+'); rm "$RUNNER_TEMP/jd.json"
           echo "::add-mask::$TO"
           jq -n --arg i "$(printf '%s' "$BG_ID" | tr -d '[:space:]')" --arg t "$(printf '%s' "$BG_TOKEN" | tr -d '[:space:]')" --arg n "$TO" --arg f "$FROM" \
-            '{application_id: $i, application_token: $t, number: $n, unicode: true, sender_id: "gText", sender_id_value: $f,
-              text: "OKO1: zkušební zpráva. Ranní přehledy James Dean budou chodit sem."}' \
-            | curl -sS -H 'content-type: application/json' --data @- https://portal.bulkgate.com/api/1.0/simple/transactional \
-            | jq -c '{status: .data.status, error, type, code}'
+            '{application_id: $i, application_token: $t, number: [$n],
+              text: "OKO1: zkusebni zprava. Ranni prehledy James Dean budou chodit sem.",
+              channel: {sms: {sender_id: "gText", sender_id_value: $f, unicode: false}}}' \
+            | curl -sS -H 'content-type: application/json' --data @- https://portal.bulkgate.com/api/2.0/advanced/transactional \
+            | jq -c '{status: [.data.response[]?.status], error, type, code}'
