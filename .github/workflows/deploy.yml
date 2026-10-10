@@ -4,7 +4,7 @@ name: Nasazení OKO1
 # Potřebuje tajemství repozitáře CLOUDFLARE_API_TOKEN.
 on:
   push:
-    branches: [claude/project-thread-sywvkg]
+    branches: [main]
   workflow_dispatch:
 
 concurrency: deploy-production
