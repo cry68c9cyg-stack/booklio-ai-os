@@ -27,6 +27,13 @@ jobs:
           r=$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/client/v4/accounts)
           echo "$r" | jq -c '{success, errors, accounts: (.result | length)}'
           echo "CLOUDFLARE_ACCOUNT_ID=$(echo "$r" | jq -r '.result[0].id')" >> "$GITHUB_ENV"
+      - name: Archiv R2 v EU (vytvoří se jen poprvé)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          out=$(npx wrangler r2 bucket create oko1-archive --jurisdiction eu 2>&1) && echo "Kbelík oko1-archive vytvořen." && exit 0
+          echo "$out" | grep -qi 'already exists' && echo "Kbelík oko1-archive už existuje." && exit 0
+          echo "$out"; exit 1
       - run: npx wrangler deploy --env production
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -42,6 +49,8 @@ jobs:
           SEAL_SEED: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           AI_OS_URL: https://oko1.rr7whdyyhf.workers.dev
+          # Sdílený odkaz (jen čtení) na složku s excely manažerů James Dean; do Gitu nepatří.
+          ONEDRIVE_REPORTS_LINK: ${{ secrets.ONEDRIVE_REPORTS_LINK }}
         run: |
           pip install -q cryptography
           echo "Veřejný klíč pro šifrování: $(python3 -I .github/scripts/sealed.py pubkey)"
@@ -50,7 +59,11 @@ jobs:
             [ -e "$f" ] || continue
             tenant=$(basename "$f" .config.enc)
             python3 -I .github/scripts/sealed.py open "$f" "$RUNNER_TEMP/$tenant.json"
-            node scripts/admin.ts config "$tenant" "$RUNNER_TEMP/$tenant.json" | jq -c 'del(.recipients)'
+            link=$(printf '%s' "$ONEDRIVE_REPORTS_LINK" | tr -d '[:space:]')
+            if [ "$tenant" = james-dean ] && [ -n "$link" ]; then
+              jq --arg l "$link" '.reportsLink = $l' "$RUNNER_TEMP/$tenant.json" > "$RUNNER_TEMP/$tenant.tmp" && mv "$RUNNER_TEMP/$tenant.tmp" "$RUNNER_TEMP/$tenant.json"
+            fi
+            node scripts/admin.ts config "$tenant" "$RUNNER_TEMP/$tenant.json" | jq -c '(.reportsLink |= (if . then "nastaven" else null end)) | del(.recipients)'
             rm "$RUNNER_TEMP/$tenant.json"
           done
       - name: SMS brána (BulkGate, případně Twilio), jen když jsou tajemství vyplněná
@@ -73,6 +86,14 @@ jobs:
           jq -r 'keys | join(", ")' "$f"
           npx wrangler secret bulk "$f" --env production
           rm "$f"
+      - name: Klíč Claude API pro rozbor „Report dne“, jen když je vyplněný
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          k=$(printf '%s' "$KEY" | tr -d '[:space:]')
+          if [ -z "$k" ]; then echo "ANTHROPIC_API_KEY není vyplněný, Report dne půjde do zprávy jako text."; exit 0; fi
+          printf '%s' "$k" | npx wrangler secret put ANTHROPIC_API_KEY --env production
       - name: Zkušební SMS (jen když commit obsahuje [test-sms])
         if: contains(github.event.head_commit.message, '[test-sms]')
         env:

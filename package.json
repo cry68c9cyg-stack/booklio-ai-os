@@ -6,7 +6,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "test": "node --test test/core.test.ts test/history-csv.test.ts && node test/worker.test.mjs",
+    "test": "node --test test/core.test.ts test/history-csv.test.ts test/report.test.ts && node test/worker.test.mjs",
     "check": "tsc --noEmit",
     "build": "wrangler deploy --dry-run --outdir dist",
     "deploy": "wrangler deploy --env production",

@@ -8,6 +8,7 @@ import {Miniflare} from 'miniflare';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {writeFile} from 'node:fs/promises';
+import {bookSheets, reportSheets, xlsx} from './xlsx-fixture.ts';
 
 const dir = await mkdtemp(join(tmpdir(), 'ai-os-worker-'));
 const admin = 'local-test-only-admin-secret-32-characters';
@@ -158,6 +159,66 @@ try {
   assert.ok(bulkBody.text.includes('Trzba'));
   // Venues without recipients stay 'stored' even with Twilio configured.
   assert.deepEqual((await (await call('GET', '/admin/t/test-venue/briefings')).json()).map(row => row.status), ['stored', 'stored']);
+  // Managers' Excel on OneDrive: fetched only at 7, 8 and 9, archived, stored as the day's report; "Report dne" goes to Claude without names.
+  await mf.dispose();
+  const outbound = [];
+  const files = {'https://files.test/report.xlsx': await xlsx(reportSheets()), 'https://files.test/book.xlsx': await xlsx(bookSheets())};
+  mf = new Miniflare({...options,
+    bindings: {...options.bindings, ANTHROPIC_API_KEY: 'test-only-anthropic'},
+    outboundService: async request => {
+      const url = new URL(request.url);
+      outbound.push({url: request.url, body: request.method === 'POST' ? await request.text() : null, key: request.headers.get('x-api-key')});
+      if (url.hostname === 'api.onedrive.com') {
+        const day = outbound.filter(entry => entry.url.includes('onedrive')).length;
+        return Response.json({name: 'Reporty', folder: {}, children: [
+          {name: 'Peněžní deník.xlsx', file: {}, size: 5000, '@content.downloadUrl': 'https://files.test/book.xlsx'},
+          ...(day >= 1 ? [{name: 'Denní report 9.10.2026.xlsx', file: {}, size: 5000, '@content.downloadUrl': 'https://files.test/report.xlsx'}] : []),
+        ]});
+      }
+      if (url.hostname === 'files.test') return new Response(files[request.url]);
+      if (url.hostname === 'api.anthropic.com') return Response.json({content: [{type: 'tool_use', name: 'report_points', input: {
+        summary: '[X2] rozbil sklenici.', points: [{kind: 'task', text: 'Objednat led', amountCents: null}, {kind: 'incident', text: 'Host [X2] rozbil sklenici', amountCents: null}],
+      }}]});
+      return new Response('unexpected', {status: 599});
+    },
+  });
+  const excelConfig = {...config, registers: ['diner', 'bar', 'klub'], sections: {diner: 'Diner', bar: 'Bar', club: 'Klub'}, reportsLink: 'https://1drv.ms/f/s!synthetic-test'};
+  assert.equal((await call('PUT', '/admin/t/excel-venue/config', {...excelConfig, reportsLink: 'https://example.com/x'})).status, 400);
+  assert.equal((await call('PUT', '/admin/t/excel-venue/config', excelConfig)).status, 200);
+  const tickExcel = async at => (await call('POST', '/admin/t/excel-venue/tick', {at})).json();
+  assert.equal((await tickExcel('2026-10-10T04:00:00Z')).decision, 'wait'); // 6:00 local: nothing is fetched
+  assert.equal(outbound.length, 0);
+  const excelSent = await tickExcel('2026-10-10T05:00:00Z'); // 7:00 local
+  assert.equal(excelSent.decision, 'send');
+  assert.equal(excelSent.businessDate, '2026-10-09');
+  assert.match(excelSent.text, /Tržba: 390 000 Kč\nDiner 60 000 Kč · Bar 150 000 Kč · Klub 180 000 Kč\n/);
+  assert.match(excelSent.text, /⚠ Trezor je v deníku záporný: −20 000 Kč/);
+  assert.match(excelSent.text, /\nReport dne:\n⚠ Host Novák rozbil sklenici\n• Objednat led$/);
+  const claude = outbound.find(entry => entry.url.startsWith('https://api.anthropic.com/'));
+  assert.equal(claude.key, 'test-only-anthropic');
+  assert.ok(!claude.body.includes('Novák') && !claude.body.includes('Pavel') && claude.body.includes('[X1]'), 'names are replaced before the text leaves OKO1');
+  const stored = await (await call('GET', '/admin/t/excel-venue/report?date=2026-10-09')).json();
+  assert.equal(stored.report.source, 'onedrive');
+  assert.deepEqual(stored.report.files, ['Denní report 9.10.2026.xlsx', 'Peněžní deník.xlsx']);
+  assert.equal(stored.notes.points.length, 2);
+  // Next morning the day's report is missing: tried at 7 and 8, sent at 9 marked incomplete, never tried again.
+  const before = outbound.filter(entry => entry.url.includes('onedrive')).length;
+  assert.equal((await tickExcel('2026-10-11T05:00:00Z')).decision, 'wait');
+  assert.equal((await tickExcel('2026-10-11T06:00:00Z')).decision, 'wait');
+  const missing = await tickExcel('2026-10-11T07:00:00Z');
+  assert.equal(missing.decision, 'send-incomplete');
+  assert.match(missing.text, /⚠ Report chybí/);
+  assert.equal((await tickExcel('2026-10-11T08:00:00Z')).decision, 'skip');
+  assert.equal(outbound.filter(entry => entry.url.includes('onedrive')).length - before, 3);
+  // A report can also be stored through the admin API (for example a corrected day); a changed text is analysed again.
+  const manual = {businessDate: '2026-10-11', source: 'admin', files: [], warnings: [], notes: null,
+    lines: [{kind: 'revenue_section', key: 'bar', label: 'Restaurace noc', count: null, amountCents: 100000}]};
+  assert.equal((await call('PUT', '/admin/t/excel-venue/report', {...manual, lines: [{...manual.lines[0], amountCents: 'x'}]})).status, 400);
+  assert.deepEqual(await (await call('PUT', '/admin/t/excel-venue/report', manual)).json(), {businessDate: '2026-10-11', lines: 1, notes: false, warnings: []});
+  assert.equal((await (await call('GET', '/admin/t/excel-venue/briefing?date=2026-10-11')).json()).briefing.revenueCents, 100000);
+  assert.equal((await call('GET', '/admin/t/excel-venue/report?date=11.10.2026')).status, 400);
+  assert.deepEqual(await (await call('POST', '/admin/t/test-venue/fetch', {date: '2026-10-09'})).json(), {found: false, warnings: ['OneDrive: odkaz na složku není nastavený.']});
+
   // The admin script talks to a real HTTP endpoint: config, rkeeper-style CSV import, preview.
   await mf.dispose();
   mf = new Miniflare({...options, port: 0});
