@@ -24,7 +24,7 @@ try {
   const call = (method, path, body, auth = 'Bearer ' + admin) => mf.dispatchFetch('http://local.test' + path, {
     method, headers: {'content-type': 'application/json', ...(auth ? {authorization: auth} : {})}, body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const config = {name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9, 10], registers: ['bar'], sections: {bar: 'Bar'}, recipients: []};
+  const config = {name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9], registers: ['bar'], sections: {bar: 'Bar'}, recipients: []};
   const bill = (id, version = 1, totalCents = 50000, businessDate = '2026-10-08') => ({
     type: 'bill', id, version, businessDate, closedAt: '2026-10-08T20:00:00Z', registerId: 'bar', section: 'bar', status: 'closed', guests: 2,
     totalCents, discountCents: 0, items: [{name: 'Burger', quantity: 1, totalCents}], payments: [{method: 'card', amountCents: totalCents}], voids: [],
@@ -82,13 +82,13 @@ try {
   assert.match(sent.text, /\nLahve: manko 214 Kč \(2 spočítáno\)\n⚠ Jägermeister −450 ml \(203 Kč\)$/, 'recount wins, small loss hidden');
   assert.equal((await tick('2026-10-09T07:00:00Z')).decision, 'skip');
 
-  // Next day nothing closes: 10:00 sends anyway, marked incomplete. The venue now expects a bottle check.
+  // Next day nothing closes: 9:00 sends anyway, marked incomplete. The venue now expects a bottle check.
   assert.equal((await call('PUT', '/admin/t/test-venue/config', {...config, bottleCheck: {minLossCents: 10000}})).status, 200);
   await ingest('batch-0004', [bill('b3', 1, 30000, '2026-10-09')]);
-  assert.equal((await tick('2026-10-10T07:00:00Z')).decision, 'wait'); // 9:00 local
-  const late = await tick('2026-10-10T08:00:00Z'); // 10:00 local
+  assert.equal((await tick('2026-10-10T06:00:00Z')).decision, 'wait'); // 8:00 local
+  const late = await tick('2026-10-10T07:00:00Z'); // 9:00 local
   assert.equal(late.decision, 'send-incomplete');
-  assert.match(late.text, /⚠ Uzávěrka chybí: bar\./);
+  assert.match(late.text, /⚠ Report chybí: bar\./);
   assert.match(late.text, /\n⚠ Ranní kontrola lahví chybí\.$/);
 
   // Everything survives a restart; stored briefings are listed without guest data.
@@ -101,10 +101,10 @@ try {
   assert.equal((await call('GET', '/admin/t/test-venue/briefing?date=2026-13-01')).status, 400);
   assert.equal((await call('GET', '/admin/t/other-venue/briefing?date=2026-10-08')).status, 409);
 
-  // The hourly cron wakes every configured venue.
+  // The morning cron wakes every configured venue.
   const worker = await mf.getWorker();
-  await worker.scheduled({scheduledTime: new Date('2026-10-11T05:00:00Z'), cron: '0 * * * *'});
-  // SMS delivery through Twilio: a failed send is retried at the next hour, then marked delivered.
+  await worker.scheduled({scheduledTime: new Date('2026-10-11T05:00:00Z'), cron: '0 5-8 * * *'});
+  // SMS delivery through Twilio: a failed send is retried at the next send hour, then marked delivered.
   await mf.dispose();
   const sms = [];
   mf = new Miniflare({...options,

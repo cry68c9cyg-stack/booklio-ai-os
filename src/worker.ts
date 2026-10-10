@@ -173,7 +173,7 @@ export class TenantObject extends DurableObject<Env> {
     if (decision !== 'send' && decision !== 'send-incomplete') return {decision, businessDate: date};
     const {briefing, text} = this.briefingFor(config, date, decision === 'send-incomplete');
     // Without a configured channel the briefing is 'stored' and readable through the admin API.
-    // A 'failed' delivery is not counted as sent, so the next hourly tick tries again.
+    // A 'failed' delivery is not counted as sent, so the next send hour (until the last one) tries again.
     const status = await deliver(this.env, config.recipients, text);
     this.sql.exec(`INSERT INTO briefings VALUES(?,?,?,?,?,?) ON CONFLICT(business_date) DO UPDATE SET
       status=excluded.status, incomplete=excluded.incomplete, text=excluded.text, json=excluded.json, created_at=excluded.created_at`,
@@ -182,7 +182,7 @@ export class TenantObject extends DurableObject<Env> {
   }
 }
 
-/** The list of configured venues, so the hourly trigger knows whom to wake. */
+/** The list of configured venues, so the morning trigger knows whom to wake. */
 export class Registry extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
