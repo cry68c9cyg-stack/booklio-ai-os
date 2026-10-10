@@ -6,7 +6,7 @@ import {businessDate} from '../src/time.ts';
 import {InputError, validateBatch, validateConfig, type Bill, type BottleCheck, type TenantConfig} from '../src/validate.ts';
 
 const config: TenantConfig = {
-  name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9, 10],
+  name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9],
   registers: ['bar', 'klub'], sections: {diner: 'Diner', bar: 'Bar', club: 'Klub'}, recipients: [], bottleCheck: null,
 };
 const bill = (id: string, extra: Partial<Bill> = {}): Bill => ({
@@ -24,16 +24,17 @@ test('business day ends at 6:00 Prague time, also across daylight saving changes
   assert.equal(reportDate(new Date('2026-10-25T06:00:00Z'), 'Europe/Prague', 6), '2026-10-24'); // DST end day, 7:00 CET
 });
 
-test('briefing goes out at 7 when closings are in, retries at 8 and 9, at 10 goes out marked incomplete', () => {
-  const decide = (localHour: number, ready: boolean, alreadySent = false) => briefingDecision({localHour, sendHours: [7, 8, 9, 10], ready, alreadySent});
+test('briefing goes out at 7 when the report is in, retries at 8, at 9 goes out marked incomplete, never later', () => {
+  const decide = (localHour: number, ready: boolean, alreadySent = false) => briefingDecision({localHour, sendHours: [7, 8, 9], ready, alreadySent});
   assert.equal(decide(6, true), 'wait');
   assert.equal(decide(7, true), 'send');
   assert.equal(decide(7, false), 'wait');
   assert.equal(decide(8, false), 'wait');
-  assert.equal(decide(9, true), 'send');
-  assert.equal(decide(10, false), 'send-incomplete');
-  assert.equal(decide(13, false), 'send-incomplete');
-  assert.equal(decide(10, false, true), 'skip');
+  assert.equal(decide(8, true), 'send');
+  assert.equal(decide(9, false), 'send-incomplete');
+  assert.equal(decide(10, false), 'skip');
+  assert.equal(decide(13, true), 'skip');
+  assert.equal(decide(9, false, true), 'skip');
 });
 
 test('briefing sums revenue, sections, payments, voids and cash differences', () => {
@@ -61,12 +62,12 @@ test('briefing sums revenue, sections, payments, voids and cash differences', ()
   assert.match(text, /Tržba: 1 700 Kč \(plán 1 700 Kč, \+0 %\)/);
   assert.match(text, /⚠ Storna po zaplacení: 1× 60 Kč/);
   assert.match(text, /⚠ Rozdíl v hotovosti: bar −20 Kč/);
-  assert.doesNotMatch(text, /Uzávěrka chybí/);
+  assert.doesNotMatch(text, /Report chybí/);
 });
 
 test('incomplete briefing says which closing is missing', () => {
   const briefing = buildBriefing({businessDate: '2026-10-08', config, incomplete: true, bills: [bill('1')], closings: [], planHistory: []});
-  assert.match(renderBriefing('X', briefing), /⚠ Uzávěrka chybí: bar, klub\./);
+  assert.match(renderBriefing('X', briefing), /⚠ Report chybí: bar, klub\./);
   assert.equal(briefing.plan, null);
 });
 
@@ -88,7 +89,7 @@ test('ingest contract rejects unknown fields, float money and bad dates', () => 
 });
 
 test('config accepts the James Dean setup and rejects bad phone numbers', () => {
-  assert.deepEqual(validateConfig({...config, sendHours: [10, 7, 8, 9]}).sendHours, [7, 8, 9, 10]);
+  assert.deepEqual(validateConfig({...config, sendHours: [9, 7, 8]}).sendHours, [7, 8, 9]);
   assert.throws(() => validateConfig({...config, recipients: ['606979797']}), InputError);
   assert.throws(() => validateConfig({...config, timeZone: 'Mars/Base'}), InputError);
 });

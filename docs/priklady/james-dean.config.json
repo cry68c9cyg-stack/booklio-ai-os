@@ -2,7 +2,7 @@
   "name": "James Dean",
   "timeZone": "Europe/Prague",
   "businessDayCutoffHour": 6,
-  "sendHours": [7, 8, 9, 10],
+  "sendHours": [7, 8, 9],
   "registers": ["diner", "bar", "klub"],
   "sections": {"diner": "Diner", "bar": "Bar", "club": "Klub"},
   "recipients": ["+420000000000"],

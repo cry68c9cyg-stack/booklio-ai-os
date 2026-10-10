@@ -115,7 +115,7 @@ function czechDate(date: string): string {
 /** Plain text for WhatsApp or SMS. Short lines, warnings marked with ⚠. */
 export function renderBriefing(name: string, briefing: Briefing): string {
   const lines = [`${name} · ${czechDate(briefing.businessDate)}`];
-  if (briefing.incomplete) lines.push(`⚠ Uzávěrka chybí${briefing.missingClosings.length ? ': ' + briefing.missingClosings.join(', ') : ''}. Čísla nemusí být konečná.`);
+  if (briefing.incomplete) lines.push(`⚠ Report chybí${briefing.missingClosings.length ? ': ' + briefing.missingClosings.join(', ') : ''}. Čísla nemusí být konečná.`);
   let revenue = `Tržba: ${crowns(briefing.revenueCents)}`;
   if (briefing.plan) {
     const delta = briefing.plan.revenueCents ? Math.round((briefing.revenueCents / briefing.plan.revenueCents - 1) * 100) : 0;
