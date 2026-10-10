@@ -1,0 +1,92 @@
+name: Nasazení OKO1
+
+# Nasadí worker `oko1` (env production) na Cloudflare.
+# Potřebuje tajemství repozitáře CLOUDFLARE_API_TOKEN.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency: deploy-production
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Ověření tokenu a účtu
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          r=$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/client/v4/accounts)
+          echo "$r" | jq -c '{success, errors, accounts: (.result | length)}'
+          echo "CLOUDFLARE_ACCOUNT_ID=$(echo "$r" | jq -r '.result[0].id')" >> "$GITHUB_ENV"
+      - run: npx wrangler deploy --env production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Správní heslo (odvozené z tokenu, nikde se neukládá)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          S=$(printf '%s' oko1-admin | openssl dgst -sha256 -hmac "$CLOUDFLARE_API_TOKEN" -r | cut -d' ' -f1)
+          echo "::add-mask::$S"
+          printf '%s' "$S" | npx wrangler secret put ADMIN_SECRET --env production
+      - name: Nastavení provozoven (šifrované soubory v .github/oko1)
+        env:
+          SEAL_SEED: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AI_OS_URL: https://oko1.rr7whdyyhf.workers.dev
+        run: |
+          pip install -q cryptography
+          echo "Veřejný klíč pro šifrování: $(python3 -I .github/scripts/sealed.py pubkey)"
+          export AI_OS_ADMIN_SECRET=$(printf '%s' oko1-admin | openssl dgst -sha256 -hmac "$CLOUDFLARE_API_TOKEN" -r | cut -d' ' -f1)
+          for f in .github/oko1/*.config.enc; do
+            [ -e "$f" ] || continue
+            tenant=$(basename "$f" .config.enc)
+            python3 -I .github/scripts/sealed.py open "$f" "$RUNNER_TEMP/$tenant.json"
+            node scripts/admin.ts config "$tenant" "$RUNNER_TEMP/$tenant.json" | jq -c 'del(.recipients)'
+            rm "$RUNNER_TEMP/$tenant.json"
+          done
+      - name: SMS brána (BulkGate, případně Twilio), jen když jsou tajemství vyplněná
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          BG_ID: ${{ secrets.BULKGATE_APP_ID }}
+          BG_TOKEN: ${{ secrets.BULKGATE_TOKEN }}
+          SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          FROM: ${{ vars.SMS_SENDER || 'JamesDean' }}
+          WA: ${{ vars.WHATSAPP_SENDER }}
+        run: |
+          c() { printf '%s' "$1" | tr -d '[:space:]'; }
+          f="$RUNNER_TEMP/sms.json"
+          jq -n --arg bi "$(c "$BG_ID")" --arg bt "$(c "$BG_TOKEN")" --arg s "$(c "$SID")" --arg t "$(c "$TOKEN")" --arg f "$FROM" --arg wa "$(c "$WA")" \
+            '{SMS_SENDER: $f, TWILIO_FROM: $f}
+             + (if $bi != "" and $bt != "" then {BULKGATE_APP_ID: $bi, BULKGATE_TOKEN: $bt} else {} end)
+             + (if $s != "" and $t != "" then {TWILIO_ACCOUNT_SID: $s, TWILIO_AUTH_TOKEN: $t} else {} end)
+             + (if $wa != "" then {WHATSAPP_SENDER: $wa} else {} end)' > "$f"
+          jq -r 'keys | join(", ")' "$f"
+          npx wrangler secret bulk "$f" --env production
+          rm "$f"
+      - name: Zkušební SMS (jen když commit obsahuje [test-sms])
+        if: contains(github.event.head_commit.message, '[test-sms]')
+        env:
+          SEAL_SEED: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          BG_ID: ${{ secrets.BULKGATE_APP_ID }}
+          BG_TOKEN: ${{ secrets.BULKGATE_TOKEN }}
+          FROM: ${{ vars.SMS_SENDER || 'JamesDean' }}
+        run: |
+          python3 -I .github/scripts/sealed.py open .github/oko1/james-dean.config.enc "$RUNNER_TEMP/jd.json"
+          TO=$(jq -r '.recipients[0]' "$RUNNER_TEMP/jd.json" | tr -d '+'); rm "$RUNNER_TEMP/jd.json"
+          echo "::add-mask::$TO"
+          jq -n --arg i "$(printf '%s' "$BG_ID" | tr -d '[:space:]')" --arg t "$(printf '%s' "$BG_TOKEN" | tr -d '[:space:]')" --arg n "$TO" --arg f "$FROM" \
+            '{application_id: $i, application_token: $t, number: [$n],
+              text: "OKO1: zkusebni zprava. Ranni prehledy James Dean budou chodit sem.",
+              channel: {sms: {sender_id: "gText", sender_id_value: $f, unicode: false}}}' \
+            | curl -sS -H 'content-type: application/json' --data @- https://portal.bulkgate.com/api/2.0/advanced/transactional \
+            | jq -c 'del(.data.response[]?.number) | del(.data.total)'
