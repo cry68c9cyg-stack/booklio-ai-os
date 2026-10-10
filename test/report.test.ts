@@ -6,7 +6,8 @@ import {parseAnalysis, pseudonymise, restore} from '../src/notes.ts';
 import {pickFiles, reportFromFiles, shareId} from '../src/onedrive.ts';
 import {InputError, validateConfig, type TenantConfig} from '../src/validate.ts';
 import {excelDate, readXlsx} from '../src/xlsx.ts';
-import {bookSheets, reportSheets, xlsx} from './xlsx-fixture.ts';
+import {unzip} from '../src/zip.ts';
+import {bookSheets, reportSheets, xlsx, zip} from './xlsx-fixture.ts';
 
 const config: TenantConfig = {
   name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9],
@@ -23,6 +24,11 @@ test('xlsx: stored and deflated workbooks, shared strings, numbers, Excel dates'
   }
   assert.equal(excelDate(46304), '2026-10-09');
   await assert.rejects(readXlsx(new TextEncoder().encode('not a zip')));
+  // An entry that inflates to more than its header says (a ZIP bomb) is refused.
+  const bomb = await zip({'xl/a.xml': 'x'.repeat(100000)});
+  const view = new DataView(bomb.buffer), directory = view.getUint32(bomb.length - 6, true);
+  view.setUint32(directory + 24, 10, true);
+  await assert.rejects(unzip(bomb), /ENTRY_TOO_LARGE/);
 });
 
 test('amounts from Excel: crowns to whole haléře', () => {
