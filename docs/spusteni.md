@@ -22,18 +22,13 @@ Návod pro první provozovnu (James Dean). Každý krok, který potřebuje pří
 
 Data provozoven jsou v produkci uložená jen v EU (`DATA_JURISDICTION=eu`).
 
-## 2. Twilio (SMS)
+## 2. SMS (BulkGate, případně Twilio)
 
-1. Na twilio.com založte účet a kupte nebo ověřte odesílatele.
-2. Do Cloudflare uložte údaje (token jako tajemství):
-   ```sh
-   npx wrangler secret put TWILIO_AUTH_TOKEN --env production
-   npx wrangler secret put TWILIO_ACCOUNT_SID --env production
-   npx wrangler secret put TWILIO_FROM --env production
-   ```
-   `TWILIO_FROM` je číslo ve tvaru `+420…` nebo jméno odesílatele.
+Přednostně se posílá přes **BulkGate** (stejná aplikace Simple API jako web James Dean). Do tajemství repozitáře na GitHubu uložte `BULKGATE_APP_ID` a `BULKGATE_TOKEN`; nasazení je samo předá do Cloudflare. Odesílatel je `JamesDean` (změna přes proměnnou repozitáře `SMS_SENDER`; číslo se pošle jako vlastní číslo `gOwn`).
 
-Dokud Twilio není nastavené, přehledy se jen ukládají a lze je přečíst příkazem `briefings`.
+Twilio zůstává jako záloha: `TWILIO_ACCOUNT_SID` a `TWILIO_AUTH_TOKEN` (zkušební účet Twilia posílá jen na ověřená čísla).
+
+Dokud není nastavená žádná brána, přehledy se jen ukládají a lze je přečíst příkazem `briefings`.
 
 ## 3. Nastavení provozovny
 
