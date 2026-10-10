@@ -89,4 +89,4 @@ jobs:
               text: "OKO1: zkusebni zprava. Ranni prehledy James Dean budou chodit sem.",
               channel: {sms: {sender_id: "gText", sender_id_value: $f, unicode: false}}}' \
             | curl -sS -H 'content-type: application/json' --data @- https://portal.bulkgate.com/api/2.0/advanced/transactional \
-            | jq -c '{status: [.data.response[]?.status], error, type, code}'
+            | jq -c 'del(.data.response[]?.number) | del(.data.total)'
