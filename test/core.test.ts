@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {bottleLosses, buildBriefing, crowns, renderBriefing, renderReservations, summarizeReservations} from '../src/briefing.ts';
 import {briefingDecision, reportDate} from '../src/schedule.ts';
+import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
 import {businessDate} from '../src/time.ts';
 import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type TenantConfig} from '../src/validate.ts';
@@ -187,4 +188,19 @@ test('reservations: guest details are validated, optional, and stripped for the 
   for (const bad of [{...guest, contactType: 'fax'}, {...guest, email: 'x@example.test'}, {...guest, tables: 'p3'}, {...guest, name: 'x'.repeat(201)}]) {
     assert.throws(() => validateBatch({batchId: 'batch-guest-4', installationId: 'booklio', records: [{...base, guest: bad}]}), InputError);
   }
+});
+
+test('login clock: the next code 60 s after the last, at most 5 an hour and 10 a day, with the moment it frees up', () => {
+  const t = 1_000_000_000_000, s = 1000, min = 60 * s, h = 60 * min;
+  assert.equal(nextCode([], t), null);
+  assert.deepEqual(nextCode([t - 18 * s], t), {error: 'TOO_SOON', until: t + 42 * s});
+  assert.equal(nextCode([t - 60 * s], t), null);
+  const hour = [t - 50 * min, t - 40 * min, t - 30 * min, t - 20 * min, t - 10 * min];
+  assert.deepEqual(nextCode(hour, t), {error: 'TOO_MANY', until: t + 10 * min});
+  assert.equal(nextCode(hour.slice(1), t), null);
+  const day = [...Array.from({length: 5}, (_, i) => t - 20 * h + i * 2 * min), ...Array.from({length: 5}, (_, i) => t - 5 * h + i * 2 * min)];
+  assert.deepEqual(nextCode(day, t), {error: 'TOO_MANY', until: t + 4 * h});
+  assert.deepEqual(nextCode([...hour.slice(1), t - 30 * s], t), {error: 'TOO_MANY', until: t + 20 * min}, 'a limit wins over the 60 seconds');
+  assert.equal(seconds(1), 1);
+  assert.equal(seconds(-5000), 0);
 });
