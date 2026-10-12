@@ -49,6 +49,8 @@ const json = (result: Result) => {
   return Response.json(result.body, {status: result.status, headers: {'cache-control': 'no-store', ...(result.status === 429 && typeof retryAfter === 'number' ? {'retry-after': String(retryAfter)} : {})}});
 };
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
+/** A to-do item is known by its text: the same deviation on the same day keeps its "Vyřízeno". */
+const todoKey = (text: string) => sha256(text).slice(0, 24);
 const same = (a: string, b: string) => {
   const left = new TextEncoder().encode(a), right = new TextEncoder().encode(b);
   return left.length === right.length && timingSafeEqual(left, right);
@@ -97,6 +99,7 @@ export class TenantObject extends DurableObject<Env> {
       -- Every request for a login code, for an allowed number or not (SHA-256 of venue and number): the same clock for all.
       CREATE TABLE IF NOT EXISTS login_requests(phone_hash TEXT NOT NULL, at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS todo_done(business_date TEXT NOT NULL, item_key TEXT NOT NULL, done_at TEXT NOT NULL, PRIMARY KEY(business_date, item_key));
       -- Posted costs per month and synthetic account from iÚčto (sums only), and the last read of each month.
       CREATE TABLE IF NOT EXISTS costs(month TEXT NOT NULL, account TEXT NOT NULL, name TEXT NOT NULL, amount_cents INTEGER NOT NULL, PRIMARY KEY(month, account));
       CREATE TABLE IF NOT EXISTS cost_fetches(month TEXT PRIMARY KEY, through TEXT NOT NULL, at TEXT NOT NULL, error TEXT);
@@ -258,8 +261,19 @@ export class TenantObject extends DurableObject<Env> {
     }));
     const balances = Object.fromEntries((report?.lines ?? []).filter(line => line.kind === 'balance').map(line => [line.key, line.amountCents]));
     const stored = this.sql.exec<{text: string}>('SELECT text FROM briefings WHERE business_date=?', day).toArray()[0];
-    return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo: todoList(briefing, report?.warnings ?? []),
-      briefingText: stored?.text ?? text});
+    const done = new Set(this.sql.exec<{item_key: string}>('SELECT item_key FROM todo_done WHERE business_date=?', day).toArray().map(row => row.item_key));
+    const todo = todoList(briefing, report?.warnings ?? [])
+      // "… a další 3" is not an item of its own: no switch.
+      .map(item => item.text.startsWith('… a další') ? {...item, key: null, done: false} : {...item, key: todoKey(item.text), done: done.has(todoKey(item.text))});
+    return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text});
+  }
+
+  /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
+  markTodo(date: unknown, key: unknown, done: unknown): Result {
+    if (!isDate(date) || typeof key !== 'string' || !/^[a-f0-9]{24}$/.test(key) || typeof done !== 'boolean') return failure('INVALID_INPUT', 400);
+    if (done) this.sql.exec('INSERT OR IGNORE INTO todo_done VALUES(?,?,?)', date, key, new Date().toISOString());
+    else this.sql.exec('DELETE FROM todo_done WHERE business_date=? AND item_key=?', date, key);
+    return ok({done});
   }
 
   /** What the MCP tools and the dashboard need to know about the venue (no recipients or phones). Null = not set up. */
@@ -640,13 +654,18 @@ async function dashboard(request: Request, env: Env, tenant: string, action: str
     if (!known || !await stub.validSession(cookie(request))) return json(failure('UNAUTHORIZED', 401));
     return json(ok({card: await webCard(env, tenant, stub)}));
   }
-  if (request.method !== 'POST' || !['login', 'verify', 'logout'].includes(action ?? '')) return json(failure('NOT_FOUND', 404));
+  if (request.method !== 'POST' || !['login', 'verify', 'logout', 'todo'].includes(action ?? '')) return json(failure('NOT_FOUND', 404));
   // Only same-site JSON posts: a form on another site cannot send them.
   if (!(request.headers.get('content-type') ?? '').startsWith('application/json')) return json(failure('UNSUPPORTED_MEDIA_TYPE', 415));
   const body = await readBody(request, 1024);
   if (isResult(body)) return json(body);
   // An unknown venue gets the same answers from the shared stand-in, which never has a code to send.
   if (action === 'login') return json(await loginStub(env, tenant, known).sendLoginCode((body as {phone?: unknown})?.phone, known ? '' : tenant) as Result);
+  if (action === 'todo') {
+    if (!known || !await stub.validSession(cookie(request))) return json(failure('UNAUTHORIZED', 401));
+    const {date, key, done} = (body ?? {}) as {date?: unknown; key?: unknown; done?: unknown};
+    return json(await stub.markTodo(date, key, done));
+  }
   if (action === 'logout') {
     if (known) await stub.logout(cookie(request));
     return Response.json({ok: true}, {headers: {'set-cookie': `${SESSION_COOKIE}=; Path=${path}; HttpOnly; Secure; SameSite=Strict; Max-Age=0`}});

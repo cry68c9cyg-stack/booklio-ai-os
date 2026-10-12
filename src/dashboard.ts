@@ -24,7 +24,7 @@ h1{font-size:20px;margin:0}h2{font-size:15px;margin:0 0 8px;color:var(--muted);f
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
 .big{font-size:26px;font-weight:700}.muted{color:var(--muted)}.warn{color:var(--warn)}.ok{color:var(--accent)}
 table{width:100%;border-collapse:collapse}td,th{padding:5px 4px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}td.n,th.n{text-align:right;white-space:nowrap}
-ul{margin:0;padding-left:18px}li{margin:3px 0}
+ul{margin:0;padding-left:18px}li{margin:3px 0}ul.todos{list-style:none;padding:0}li.todo{display:flex;gap:8px;align-items:baseline}li.todo button{padding:2px 8px;font-size:13px;cursor:pointer;flex:none}li.done span{text-decoration:line-through;color:var(--muted)}
 button,input{font:inherit;padding:8px 12px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text)}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff;cursor:pointer}button:disabled{opacity:.6;cursor:default}
 nav{display:flex;gap:6px;align-items:center}
@@ -124,7 +124,32 @@ function chart(series, selected) {
   return '<svg viewBox="0 0 ' + w + ' ' + h + '" role="img" aria-label="Tržby po dnech">' + bars + plan + labels + '</svg>';
 }
 
+// "K vyřízení": open items first, each with a switch; what is done stays visible, crossed out, at the end.
+let todoItems = [], todoDate = '';
+function todoCard(items) {
+  todoItems = items;
+  const open = items.filter(t => t.key && !t.done).length, total = items.filter(t => t.key).length;
+  const row = t => '<li class="todo' + (t.done ? ' done' : t.level === 'warn' ? ' warn' : '') + '">' +
+    (t.key ? '<button type="button" data-key="' + esc(t.key) + '">' + (t.done ? 'Vrátit' : 'Vyřízeno') + '</button> ' : '') + '<span>' + esc(t.text) + '</span></li>';
+  return '<h2>K vyřízení' + (items.length ? ' (zbývá ' + open + ' z ' + total + ')' : '') + '</h2>' + (items.length
+    ? (open ? '' : '<p class="ok">Vše vyřízeno.</p>') + '<ul class="todos">' + [...items.filter(t => !t.done), ...items.filter(t => t.done)].map(row).join('') + '</ul>'
+    : '<span class="ok">Nic k vyřízení.</span>');
+}
+$('content').onclick = async e => {
+  const button = e.target.closest('#todo button[data-key]');
+  if (!button || button.disabled) return;
+  const item = todoItems.find(t => t.key === button.dataset.key);
+  if (!item) return;
+  button.disabled = true;
+  const r = await post('/todo', {date: todoDate, key: item.key, done: !item.done}).catch(() => null);
+  if (r && r.status === 401) { $('app').hidden = true; $('login').hidden = false; return; }
+  if (r && r.ok) item.done = !item.done;
+  $('todo').innerHTML = todoCard(todoItems);
+  if (!r || !r.ok) $('todo').insertAdjacentHTML('beforeend', '<p class="warn">Nepodařilo se uložit, zkus to znovu.</p>');
+};
+
 function render(data) {
+  todoDate = data.businessDate;
   const b = data.briefing, r = data.report;
   $('title').textContent = data.name;
   $('date').value = data.businessDate;
@@ -170,7 +195,7 @@ function render(data) {
     (b.costsPrevious && b.costsPrevious.rows.length ? '<div class="muted">' + esc(b.costsPrevious.month) + ' celkem: ' + kc(b.costsPrevious.revenueCents - sum(b.costsPrevious.rows)) + '</div>' : '') +
     (co.error ? '<div class="warn">iÚčto dnes nejde načíst: ' + esc(co.error) + '</div>' : '') + '</div>');
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
-  html += '<div class="card"><h2>K vyřízení</h2>' + (data.todo.length ? '<ul>' + data.todo.map(t => '<li class="' + (t.level === 'warn' ? 'warn' : '') + '">' + esc(t.text) + '</li>').join('') + '</ul>' : '<span class="ok">Nic k vyřízení.</span>') + '</div>';
+  html += '<div class="card" id="todo">' + todoCard(data.todo) + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
