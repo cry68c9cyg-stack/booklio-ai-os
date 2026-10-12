@@ -66,7 +66,7 @@ Plán je průměr stejného dne v týdnu za předchozí 4 týdny.
 Živé čtení webu a MCP server popisuje [docs/web-v1.md](web-v1.md). Nasazení z větve `main` udělá samo:
 
 - doplní do nastavení James Dean `web.url = https://jamesdean.cz`;
-- najde, nebo poprvé vytvoří jmenný prostor KV `oko1-oauth` pro přihlašování k MCP (token `CLOUDFLARE_API_TOKEN` potřebuje oprávnění Workers KV Storage: Edit, jinak se OKO1 nasadí bez MCP a v běhu nasazení je varování);
+- najde, nebo poprvé vytvoří jmenný prostor KV `oko1-oauth` pro přihlašování k MCP; když token `CLOUDFLARE_API_TOKEN` nemá oprávnění Workers KV Storage, použije id jmenného prostoru `oko1-oauth` z `wrangler.jsonc` (vytvořený 12. 10. 2026), pro binding Workeru oprávnění KV potřeba není;
 - když web nemá tajemství `OKO1_CTENI_TOKEN` nebo ho odmítá, vytvoří nový token a uloží ho do OKO1 (`WEB_TOKEN_JAMES_DEAN`) i do webu (`OKO1_CTENI_TOKEN`). Web přitom musí mít nasazené čtecí rozhraní `/api/oko1/v1`.
 
 Ověření: `npm run admin -- web james-dean` musí ukázat `"ok": true` a 18 tabulek. Výměna tokenu: smazat obě tajemství a znovu spustit nasazení.
