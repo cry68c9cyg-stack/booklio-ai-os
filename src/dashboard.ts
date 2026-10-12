@@ -175,7 +175,7 @@ function render(data) {
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
   if (r) {
-    const kinds = {discount: 'Slevy a odpisy', expense: 'Výdaje z kasy', payout: 'Výplaty v hotovosti', movement: 'Vklady, odvody, karty', cash_count: 'Přepočet hotovosti', balance: 'Stavy', revenue_register: 'Pokladny klubu', total: 'Součty', unmapped: 'Nerozpoznané řádky'};
+    const kinds = {discount: 'Slevy a odpisy', expense: 'Výdaje z kasy', payout: 'Výplaty v hotovosti', movement: 'Vklady, odvody, karty', cash_count: 'Přepočet hotovosti', balance: 'Stavy', revenue_register: 'Pokladny klubu', journal_revenue: 'Tržby podle deníku', total: 'Součty', unmapped: 'Nerozpoznané řádky'};
     html += '<div class="card"><h2>Report manažerů</h2><div class="muted">' + esc(r.files.join(', ') || 'zadáno ručně') + '</div>';
     for (const [kind, label] of Object.entries(kinds)) {
       const rows = r.lines.filter(l => l.kind === kind);

@@ -156,7 +156,9 @@ export async function reportFromFiles(files: FetchedFile[], businessDate: string
   if (!lines.length && !notes.length) return null;
   // The daily report's revenue and payments win over the cash book's.
   const reported = lines.some(entry => entry.kind === 'revenue_section' && !entry.label.startsWith(JOURNAL_LABEL));
-  if (reported) lines.splice(0, lines.length, ...lines.filter(entry => !entry.label.startsWith(JOURNAL_LABEL)));
+  // The cash book's revenue by section stays beside it as `journal_revenue`, so that the two can be checked against each other.
+  if (reported) lines.splice(0, lines.length, ...lines.filter(entry => !entry.label.startsWith(JOURNAL_LABEL)),
+    ...lines.filter(entry => entry.kind === 'revenue_section' && entry.label.startsWith(JOURNAL_LABEL)).map(entry => ({...entry, kind: 'journal_revenue' as const})));
   else if (lines.some(entry => entry.kind === 'revenue_section')) problems.push('Denní report chybí, tržby jsou jen z peněžního deníku.');
   if (!lines.some(entry => entry.kind === 'revenue_section')) problems.push('V reportu chybí tržby po částech.');
   return {businessDate, source: 'onedrive', files: used.map(name => name.slice(0, 200)), lines, notes: notes.join('\n').slice(0, 5000) || null, warnings: problems.slice(0, 50).map(text => text.slice(0, 300))};
