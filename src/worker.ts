@@ -82,7 +82,7 @@ export class TenantObject extends DurableObject<Env> {
   private config(): TenantConfig | null {
     const row = this.sql.exec<{json: string}>('SELECT json FROM config WHERE id=1').toArray()[0];
     // Configs saved before the bottle check have no `bottleCheck` key.
-    return row ? {bottleCheck: null, reportsLink: null, dashboardPhones: null, ...JSON.parse(row.json)} as TenantConfig : null;
+    return row ? {bottleCheck: null, reportsLink: null, dashboardPhones: null, web: null, ...JSON.parse(row.json)} as TenantConfig : null;
   }
 
   async handle(tenant: string, route: string, method: string, body: unknown, token: string | null, query: Record<string, string>): Promise<Result> {
