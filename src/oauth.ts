@@ -108,7 +108,7 @@ button{background:var(--accent);border-color:var(--accent);color:#fff;cursor:poi
 .notice{background:var(--note);padding:12px;border-radius:8px;font-weight:600;overflow-wrap:anywhere}
 </style></head>
 <body><main><div class="card"><h1>Připojit Clauda k OKO1</h1>${body}</div></main></body></html>`, {status, headers: {
-    'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer',
+    'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'same-origin',
     'content-security-policy': `default-src 'none'; style-src 'nonce-${nonce}'; base-uri 'none'; frame-ancestors 'none'`,
   }});
 }
@@ -134,8 +134,11 @@ export async function authorize(request: Request, oauth: OAuthHelpers, venues: V
   const client = {name: [...consent.clientName.trim()].slice(0, 60).join(''), host: consent.redirectHost, local: consent.redirectIsLoopback};
   if (request.method === 'GET') return page({client, step: 'phone'}, 200);
   if (request.method !== 'POST') return page({step: 'invalid'}, 405);
+  // Same origin only. A browser may send Origin: null for a same-origin form (privacy settings, an older copy of the page
+  // with referrer-policy no-referrer); then Sec-Fetch-Site must say same-origin.
   const origin = request.headers.get('origin');
-  if (origin !== null && origin !== new URL(request.url).origin) return page({client, step: 'phone', error: 'Požadavek z cizího webu.'}, 403);
+  const sameOrigin = origin === null || origin === new URL(request.url).origin || (origin === 'null' && request.headers.get('sec-fetch-site') === 'same-origin');
+  if (!sameOrigin) return page({client, step: 'phone', error: 'Požadavek z cizího webu.'}, 403);
   const fields = await form(request);
   if (!fields) return page({client, step: 'phone', error: 'Formulář je příliš velký.'}, 413);
   const tenant = (fields.get('provozovna') ?? '').trim().toLowerCase();

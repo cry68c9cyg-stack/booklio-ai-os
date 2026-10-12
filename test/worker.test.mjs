@@ -402,8 +402,8 @@ try {
   const challenge = createHash('sha256').update(verifier).digest('base64url');
   const authorizeUrl = '/oauth/authorize?' + new URLSearchParams({response_type: 'code', client_id: registered.client_id, redirect_uri: 'http://localhost:7777/callback',
     code_challenge: challenge, code_challenge_method: 'S256', state: 'state-123', resource: 'http://localhost/mcp'});
-  const formPost = (fields, origin = 'http://localhost') => local(authorizeUrl, {method: 'POST', redirect: 'manual',
-    headers: {'content-type': 'application/x-www-form-urlencoded', origin}, body: new URLSearchParams(fields).toString()});
+  const formPost = (fields, origin = 'http://localhost', site) => local(authorizeUrl, {method: 'POST', redirect: 'manual',
+    headers: {'content-type': 'application/x-www-form-urlencoded', origin, ...(site ? {'sec-fetch-site': site} : {})}, body: new URLSearchParams(fields).toString()});
   const consent = await local(authorizeUrl);
   assert.equal(consent.status, 200);
   assert.match(consent.headers.get('content-security-policy'), /frame-ancestors 'none'/);
@@ -411,6 +411,11 @@ try {
   assert.ok(consentPage.includes('Claude &lt;test&gt;') && !consentPage.includes('Claude <test>'), 'the client name is escaped');
   assert.equal((await local('/oauth/authorize?client_id=nobody&response_type=code')).status, 400);
   assert.equal((await formPost({krok: 'kod', provozovna: 'james-dean', telefon: '600000009'}, 'https://evil.example')).status, 403);
+  // The page sends the real origin (referrer-policy same-origin); Origin: null passes only as a same-origin request.
+  assert.equal(consent.headers.get('referrer-policy'), 'same-origin');
+  assert.equal((await formPost({krok: 'kod', provozovna: 'james-dean', telefon: '600000009'}, 'null', 'cross-site')).status, 403);
+  assert.equal((await formPost({krok: 'kod', provozovna: 'james-dean', telefon: '600000009'}, 'null')).status, 403);
+  assert.match(await (await formPost({krok: 'kod', provozovna: 'no-such-venue', telefon: '600000009'}, 'null', 'same-origin')).text(), /Kód z SMS/);
   assert.equal(texts.length, 0);
   // Another number or an unknown venue gets the same page and nothing is sent.
   assert.match(await (await formPost({krok: 'kod', provozovna: 'no-such-venue', telefon: '600000009'})).text(), /Kód z SMS/);
