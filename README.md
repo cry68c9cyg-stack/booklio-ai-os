@@ -16,6 +16,8 @@ Samostatná služba, která čte data z pokladny (Pexeso) a rezervačního syst�
 
 - **Dashboard** na `https://oko1.rr7whdyyhf.workers.dev/d/{tenant}` (James Dean: `/d/james-dean`): tržba proti plánu a stejnému dni před týdnem, platby, slevy a storna, peníze (trezor, banka, výdaje z kasy, výplaty), seznam k vyřízení (nejvýš 15 bodů, varování první), tržby za 35 dní, části podniku, „Report dne“, všechny řádky reportu manažerů a ranní zpráva. Přihlášení: návštěvník zadá svoje číslo; kód v SMS přijde jen na číslo z `dashboardPhones` (není-li nastaveno, jen na první z `recipients`, tedy majitele), jiné číslo dostane stejnou odpověď a nic se nepošle. Kód platí 10 minut a jednou, nejvýš 5 kódů za hodinu a 10 za den, po 10 chybných kódech za hodinu se přihlášení na hodinu zavře. Přihlášení drží 30 dní v cookie jen pro danou provozovnu; změna povolených čísel nebo `POST /admin/t/{tenant}/logout` všechna přihlášení ukončí.
 
+- **Živé čtení webu James Dean a MCP server** (nový zásah do architektury, schválil MC 12. 10. 2026): OKO1 čte z webu ve chvíli dotazu všechno, co vidí admin webu, i se jmény a kontakty hostů (rezervace, hosté, zprávy, černá listina, recenze, dárkové karty, platby stolu s lahví, blokace, akce, návštěvnost, nastavení) a nikam to neukládá. Vedení se ptá přes MCP server OKO1 (`/mcp`, přihlášení kódem z SMS jako na dashboard), který vidí pokladnu i web dohromady; na dashboardu je karta „Web James Dean“ s dnešními rezervacemi. Popis v [docs/web-v1.md](docs/web-v1.md).
+
 - **Doručení přes BulkGate** (aplikace OKO1) na čísla v `recipients`: WhatsApp šablonou, když je nastavený `WHATSAPP_SENDER` (čeká na schválení odesílatele), jinak SMS. Twilio jen jako záloha. Bez brány se přehled jen uloží a je k dispozici přes správní API. Nepovedené odeslání se zkusí znovu v další hodinu odeslání (nejpozději v 9:00).
 
 Nasazeno naostro: https://oko1.rr7whdyyhf.workers.dev (EU), automaticky z větve `main` přes GitHub Actions. Zadání a rozhodnutí vlastníka: specifikace OKO1 v projektu.
@@ -39,13 +41,18 @@ Vše vyžaduje `Authorization: Bearer <ADMIN_SECRET>` (min. 32 znaků).
 | `PUT /admin/t/{tenant}/report` | uloží denní report manažerů (viz [docs/denni-report-v1.md](docs/denni-report-v1.md)) |
 | `GET /admin/t/{tenant}/report?date=YYYY-MM-DD` | uložený denní report a rozbor „Report dne“ |
 | `POST /admin/t/{tenant}/fetch` | načte report z OneDrive hned `{date}` |
+| `GET /admin/t/{tenant}/web` | ověří živé čtení webu: adresa, název tajemství, jestli je token nastavený, počet tabulek; bez tokenu a bez dat hostů |
+
+## MCP server
+
+`https://oko1.rr7whdyyhf.workers.dev/mcp` (Streamable HTTP, OAuth). Jen čtení: pokladna (`trzby_dne`, `trzby_obdobi`, `ranni_prehled`, `report_manazeru`, `kontrola_lahvi`, `ucty`), web živě (`web_rezervace`, `web_rezervace_detail`, `web_host`, `web_navstevnost`, `web_recenze`, `web_darkove_karty`, `web_platby_lahvi`, `web_blokace_a_akce`, `web_prehled`, `web_tabulka`) a souhrn `den`. Připojení v Claudovi: vlastní konektor s touto adresou, pak provozovna a kód z SMS na číslo, které smí na dashboard; vydrží 30 dní. Podrobnosti v [docs/web-v1.md](docs/web-v1.md).
 
 Příklad konfigurace James Dean:
 
 ```json
 {"name": "James Dean", "timeZone": "Europe/Prague", "businessDayCutoffHour": 6, "sendHours": [7, 8, 9],
  "registers": ["bar", "klub"], "sections": {"diner": "Diner", "bar": "Bar", "club": "Klub"}, "recipients": [],
- "bottleCheck": {"minLossCents": 10000}}
+ "bottleCheck": {"minLossCents": 10000}, "web": {"url": "https://jamesdean.cz"}}
 ```
 
 ## Vývoj
@@ -59,11 +66,13 @@ npm run check   # TypeScript
 npm run build   # wrangler deploy --dry-run, nic nenasazuje
 ```
 
-Technika: Cloudflare Worker, jeden SQLite Durable Object na provozovnu, ranní cron v 7, 8 a 9 hodin pražského času, archiv v R2 (EU). Excel se čte bez knihoven (vlastní čtečka ZIP a XML). Stejný vzor jako cloudové rezervace v Pexesu (větev `feat/t10-online-reservations`).
+Technika: Cloudflare Worker, jeden SQLite Durable Object na provozovnu, ranní cron v 7, 8 a 9 hodin pražského času, archiv v R2 (EU), MCP server s OAuth (KV `OAUTH_KV`) a živé čtení webu James Dean. Excel se čte bez knihoven (vlastní čtečka ZIP a XML). Stejný vzor jako cloudové rezervace v Pexesu (větev `feat/t10-online-reservations`).
 
 ## Bezpečnost
 
 - Do repozitáře nepatří tajemství, `.dev.vars`, exporty z pokladny ani data hostů.
 - `ADMIN_SECRET` patří do Cloudflare secret, lokálně do ignorovaného `.dev.vars`.
 - Tokeny pokladen se ukládají jen jako SHA-256 otisk.
+- **Osobní údaje hostů** (jména, telefony, e-maily, poznámky): od 12. 10. 2026 (schválil MC) je OKO1 čte živě z webu James Dean a ukazuje je jen vedení přes MCP server a dashboard, oboje za přihlášením kódem z SMS. Neukládá je do SQLite, R2, KV ani logů a neposílá je do ranní zprávy ani do LLM, které si samo volá. Kontrakt ingest dál nese jen počty rezervací. Viz [docs/web-v1.md](docs/web-v1.md).
+- Token pro čtení webu je tajemství Workeru `WEB_TOKEN_<TENANT>` (James Dean: `WEB_TOKEN_JAMES_DEAN`), ve webu `OKO1_CTENI_TOKEN`; vytváří ho nasazení, výměna = smazat obě a nasadit.
 - Výchozí konfigurace vypíná `workers.dev` i preview URL. Před nasazením je potřeba Cloudflare účet, doména a umístění dat v EU.

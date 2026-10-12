@@ -17,7 +17,8 @@ const usage = `Použití:
   node scripts/admin.ts briefings <tenant>                    vypíše uložené a odeslané přehledy
   node scripts/admin.ts report <tenant> <YYYY-MM-DD>          ukáže uložený denní report manažerů a rozbor „Report dne“
   node scripts/admin.ts fetch <tenant> <YYYY-MM-DD> [--keep]  načte denní report z OneDrive hned (mimo ranní okno); --keep nepřepíše den, který denní report už má
-  node scripts/admin.ts import <tenant> <složka> <od> <do> [--dry-run] [--force]   nahraje dny z excelů manažerů ve složce (deník a denní reporty); den s uloženým denním reportem přeskočí, pokud není --force`;
+  node scripts/admin.ts import <tenant> <složka> <od> <do> [--dry-run] [--force]   nahraje dny z excelů manažerů ve složce (deník a denní reporty); den s uloženým denním reportem přeskočí, pokud není --force
+  node scripts/admin.ts web <tenant>                          ověří živé čtení webu (adresa, tajemství s tokenem, seznam tabulek); žádná data hostů`;
 
 function fail(message: string): never {
   console.error(message);
@@ -113,6 +114,9 @@ switch (command) {
     }
     break;
   }
+  case 'web':
+    console.log(JSON.stringify(await call('GET', 'web'), null, 2));
+    break;
   default:
     fail(usage);
 }
