@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, forecast, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
@@ -323,6 +323,23 @@ test('weekly summary: where the website visits came from, and a warning when the
   assert.ok(todoList(sunday).some(item => item.level === 'warn' && item.text === 'Recenze klesají: průměr recenzí za týden 3,8 ★ z 6 hodnocených (4 týdny předtím 4,4 ★)'));
   const saturday = buildBriefing({businessDate: '2026-10-10', config, bills: [], closings: [], planHistory: [], incomplete: false, week});
   assert.ok(!todoList(saturday).some(item => item.text.startsWith('Recenze klesají')), 'only from the Sunday summary');
+});
+
+test('revenue forecast: weekday averages × last year\'s season, tomorrow, 7 days, this month in total and the next one', () => {
+  const bases = [10000000, 10000000, 10000000, 10000000, 10000000, 10000000, 20000000];
+  const result = forecast({today: '2026-10-14', bases, seasonal: {'2026-11': 1.2}, monthActual: {cents: 130000000, days: 12, missing: ['2026-10-05']}});
+  assert.deepEqual([result.tomorrow, result.week.cents, result.month.restCents, result.month.totalCents, result.nextMonth],
+    [{date: '2026-10-15', cents: 10000000}, 80000000, 220000000, 350000000, {month: '2026-11', cents: 408000000}], 'Saturdays twice, a Monday without data forecast, November × 1,2');
+  assert.deepEqual(renderForecast(result), ['Odhad tržby: zítra (čt 15. 10.) 100 000 Kč · 7 dní od dneška 800 000 Kč · říjen celkem 3 500 000 Kč (zatím 1 300 000 Kč, 1 den bez dat odhadnuto) · listopad 4 080 000 Kč']);
+  const gap = forecast({today: '2026-10-14', bases: [...bases.slice(0, 1), null, ...bases.slice(2)], seasonal: {}, monthActual: {cents: 0, days: 0}});
+  assert.deepEqual([gap.tomorrow.cents, gap.week.cents, gap.month.totalCents, gap.nextMonth.cents], [10000000, null, null, null], 'no Monday base, no sum with a Monday');
+  assert.deepEqual(renderForecast(gap), ['Odhad tržby: zítra (čt 15. 10.) 100 000 Kč']);
+  const first = forecast({today: '2026-12-01', bases: bases.map(() => 12345678), seasonal: {}, monthActual: {cents: 0, days: 0}});
+  assert.equal(first.nextMonth.month, '2027-01');
+  assert.match(renderForecast(first)[0], /^Odhad tržby: zítra \(st 2\. 12\.\) 123 000 Kč · 7 dní od dneška 864 000 Kč · prosinec celkem 3 827 000 Kč · leden 3 827 000 Kč$/, 'rounded to thousands, nothing so far on the 1st');
+  assert.equal(forecast({today: '2026-12-01', bases: bases.map(() => 12345678), seasonal: {'2027-01': 0.5}, monthActual: {cents: 0, days: 0}}).nextMonth.cents, 31 * 6172839, 'January of the next year with its own season');
+  assert.deepEqual(renderForecast(forecast({today: '2026-10-14', bases: Array(7).fill(null), seasonal: {}, monthActual: {cents: 0, days: 0}})), []);
+  assert.deepEqual(renderForecast(null), []);
 });
 
 test('silent senders: the newest installation of each kind counts, the web after 3 h, a POS after 26 h', () => {

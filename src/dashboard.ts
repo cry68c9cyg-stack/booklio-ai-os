@@ -190,6 +190,23 @@ function monthCard(m) {
     list('Výplaty v hotovosti' + (n.revenueCents > 0 && m.payoutsCents ? ' (' + (Math.round(m.payoutsCents / n.revenueCents * 1000) / 10).toFixed(1).replace('.', ',') + ' % tržby)' : ''), m.payoutsCents, m.payouts, 20) + list('Výdaje z kasy', m.expensesCents, m.expenses, 10) + list('Slevy a odpisy', m.discountsCents, m.discounts, 10) + '</div>';
 }
 
+// Revenue forecast from the day after the shown one: weekday averages of 4 weeks × last year's seasonality.
+function forecastCard(f) {
+  if (!f) return '';
+  const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.';
+  const name = mo => monthNames[Number(mo.slice(5, 7)) - 1];
+  const round = c => c === null ? null : Math.round(c / 100000) * 100000;
+  const days = ['ne', 'po', 'út', 'st', 'čt', 'pá', 'so'], wd = d => days[new Date(d + 'T12:00:00Z').getUTCDay()];
+  const m = f.month, missing = m.elapsedDays - m.actualDays, rows = [];
+  rows.push('<tr><td>Zítra <span class="muted">(' + wd(f.tomorrow.date) + ' ' + short(f.tomorrow.date) + ')</span></td><td class="n">' + kc(round(f.tomorrow.cents)) + '</td></tr>');
+  rows.push('<tr><td>7 dní od dneška <span class="muted">(' + short(f.week.from) + '–' + short(f.week.to) + ')</span></td><td class="n">' + kc(round(f.week.cents)) + '</td></tr>');
+  rows.push('<tr><td>' + esc(name(m.month)[0].toUpperCase() + name(m.month).slice(1)) + ' celkem' + (m.elapsedDays ? ' <span class="muted">(zatím ' + kc(m.actualCents) + (missing > 0 ? ', ' + missing + (missing === 1 ? ' den' : missing <= 4 ? ' dny' : ' dní') + ' bez dat odhadnuto' : '') + ')</span>' : '') + '</td><td class="n">' + kc(round(m.totalCents)) + '</td></tr>');
+  rows.push('<tr><td>' + esc(name(f.nextMonth.month)[0].toUpperCase() + name(f.nextMonth.month).slice(1)) + '</td><td class="n">' + kc(round(f.nextMonth.cents)) + '</td></tr>');
+  const seasons = Object.keys(f.seasonal).sort().map(k => name(k) + ' ×' + String(f.seasonal[k]).replace('.', ','));
+  return '<div class="card"><h2>Odhad tržby od ' + short(f.today) + '</h2><table>' + rows.join('') + '</table><p class="muted">Průměr stejného dne v týdnu za poslední 4 týdny' +
+    (seasons.length ? ', upravený podle loňska (' + esc(seasons.join(', ')) + ')' : '; loňská data na sezónnost zatím nejsou') + '. Rezervace, počasí a akce zatím nezapočítává.</p></div>';
+}
+
 // Who sends data to OKO1 and when it last arrived; a sender silent too long is marked.
 function sourcesCard(s) {
   if (!s) return '';
@@ -252,7 +269,7 @@ function render(data) {
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card" id="todo">' + todoCard(data.todo) + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
-  html += weekCard(data.week) + monthCard(data.month) + sourcesCard(data.sources);
+  html += forecastCard(b.forecast) + weekCard(data.week) + monthCard(data.month) + sourcesCard(data.sources);
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
   if (r) {

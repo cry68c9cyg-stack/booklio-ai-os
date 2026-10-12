@@ -1,7 +1,7 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
-import {buildBriefing, planFrom, reviewDrop, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
+import {buildBriefing, forecast, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
@@ -666,6 +666,40 @@ export class TenantObject extends DurableObject<Env> {
     return {confirmedGuests: row?.confirmed ?? 0, noShowGuests: row?.noShow ?? 0};
   }
 
+  /**
+   * Revenue forecast from the day after the reported one: weekday averages of the 4 weeks up to the reported day,
+   * times last year's seasonality (a month's daily average last year against the same 4 weeks last year, 52 weeks back; 20 days of data each).
+   */
+  private forecast(date: string): Forecast {
+    const today = addDays(date, 1), month = today.slice(0, 7);
+    // Each day's revenue is read once (the month so far overlaps the 4 weeks).
+    const cache = new Map<string, number | null>();
+    const revenue = (entry: string) => { if (!cache.has(entry)) cache.set(entry, this.dayRevenue(entry)); return cache.get(entry)!; };
+    const window = Array.from({length: 28}, (_, i) => addDays(date, -i));
+    const history = Array.from({length: 7}, (_, day) => window.filter(entry => weekday(entry) === day).map(revenue).filter((value): value is number => value !== null));
+    // A weekday with no revenue in 4 weeks while at least 4 others have it counts as closed (0), so it does not blank the sums.
+    const open = history.filter(values => values.length >= 2).length;
+    const bases = history.map(values => !values.length && open >= 4 ? 0 : planFrom(values.map(revenueCents => ({revenueCents})))?.revenueCents ?? null);
+    const average = (dates: string[]) => {
+      const values = dates.map(revenue).filter((value): value is number => value !== null);
+      return values.length >= 20 ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+    };
+    const baseLastYear = average(window.map(entry => addDays(entry, -364)));
+    // The month of every forecast day: the 7 days, the rest of this month and the whole next one (the 1st + 31 days is always in it).
+    const months = new Set([month, addDays(month + '-01', 31).slice(0, 7), ...Array.from({length: 7}, (_, i) => addDays(today, i).slice(0, 7))]);
+    const seasonal: Record<string, number> = {};
+    for (const entry of baseLastYear ? months : []) {
+      const lastYear = `${Number(entry.slice(0, 4)) - 1}${entry.slice(4)}`, days: string[] = [];
+      for (let day = lastYear + '-01'; day.startsWith(lastYear); day = addDays(day, 1)) days.push(day);
+      const value = average(days);
+      if (value !== null) seasonal[entry] = Math.round(Math.min(SEASON_MAX, Math.max(SEASON_MIN, value / baseLastYear!)) * 100) / 100;
+    }
+    let cents = 0, days = 0;
+    const missing: string[] = [];
+    for (let day = month + '-01'; day <= date; day = addDays(day, 1)) { const value = revenue(day); if (value !== null) { cents += value; days++; } else missing.push(day); }
+    return forecast({today, bases, seasonal, monthActual: {cents, days, missing}});
+  }
+
   /** The 7 days up to the reported day against the 7 days before them. */
   private week(date: string): Week {
     const week: Week = {from: addDays(date, -6), to: date, current: this.weekPart(addDays(date, -6), date), previous: this.weekPart(addDays(date, -13), addDays(date, -7)),
@@ -708,7 +742,7 @@ export class TenantObject extends DurableObject<Env> {
       week: weekday(date) === 0 ? this.week(date) : null, silent: this.silentSources(config, date, now),
       month: weekday(date) === 0 || addDays(date, 1).endsWith('-01') ? this.month(config, date) : null,
       lastWeekRevenueCents: this.dayRevenue(addDays(date, -7)), discountHistory: this.discountHistory(date),
-      ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date),
+      ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast: this.forecast(date),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};
   }
