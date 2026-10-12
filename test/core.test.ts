@@ -1,16 +1,17 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, forecast, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
+import {weatherDays, weatherText} from '../src/weather.ts';
 import {businessDate} from '../src/time.ts';
 import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type TenantConfig} from '../src/validate.ts';
 
 const config: TenantConfig = {
   name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9],
-  registers: ['bar', 'klub'], sections: {diner: 'Diner', bar: 'Bar', club: 'Klub'}, recipients: [], bottleCheck: null, reportsLink: null, dashboardPhones: null, web: null,
+  registers: ['bar', 'klub'], sections: {diner: 'Diner', bar: 'Bar', club: 'Klub'}, recipients: [], bottleCheck: null, reportsLink: null, dashboardPhones: null, web: null, location: null,
 };
 const bill = (id: string, extra: Partial<Bill> = {}): Bill => ({
   type: 'bill', id, version: 1, businessDate: '2026-10-08', closedAt: '2026-10-08T20:00:00.000Z', registerId: 'bar', section: 'bar',
@@ -340,6 +341,47 @@ test('revenue forecast: weekday averages × last year\'s season, tomorrow, 7 day
   assert.equal(forecast({today: '2026-12-01', bases: bases.map(() => 12345678), seasonal: {'2027-01': 0.5}, monthActual: {cents: 0, days: 0}}).nextMonth.cents, 31 * 6172839, 'January of the next year with its own season');
   assert.deepEqual(renderForecast(forecast({today: '2026-10-14', bases: Array(7).fill(null), seasonal: {}, monthActual: {cents: 0, days: 0}})), []);
   assert.deepEqual(renderForecast(null), []);
+});
+
+test('weather from MET Norway: local days, rain without overlaps, the symbol around noon, Czech words', () => {
+  const step = (time: string, temperature: unknown, one: [string, number] | null, six: [string, number] | null) => ({time, data: {instant: {details: {air_temperature: temperature}},
+    ...(one ? {next_1_hours: {summary: {symbol_code: one[0]}, details: {precipitation_amount: one[1]}}} : {}),
+    ...(six ? {next_6_hours: {summary: {symbol_code: six[0]}, details: {precipitation_amount: six[1]}}} : {})}});
+  const answer = {properties: {timeseries: [
+    step('2026-10-14T21:30:00Z', 9.6, ['cloudy', 0], ['cloudy', 5]), // 23:30 local on the 14th
+    step('2026-10-14T22:00:00Z', 9.4, ['lightrain', 0.4], ['rain', 3]), // midnight local: the 15th
+    step('2026-10-15T10:00:00Z', 14.4, ['lightrain_day', 0.6], ['rain', 2]), // noon
+    step('2026-10-15T12:00:00Z', 13.8, null, ['heavyrain', 2.25]), // 6-hour steps once the hourly ones end
+    step('2026-10-15T18:00:00Z', 'x', null, ['rain', 9]), // no temperature: skipped
+  ]}};
+  assert.deepEqual(weatherDays(answer, 'Europe/Prague'), [
+    {date: '2026-10-14', minC: 10, maxC: 10, rainMm: 0, symbol: 'cloudy'},
+    {date: '2026-10-15', minC: 9, maxC: 14, rainMm: 3.3, symbol: 'lightrain_day'},
+  ]);
+  assert.equal(weatherText({date: '2026-10-15', minC: 9, maxC: 14, rainMm: 3.3, symbol: 'lightrain_day'}), '14 °C, slabý déšť');
+  assert.equal(weatherText({date: '2026-10-15', minC: 9, maxC: 21, rainMm: 0, symbol: 'partlycloudy_night'}), '21 °C, polojasno');
+  assert.equal(weatherText({date: '2026-10-15', minC: -3, maxC: -1, rainMm: 1, symbol: 'heavysnowshowers_day'}), '-1 °C, sníh');
+  assert.equal(weatherText({date: '2026-10-15', minC: 9, maxC: 14, rainMm: 0, symbol: null}), '14 °C');
+  assert.deepEqual(weatherDays({}, 'Europe/Prague'), []);
+  assert.deepEqual(weatherDays({properties: {timeseries: [{time: 'x'}, null]}}, 'Europe/Prague'), []);
+});
+
+test('forecast: more booked guests than usual raise a day (at most by half), weather and how well it hit', () => {
+  const bases = Array(7).fill(10000000);
+  const bookings = {'2026-10-15': {guests: 120, usualGuests: 100}, '2026-10-16': {guests: 400, usualGuests: 100}, '2026-10-17': {guests: 50, usualGuests: 100}, '2026-10-18': {guests: 80, usualGuests: null}};
+  const weather = [{date: '2026-10-15', minC: 9, maxC: 14, rainMm: 3, symbol: 'rain'}];
+  const accuracy = forecastAccuracy([{forecastCents: 100, actualCents: 110}, {forecastCents: 100, actualCents: 90}, ...Array(5).fill({forecastCents: 100, actualCents: 100}), {forecastCents: 0, actualCents: 50}]);
+  assert.deepEqual(accuracy, {days: 7, errorPermille: 29}, 'a day without a forecast does not count');
+  assert.equal(forecastAccuracy(Array(6).fill({forecastCents: 100, actualCents: 100})), null, 'under 7 days');
+  const result = forecast({today: '2026-10-14', bases, seasonal: {}, monthActual: {cents: 0, days: 0}, bookings, weather, accuracy});
+  assert.deepEqual(result.days.map(day => [day.date, day.cents, day.boost]), [['2026-10-14', 10000000, 1], ['2026-10-15', 12000000, 1.2], ['2026-10-16', 15000000, 1.5],
+    ['2026-10-17', 10000000, 1], ['2026-10-18', 10000000, 1], ['2026-10-19', 10000000, 1], ['2026-10-20', 10000000, 1]], 'fewer guests than usual never lower it');
+  assert.equal(result.week.cents, 77000000);
+  assert.deepEqual([result.days[1].guests, result.days[1].usualGuests, result.days[1].weatherText, result.days[2].weatherText], [120, 100, '14 °C, déšť', null]);
+  assert.equal(renderForecast(result)[0], 'Odhad tržby: zítra (čt 15. 10.) 120 000 Kč (víc rezervací než obvykle), 14 °C, déšť · 7 dní od dneška 770 000 Kč · říjen celkem 1 870 000 Kč (zatím 0 Kč, 13 dní bez dat odhadnuto) · listopad 3 000 000 Kč · odhad se za 7 dní lišil v průměru o 3 %');
+  // Today's plan is the forecast for today; the next morning checks the day against the forecast it logged.
+  const briefing = buildBriefing({businessDate: '2026-10-13', config, bills: [], closings: [], planHistory: [{revenueCents: 1}, {revenueCents: 1}], incomplete: false, forecast: result, forecastPlanCents: 9000000});
+  assert.deepEqual([briefing.plan, briefing.outlook.planCents], [{revenueCents: 9000000, days: 2}, 10000000]);
 });
 
 test('silent senders: the newest installation of each kind counts, the web after 3 h, a POS after 26 h', () => {

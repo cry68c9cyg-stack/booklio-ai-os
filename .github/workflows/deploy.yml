@@ -102,6 +102,8 @@ jobs:
             # Live reading of the web James Dean (docs/web-v1.md); its token is the Worker secret WEB_TOKEN_JAMES_DEAN, never in the config.
             if [ "$tenant" = james-dean ]; then
               jq '.web = {url: "https://jamesdean.cz"}' "$RUNNER_TEMP/$tenant.json" > "$RUNNER_TEMP/$tenant.tmp" && mv "$RUNNER_TEMP/$tenant.tmp" "$RUNNER_TEMP/$tenant.json"
+              # Public address of the venue (V Kolkovně, Praha 1) for the weather forecast; nothing else is sent to MET Norway.
+              jq '.location = {lat: 50.0899, lon: 14.4207}' "$RUNNER_TEMP/$tenant.json" > "$RUNNER_TEMP/$tenant.tmp" && mv "$RUNNER_TEMP/$tenant.tmp" "$RUNNER_TEMP/$tenant.json"
             fi
             # A wrong link must not stop the other venues and steps: store the config without it and warn.
             if ! out=$(node scripts/admin.ts config "$tenant" "$RUNNER_TEMP/$tenant.json"); then

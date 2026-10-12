@@ -190,21 +190,29 @@ function monthCard(m) {
     list('Výplaty v hotovosti' + (n.revenueCents > 0 && m.payoutsCents ? ' (' + (Math.round(m.payoutsCents / n.revenueCents * 1000) / 10).toFixed(1).replace('.', ',') + ' % tržby)' : ''), m.payoutsCents, m.payouts, 20) + list('Výdaje z kasy', m.expensesCents, m.expenses, 10) + list('Slevy a odpisy', m.discountsCents, m.discounts, 10) + '</div>';
 }
 
-// Revenue forecast from the day after the shown one: weekday averages of 4 weeks × last year's seasonality.
+// Revenue forecast from the day after the shown one: the next 7 days with bookings and weather, the month, the next month, how well it hit.
 function forecastCard(f) {
   if (!f) return '';
   const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.';
   const name = mo => monthNames[Number(mo.slice(5, 7)) - 1];
+  const big = mo => esc(name(mo)[0].toUpperCase() + name(mo).slice(1));
   const round = c => c === null ? null : Math.round(c / 100000) * 100000;
   const days = ['ne', 'po', 'út', 'st', 'čt', 'pá', 'so'], wd = d => days[new Date(d + 'T12:00:00Z').getUTCDay()];
-  const m = f.month, missing = m.elapsedDays - m.actualDays, rows = [];
-  rows.push('<tr><td>Zítra <span class="muted">(' + wd(f.tomorrow.date) + ' ' + short(f.tomorrow.date) + ')</span></td><td class="n">' + kc(round(f.tomorrow.cents)) + '</td></tr>');
+  const m = f.month, missing = m.elapsedDays - m.actualDays;
+  const week = (f.days || []).map(d => '<tr><td>' + wd(d.date) + ' ' + short(d.date) + '</td><td class="n">' + kc(round(d.cents)) + (d.boost > 1 ? ' <span class="muted">(+' + Math.round((d.boost - 1) * 100) + ' % rezervace)</span>' : '') +
+    '</td><td class="n' + (d.boost > 1 ? ' warn' : '') + '">' + d.guests + (d.usualGuests !== null ? ' <span class="muted">/ ' + d.usualGuests + '</span>' : '') + '</td><td class="muted">' + esc(d.weatherText || '–') + '</td></tr>').join('');
+  const rows = [];
   rows.push('<tr><td>7 dní od dneška <span class="muted">(' + short(f.week.from) + '–' + short(f.week.to) + ')</span></td><td class="n">' + kc(round(f.week.cents)) + '</td></tr>');
-  rows.push('<tr><td>' + esc(name(m.month)[0].toUpperCase() + name(m.month).slice(1)) + ' celkem' + (m.elapsedDays ? ' <span class="muted">(zatím ' + kc(m.actualCents) + (missing > 0 ? ', ' + missing + (missing === 1 ? ' den' : missing <= 4 ? ' dny' : ' dní') + ' bez dat odhadnuto' : '') + ')</span>' : '') + '</td><td class="n">' + kc(round(m.totalCents)) + '</td></tr>');
-  rows.push('<tr><td>' + esc(name(f.nextMonth.month)[0].toUpperCase() + name(f.nextMonth.month).slice(1)) + '</td><td class="n">' + kc(round(f.nextMonth.cents)) + '</td></tr>');
+  rows.push('<tr><td>' + big(m.month) + ' celkem' + (m.elapsedDays ? ' <span class="muted">(zatím ' + kc(m.actualCents) + (missing > 0 ? ', ' + missing + (missing === 1 ? ' den' : missing <= 4 ? ' dny' : ' dní') + ' bez dat odhadnuto' : '') + ')</span>' : '') + '</td><td class="n">' + kc(round(m.totalCents)) + '</td></tr>');
+  rows.push('<tr><td>' + big(f.nextMonth.month) + '</td><td class="n">' + kc(round(f.nextMonth.cents)) + '</td></tr>');
   const seasons = Object.keys(f.seasonal).sort().map(k => name(k) + ' ×' + String(f.seasonal[k]).replace('.', ','));
-  return '<div class="card"><h2>Odhad tržby od ' + short(f.today) + '</h2><table>' + rows.join('') + '</table><p class="muted">Průměr stejného dne v týdnu za poslední 4 týdny' +
-    (seasons.length ? ', upravený podle loňska (' + esc(seasons.join(', ')) + ')' : '; loňská data na sezónnost zatím nejsou') + '. Rezervace, počasí a akce zatím nezapočítává.</p></div>';
+  return '<div class="card"><h2>Odhad tržby od ' + short(f.today) + '</h2>' +
+    (week ? '<table><tr><th></th><th class="n">odhad</th><th class="n">hosté rez. / obvykle</th><th>počasí</th></tr>' + week + '</table>' : '') +
+    '<table>' + rows.join('') + '</table>' +
+    (f.accuracy ? '<p>Odhad se za ' + f.accuracy.days + ' dní lišil od skutečnosti v průměru o <b>' + Math.round(f.accuracy.errorPermille / 10) + ' %</b>.</p>' : '<p class="muted">Přesnost odhadu se ukáže po 7 dnech provozu.</p>') +
+    '<p class="muted">Průměr stejného dne v týdnu za poslední 4 týdny' +
+    (seasons.length ? ', upravený podle loňska (' + esc(seasons.join(', ')) + ')' : '; loňská data na sezónnost zatím nejsou') +
+    '. Víc potvrzených hostů než obvykle zvýší odhad dne úměrně, nejvýš o polovinu. Počasí: MET Norway.</p></div>';
 }
 
 // Who sends data to OKO1 and when it last arrived; a sender silent too long is marked.
