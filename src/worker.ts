@@ -10,7 +10,7 @@ import {addDays, businessDate, isDate} from './time.ts';
 import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-report.ts';
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
-import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Reservation, type TenantConfig} from './validate.ts';
+import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Reservation, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
 import {dashboardWeb} from './web-views.ts';
 import {MCP_PATH, oauthOptions, type Venues} from './oauth.ts';
@@ -425,7 +425,8 @@ export class TenantObject extends DurableObject<Env> {
     const planHistory = [7, 14, 21, 28].map(days => this.dayRevenue(addDays(date, -days))).filter((value): value is number => value !== null).map(revenueCents => ({revenueCents}));
     const briefing = buildBriefing({businessDate: date, config, bills: this.day<Bill>('bill', date), closings: this.day<CashClosing>('cash_closing', date),
       bottleChecks: this.day<BottleCheck>('bottle_check', date), planHistory, incomplete, report: this.report(date), notes: this.notes(date),
-      reservations: this.day<Reservation>('reservation', date), reservationsToday: this.day<Reservation>('reservation', addDays(date, 1))});
+      reservations: this.day<Reservation>('reservation', date), reservationsToday: this.day<Reservation>('reservation', addDays(date, 1)),
+      web: this.day<WebTraffic>('web_traffic', date)[0], webLastWeek: this.day<WebTraffic>('web_traffic', addDays(date, -7))[0]});
     return {briefing, text: renderBriefing(config.name, briefing)};
   }
 

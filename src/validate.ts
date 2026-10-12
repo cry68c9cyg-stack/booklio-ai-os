@@ -41,8 +41,16 @@ export function withoutGuest<T extends IngestRecord>(record: T): T {
   const {guest: _guest, ...rest} = record as Reservation;
   return rest as T;
 }
+/**
+ * The website's daily traffic summary (one Prague calendar day): totals only, nothing about single visitors.
+ * Sent hourly for yesterday and today; the higher `version` overwrites.
+ */
+export type WebTraffic = {
+  type: 'web_traffic'; id: string; version: number; businessDate: string; visits: number; visitsWithAction: number;
+  origins: {key: string; name: string; visits: number; withAction: number}[]; actions: Record<string, number>; reviewScans: number;
+};
 export const RESERVATION_STATUSES = ['pending', 'confirmed', 'declined', 'expired', 'cancelled'] as const;
-export type IngestRecord = Bill | CashClosing | BottleCheck | Reservation;
+export type IngestRecord = Bill | CashClosing | BottleCheck | Reservation | WebTraffic;
 export type Batch = {batchId: string; installationId: string; records: IngestRecord[]};
 
 export type TenantConfig = {
@@ -180,6 +188,23 @@ function reservation(raw: Obj): Reservation {
   };
 }
 
+const COUNT_MAX = 10_000_000;
+function webTraffic(raw: Obj): WebTraffic {
+  const value = object(raw, ['type', 'id', 'version', 'businessDate', 'visits', 'visitsWithAction', 'origins', 'actions', 'reviewScans']);
+  const actions = object(value.actions, [], Object.keys((value.actions ?? {}) as Obj));
+  if (Object.keys(actions).length > 100) fail();
+  return {
+    type: 'web_traffic', id: id(value.id), version: int(value.version, 1, Number.MAX_SAFE_INTEGER), businessDate: date(value.businessDate),
+    visits: int(value.visits, 0, COUNT_MAX), visitsWithAction: int(value.visitsWithAction, 0, COUNT_MAX),
+    origins: list(value.origins, 50, item => {
+      const origin = object(item, ['key', 'name', 'visits', 'withAction']);
+      return {key: id(origin.key), name: text(origin.name, 100), visits: int(origin.visits, 0, COUNT_MAX), withAction: int(origin.withAction, 0, COUNT_MAX)};
+    }),
+    actions: Object.fromEntries(Object.entries(actions).map(([key, count]) => [id(key), int(count, 0, COUNT_MAX)])),
+    reviewScans: int(value.reviewScans, 0, COUNT_MAX),
+  };
+}
+
 export function validateBatch(raw: unknown): Batch {
   const value = object(raw, ['batchId', 'installationId', 'records']);
   if (typeof value.batchId !== 'string' || !/^[\w-]{8,128}$/.test(value.batchId)) fail();
@@ -191,6 +216,7 @@ export function validateBatch(raw: unknown): Batch {
       if (row?.type === 'cash_closing') return cashClosing(row);
       if (row?.type === 'bottle_check') return bottleCheck(row);
       if (row?.type === 'reservation') return reservation(row);
+      if (row?.type === 'web_traffic') return webTraffic(row);
       return fail();
     }),
   };

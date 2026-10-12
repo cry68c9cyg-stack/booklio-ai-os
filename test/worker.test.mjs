@@ -101,12 +101,21 @@ try {
   ])).json(), {batchId: 'batch-0003f', accepted: 5, stale: 0});
   // The reservation system uses the time of the last change in ms as the version.
   assert.deepEqual(await (await ingest('batch-0003g', [booking('r1', Date.parse('2026-10-08T21:00:00Z'), '2026-10-08', 'diner', 4, 'confirmed', 'arrived')])).json(), {batchId: 'batch-0003g', accepted: 1, stale: 0});
+  // The website's daily traffic (totals only); a week before for the comparison; a later version overwrites the day.
+  const traffic = (businessDate, version, visits) => ({type: 'web_traffic', id: `web-${businessDate}`, version, businessDate, visits, visitsWithAction: 12,
+    origins: [{key: 'instagram', name: 'Instagram', visits: 40, withAction: 5}, {key: 'google', name: 'Google hledání', visits: 60, withAction: 6}, {key: 'qr', name: 'QR kód na stole', visits: 0, withAction: 0}],
+    actions: {'rezervace-otevrena': 9, 'rezervace-odeslana': 4}, reviewScans: 2});
+  assert.equal((await ingest('batch-0003l', [{...traffic('2026-10-08', 1, 100), origins: [{key: 'x', name: 'X', visits: 1}]}])).status, 400, 'origin needs withAction');
+  assert.equal((await ingest('batch-0003m', [{...traffic('2026-10-08', 1, 100), visits: -1}])).status, 400, 'no negative counts');
+  assert.deepEqual(await (await ingest('batch-0003n', [traffic('2026-10-01', 1, 80), traffic('2026-10-08', 1, 90), traffic('2026-10-08', 2, 110)])).json(),
+    {batchId: 'batch-0003n', accepted: 3, stale: 0});
   const sent = await tick('2026-10-09T06:00:00Z'); // 8:00 local
   assert.equal(sent.decision, 'send');
   assert.equal(sent.businessDate, '2026-10-08');
   assert.match(sent.text, /Tržba: 1 200 Kč \(plán 1 200 Kč, \+0 %\)/);
   assert.match(sent.text, /\nLahve: manko 214 Kč \(2 spočítáno\)\n⚠ Jägermeister −450 ml \(203 Kč\)\n/, 'recount wins, small loss hidden');
-  assert.match(sent.text, /\nRezervace: 2 \(6 hostů\), nedorazilo 1 \(2 hosté\)\nDnes rezervováno: 2 \(9 hostů\) · club 1 · diner 1, čeká na potvrzení 1$/, 'unknown sections keep their key');
+  assert.match(sent.text, /\nRezervace: 2 \(6 hostů\), nedorazilo 1 \(2 hosté\)\nDnes rezervováno: 2 \(9 hostů\) · club 1 · diner 1, čeká na potvrzení 1\n/, 'unknown sections keep their key');
+  assert.match(sent.text, /\nWeb: 110 návštěv \(před týdnem 80, \+38 %\), 12 s rezervací, telefonem nebo navigací, odeslané rezervace 4, QR na recenze 2×\nOdkud: Google hledání 60 · Instagram 40$/);
   assert.equal((await tick('2026-10-09T07:00:00Z')).decision, 'skip');
 
   // Next day nothing closes: 9:00 sends anyway, marked incomplete. The venue now expects a bottle check.

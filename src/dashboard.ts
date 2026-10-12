@@ -124,6 +124,11 @@ function render(data) {
     '<div>' + esc(czDate(shift(data.businessDate, 1))) + ': <b>' + rv.today.confirmed + '</b> (' + hosts(rv.today.guests) + ')' +
     (rv.today.bySection.length > 1 ? ' <span class="muted">' + rv.today.bySection.map(s => esc(s.label) + ' ' + s.confirmed).join(' · ') + '</span>' : '') +
     (rv.today.pending ? ' · <span class="warn">čeká ' + rv.today.pending + '</span>' : '') + '</div></div>');
+  const w = b.web, visits = n => n + ' ' + (n === 1 ? 'návštěva' : n >= 2 && n <= 4 ? 'návštěvy' : 'návštěv');
+  if (w) cards.push('<div class="card"><h2>Návštěvnost webu</h2><div class="big">' + w.visits + '</div><div class="muted">' + visits(w.visits) +
+    (w.lastWeekVisits !== null ? ' · před týdnem ' + w.lastWeekVisits + (w.lastWeekVisits ? ' (' + signed(pct(w.visits, w.lastWeekVisits)) + ')' : '') : '') + '</div>' +
+    '<div>s akcí <b>' + w.withAction + '</b> · odeslané rezervace <b>' + w.reservationsSent + '</b>' + (w.reviewScans ? ' · QR na recenze <b>' + w.reviewScans + '</b>' : '') + '</div>' +
+    (w.topOrigins.length ? '<div class="muted">' + w.topOrigins.map(o => esc(o.name) + ' ' + o.visits).join(' · ') + '</div>' : '') + '</div>');
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card"><h2>K vyřízení</h2>' + (data.todo.length ? '<ul>' + data.todo.map(t => '<li class="' + (t.level === 'warn' ? 'warn' : '') + '">' + esc(t.text) + '</li>').join('') + '</ul>' : '<span class="ok">Nic k vyřízení.</span>') + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';

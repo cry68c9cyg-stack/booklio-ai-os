@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, crowns, renderBriefing, renderReservations, summarizeReservations} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, crowns, renderBriefing, renderReservations, renderWeb, summarizeReservations, summarizeWeb} from '../src/briefing.ts';
 import {briefingDecision, reportDate} from '../src/schedule.ts';
 import {todoList} from '../src/todo.ts';
 import {businessDate} from '../src/time.ts';
@@ -187,4 +187,15 @@ test('reservations: guest details are validated, optional, and stripped for the 
   for (const bad of [{...guest, contactType: 'fax'}, {...guest, email: 'x@example.test'}, {...guest, tables: 'p3'}, {...guest, name: 'x'.repeat(201)}]) {
     assert.throws(() => validateBatch({batchId: 'batch-guest-4', installationId: 'booklio', records: [{...base, guest: bad}]}), InputError);
   }
+});
+
+test('website traffic: a short line against last week, top origins only with visits', () => {
+  const day = {type: 'web_traffic' as const, id: 'web-2026-10-08', version: 1, businessDate: '2026-10-08', visits: 1250, visitsWithAction: 3,
+    origins: [{key: 'a', name: 'A', visits: 5, withAction: 0}, {key: 'b', name: 'B', visits: 900, withAction: 2}, {key: 'c', name: 'C', visits: 0, withAction: 0}],
+    actions: {telefon: 3}, reviewScans: 0};
+  assert.equal(summarizeWeb(undefined, day), null);
+  assert.deepEqual(renderWeb(summarizeWeb(day, {...day, visits: 1500})), [
+    'Web: 1 250 návštěv (před týdnem 1 500, −17 %), 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0', 'Odkud: B 900 · A 5']);
+  assert.deepEqual(renderWeb(summarizeWeb({...day, visits: 3, origins: []}, undefined)), ['Web: 3 návštěvy, 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0']);
+  assert.deepEqual(renderWeb(summarizeWeb({...day, visits: 1, origins: []}, {...day, visits: 0})), ['Web: 1 návštěva (před týdnem 0), 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0']);
 });
