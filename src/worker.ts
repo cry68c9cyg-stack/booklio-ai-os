@@ -10,13 +10,14 @@ import {addDays, businessDate, isDate} from './time.ts';
 import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-report.ts';
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
+import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
 import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
 import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Reservation, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
 import {dashboardWeb} from './web-views.ts';
 import {MCP_PATH, oauthOptions, type Venues} from './oauth.ts';
 
-export type Env = DeliveryEnv & WebEnv & {
+export type Env = DeliveryEnv & WebEnv & IuctoEnv & {
   TENANTS: DurableObjectNamespace<TenantObject>; REGISTRY: DurableObjectNamespace<Registry>; ADMIN_SECRET: string; DATA_JURISDICTION?: string;
   /** Grants and tokens of the MCP server's OAuth (docs/web-v1.md). Optional: without it /mcp is not available. */
   OAUTH_KV?: KVNamespace;
@@ -96,6 +97,9 @@ export class TenantObject extends DurableObject<Env> {
       -- Every request for a login code, for an allowed number or not (SHA-256 of venue and number): the same clock for all.
       CREATE TABLE IF NOT EXISTS login_requests(phone_hash TEXT NOT NULL, at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+      -- Posted costs per month and synthetic account from iÚčto (sums only), and the last read of each month.
+      CREATE TABLE IF NOT EXISTS costs(month TEXT NOT NULL, account TEXT NOT NULL, name TEXT NOT NULL, amount_cents INTEGER NOT NULL, PRIMARY KEY(month, account));
+      CREATE TABLE IF NOT EXISTS cost_fetches(month TEXT PRIMARY KEY, through TEXT NOT NULL, at TEXT NOT NULL, error TEXT);
     `));
     // Wrong codes for unknown venues are counted per venue name in the shared stand-in (see `loginStub`).
     if (!this.sql.exec<{name: string}>('PRAGMA table_info(login_failures)').toArray().some(column => column.name === 'scope')) {
@@ -441,6 +445,43 @@ export class TenantObject extends DurableObject<Env> {
     return this.sql.exec<{json: string}>('SELECT json FROM records WHERE type=? AND business_date=? ORDER BY id', type, date).toArray().map(row => JSON.parse(row.json) as T);
   }
 
+  /**
+   * Reads the posted costs of the reported day's month (up to that day) and of the month before (late invoices still
+   * land there) from iÚčto, once a day. Only sums per account are stored; a failure keeps the last good sums.
+   */
+  private async fetchCosts(tenant: string, date: string, today: string) {
+    const key = iuctoKey(this.env, tenant);
+    if (!key) return;
+    const month = date.slice(0, 7), previous = addDays(month + '-01', -1);
+    for (const [from, to] of [[month + '-01', date], [previous.slice(0, 7) + '-01', previous]]) {
+      const last = this.sql.exec<{at: string; through: string}>('SELECT at, through FROM cost_fetches WHERE month=?', from.slice(0, 7)).toArray()[0];
+      if (last && last.at.slice(0, 10) === today && last.through === to) continue;
+      const result = await fetchCosts(key, from, to, 15000);
+      this.ctx.storage.transactionSync(() => {
+        if (result.ok) {
+          this.sql.exec('DELETE FROM costs WHERE month=?', from.slice(0, 7));
+          for (const row of result.value) this.sql.exec('INSERT INTO costs VALUES(?,?,?,?)', from.slice(0, 7), row.account, row.name, row.amountCents);
+        }
+        this.sql.exec(`INSERT INTO cost_fetches VALUES(?,?,?,?) ON CONFLICT(month) DO UPDATE SET through=excluded.through, at=excluded.at, error=excluded.error`,
+          from.slice(0, 7), result.ok ? to : (last?.through ?? to), result.ok ? today : (last?.at ?? '0000-00-00'), result.ok ? null : result.error);
+      });
+    }
+  }
+
+  /** Costs and revenue of a month up to `through`; null when iÚčto was never read for that month. */
+  private monthResult(month: string, through: string) {
+    const fetch = this.sql.exec<{through: string; error: string | null}>('SELECT through, error FROM cost_fetches WHERE month=?', month).toArray()[0];
+    if (!fetch) return null;
+    const rows = this.sql.exec<{account: string; name: string; amount_cents: number}>('SELECT account, name, amount_cents FROM costs WHERE month=? ORDER BY amount_cents DESC, account', month).toArray()
+      .map(row => ({account: row.account, name: row.name, amountCents: row.amount_cents})) as CostRow[];
+    let revenueCents = 0, revenueDays = 0;
+    for (let day = month + '-01'; day <= through; day = addDays(day, 1)) {
+      const revenue = this.dayRevenue(day);
+      if (revenue !== null) { revenueCents += revenue; revenueDays++; }
+    }
+    return {month, through: fetch.through, rows, revenueCents, revenueDays, error: fetch.error};
+  }
+
   /** Revenue of a past day: POS data when there is any, then the managers' report, otherwise the imported history. */
   private dayRevenue(date: string): number | null {
     const bills = this.day<Bill>('bill', date).filter(bill => bill.status === 'closed');
@@ -470,7 +511,8 @@ export class TenantObject extends DurableObject<Env> {
     const briefing = buildBriefing({businessDate: date, config, bills: this.day<Bill>('bill', date), closings: this.day<CashClosing>('cash_closing', date),
       bottleChecks: this.day<BottleCheck>('bottle_check', date), planHistory, incomplete, report: this.report(date), notes: this.notes(date),
       reservations: this.day<Reservation>('reservation', date), reservationsToday: this.day<Reservation>('reservation', addDays(date, 1)),
-      web: this.day<WebTraffic>('web_traffic', date)[0], webLastWeek: this.day<WebTraffic>('web_traffic', addDays(date, -7))[0]});
+      web: this.day<WebTraffic>('web_traffic', date)[0], webLastWeek: this.day<WebTraffic>('web_traffic', addDays(date, -7))[0],
+      costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};
   }
 
@@ -494,6 +536,8 @@ export class TenantObject extends DurableObject<Env> {
       await withinBudget((async () => {
         if (config.reportsLink && !this.hasReport(date)) await this.fetchReport(tenant, date);
         await this.analyse(config, date);
+        // Costs once a day (a failed read is tried again at the next send hour); the quota is the venue's (5 000 requests a day on the Firma plan).
+        await this.fetchCosts(tenant, date, businessDate(at, config.timeZone, 0));
       })(), PREPARE_BUDGET_MS);
     }
     const decision = briefingDecision({localHour: hour, sendHours: config.sendHours, alreadySent: sent, ready: this.ready(config, date)});

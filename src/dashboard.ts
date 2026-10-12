@@ -156,6 +156,12 @@ function render(data) {
     (w.lastWeekVisits !== null ? ' · před týdnem ' + w.lastWeekVisits + (w.lastWeekVisits ? ' (' + signed(pct(w.visits, w.lastWeekVisits)) + ')' : '') : '') + '</div>' +
     '<div>s akcí <b>' + w.withAction + '</b> · odeslané rezervace <b>' + w.reservationsSent + '</b>' + (w.reviewScans ? ' · QR na recenze <b>' + w.reviewScans + '</b>' : '') + '</div>' +
     (w.topOrigins.length ? '<div class="muted">' + w.topOrigins.map(o => esc(o.name) + ' ' + o.visits).join(' · ') + '</div>' : '') + '</div>');
+  const co = b.costs, sum = rows => rows.reduce((t, r) => t + r.amountCents, 0);
+  if (co) cards.push('<div class="card"><h2>Náklady a výsledek</h2><div class="big">' + kc(co.revenueCents - sum(co.rows)) + '</div><div class="muted">' +
+    esc(co.month) + ' do ' + esc(czDate(co.through)) + ': tržby ' + kc(co.revenueCents) + ' − zaúčtované náklady ' + kc(sum(co.rows)) + '</div>' +
+    co.rows.slice(0, 5).map(r => '<div>' + esc(r.name) + ' <b>' + kc(r.amountCents) + '</b></div>').join('') +
+    (b.costsPrevious && b.costsPrevious.rows.length ? '<div class="muted">' + esc(b.costsPrevious.month) + ' celkem: ' + kc(b.costsPrevious.revenueCents - sum(b.costsPrevious.rows)) + '</div>' : '') +
+    (co.error ? '<div class="warn">iÚčto dnes nejde načíst: ' + esc(co.error) + '</div>' : '') + '</div>');
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card"><h2>K vyřízení</h2>' + (data.todo.length ? '<ul>' + data.todo.map(t => '<li class="' + (t.level === 'warn' ? 'warn' : '') + '">' + esc(t.text) + '</li>').join('') + '</ul>' : '<span class="ok">Nic k vyřízení.</span>') + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
