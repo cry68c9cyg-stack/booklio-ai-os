@@ -24,9 +24,9 @@
       "vars": {"DATA_JURISDICTION": "eu"},
       // Archiv původních dat a denní export, jen v EU. Kbelík vytvoří nasazení (deploy.yml).
       "r2_buckets": [{"binding": "ARCHIVE", "bucket_name": "oko1-archive", "jurisdiction": "eu"}],
-      // Granty a tokeny OAuth pro MCP server. Jmenný prostor oko1-oauth najde nebo jednou vytvoří nasazení (deploy.yml)
-      // a jeho id doplní při nasazení; bez něj se OKO1 nasadí bez MCP serveru.
-      "kv_namespaces": [{"binding": "OAUTH_KV"}],
+      // Granty a tokeny OAuth pro MCP server: jmenný prostor oko1-oauth (vytvořený 12. 10. 2026). Token nasazení nemá
+      // oprávnění Workers KV, proto je id tady; nasazení (deploy.yml) ho použije, když jmenný prostor samo nenajde.
+      "kv_namespaces": [{"binding": "OAUTH_KV", "id": "c05bd0e104c64984bc0d08439707306d"}],
       "durable_objects": {"bindings": [
         {"name": "TENANTS", "class_name": "TenantObject"},
         {"name": "REGISTRY", "class_name": "Registry"}

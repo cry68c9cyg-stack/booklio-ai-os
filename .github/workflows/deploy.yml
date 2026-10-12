@@ -62,7 +62,7 @@ jobs:
             if [ -n "$id" ]; then echo "Jmenný prostor oko1-oauth vytvořen."; else echo "$r" | jq -c '.errors' 2> /dev/null || true; fi
           fi
           if [ -n "$id" ]; then echo "id=$id" >> "$GITHUB_OUTPUT"
-          else echo "::warning::KV pro přihlášení k MCP nejde najít ani vytvořit (token potřebuje Workers KV Storage: Edit), OKO1 se nasadí bez MCP serveru."; fi
+          else echo "KV pro přihlášení k MCP token nasazení nevidí (nemá Workers KV Storage), použije se id oko1-oauth z wrangler.jsonc."; fi
       - name: Nasazení
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -71,7 +71,7 @@ jobs:
         run: |
           # Config of this deploy: the id of the MCP server's KV (without it no MCP) and, without the bucket, no R2 binding
           # (it would stop the deploy).
-          node -e 'const fs=require("fs");const c=JSON.parse(fs.readFileSync("wrangler.jsonc","utf8").split("\n").filter(l=>!/^\s*\/\//.test(l)).join("\n"));const p=c.env.production;if(process.env.OAUTH_KV_ID)p.kv_namespaces=[{binding:"OAUTH_KV",id:process.env.OAUTH_KV_ID}];else delete p.kv_namespaces;if(process.env.ARCHIVE_OK!=="true")delete p.r2_buckets;fs.writeFileSync("wrangler.deploy.json",JSON.stringify(c))'
+          node -e 'const fs=require("fs");const c=JSON.parse(fs.readFileSync("wrangler.jsonc","utf8").split("\n").filter(l=>!/^\s*\/\//.test(l)).join("\n"));const p=c.env.production;if(process.env.OAUTH_KV_ID)p.kv_namespaces=[{binding:"OAUTH_KV",id:process.env.OAUTH_KV_ID}];else if(!p.kv_namespaces?.[0]?.id)delete p.kv_namespaces;if(process.env.ARCHIVE_OK!=="true")delete p.r2_buckets;fs.writeFileSync("wrangler.deploy.json",JSON.stringify(c))'
           npx wrangler deploy --env production --config wrangler.deploy.json
       - name: Správní heslo (odvozené z tokenu, nikde se neukládá)
         env:
