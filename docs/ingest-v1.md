@@ -104,6 +104,23 @@ Prázdný řetězec znamená totéž co `null`. Neznámé pole v `guest` dávku 
 
 > Poznámka (12. 10. 2026): OKO1 navíc čte všechna data webu James Dean živě pro MCP server a dashboard vedení a ta si neukládá ([docs/web-v1.md](web-v1.md)). Uložené údaje hostů jsou jen ty, které web pošle tímto kontraktem v poli `guest` (rozhodnutí MC 12. 10. 2026: živě i uložené).
 
+### Návštěvnost webu (`web_traffic`)
+
+Doplněno 12. 10. 2026 zpětně kompatibilně. Web posílá každou hodinu souhrn za včerejšek a dnešek (pražský kalendářní den 0:00–24:00, ne provozní den do 6:00); vyšší `version` (čas odeslání v ms) den přepíše. Jen součty, nic o jednotlivých návštěvnících ani hostech.
+
+`{type: "web_traffic", id, version, businessDate, visits, visitsWithAction, origins, actions, reviewScans}`
+
+| Pole | Typ | Poznámka |
+|---|---|---|
+| `id` | string | `web-RRRR-MM-DD` |
+| `visits` | int ≥ 0 | návštěvy webu za den |
+| `visitsWithAction` | int ≥ 0 | návštěvy, které otevřely rezervaci, volaly nebo navigovaly |
+| `origins` | pole ≤ 50 `{key, name, visits, withAction}` | odkud návštěvy přišly (skupiny webu, např. `google`, `instagram`, `qr`), `name` je český název |
+| `actions` | objekt `{akce: počet}`, ≤ 100 klíčů | počet návštěv s danou akcí, např. `rezervace-otevrena`, `rezervace-odeslana`, `telefon` |
+| `reviewScans` | int ≥ 0 | skeny QR kódu na stole s odkazem na hodnocení na Googlu |
+
+Ranní zpráva ukáže den proti stejnému dni před týdnem, odeslané rezervace, skeny QR a tři nejčastější zdroje; dashboard totéž jako kartu „Návštěvnost webu“.
+
 ## Kdy posílat
 
 Po uzavření každého účtu nebo v intervalu 5–15 minut, a vždy hned po uzávěrce a po dokončení kontroly lahví. Neodeslané dávky drží pokladna ve své frontě a posílá je s opakováním.

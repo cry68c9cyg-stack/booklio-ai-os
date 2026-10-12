@@ -1,4 +1,4 @@
-import {DEFAULT_BOTTLE_LOSS_CENTS, type Bill, type BottleCheck, type CashClosing, type Reservation, type TenantConfig} from './validate.ts';
+import {DEFAULT_BOTTLE_LOSS_CENTS, type Bill, type BottleCheck, type CashClosing, type Reservation, type TenantConfig, type WebTraffic} from './validate.ts';
 import {weekday} from './time.ts';
 import {line, total, type DailyReport} from './daily-report.ts';
 import type {NotePoint, NotesAnalysis} from './notes.ts';
@@ -32,6 +32,8 @@ export type Briefing = {
     day: {confirmed: number; guests: number; arrived: number; noShows: number; noShowGuests: number; cancelled: number};
     today: {confirmed: number; guests: number; pending: number; bySection: {section: string; label: string; confirmed: number; guests: number}[]};
   } | null;
+  /** The website on the reported calendar day, against the same weekday a week before. `null` = the website sent nothing. */
+  web: {visits: number; withAction: number; lastWeekVisits: number | null; reservationsSent: number; reviewScans: number; topOrigins: {name: string; visits: number}[]} | null;
   incomplete: boolean;
 };
 const positive = (report: DailyReport, kind: 'expense' | 'payout') => report.lines.filter(entry => entry.kind === kind && entry.amountCents > 0).reduce((sum, entry) => sum + entry.amountCents, 0);
@@ -59,6 +61,15 @@ export function summarizeReservations(config: TenantConfig, day: Reservation[], 
       bySection: [...sections].map(([section, row]) => ({section, label: config.sections[section] ?? section, ...row}))
         .sort((a, b) => (order.indexOf(a.section) + 1 || 99) - (order.indexOf(b.section) + 1 || 99) || a.section.localeCompare(b.section)),
     },
+  };
+}
+/** The website's day in a few numbers; reservations sent = visits that sent the booking form. */
+export function summarizeWeb(day: WebTraffic | undefined, lastWeek: WebTraffic | undefined): Briefing['web'] {
+  if (!day) return null;
+  return {
+    visits: day.visits, withAction: day.visitsWithAction, lastWeekVisits: lastWeek?.visits ?? null,
+    reservationsSent: day.actions['rezervace-odeslana'] ?? 0, reviewScans: day.reviewScans,
+    topOrigins: [...day.origins].sort((a, b) => b.visits - a.visits || a.key.localeCompare(b.key)).filter(row => row.visits > 0).slice(0, 3).map(({name, visits}) => ({name, visits})),
   };
 }
 export type BottleLoss = {name: string; lossMl: number; lossCents: number};
@@ -89,6 +100,7 @@ export function buildBriefing(input: {
   planHistory: {revenueCents: number}[]; incomplete: boolean; bottleChecks?: BottleCheck[];
   report?: DailyReport | null; notes?: NotesAnalysis | null;
   reservations?: Reservation[]; reservationsToday?: Reservation[];
+  web?: WebTraffic; webLastWeek?: WebTraffic;
 }): Briefing {
   const closed = input.bills.filter(bill => bill.status === 'closed');
   const add = <K>(map: Map<K, number>, key: K, value: number) => map.set(key, (map.get(key) ?? 0) + value);
@@ -158,6 +170,7 @@ export function buildBriefing(input: {
     notes: input.notes ? {points: input.notes.points, summary: input.notes.summary, raw: null}
       : report?.notes ? {points: [], summary: null, raw: report.notes} : null,
     reservations: summarizeReservations(input.config, input.reservations ?? [], input.reservationsToday ?? []),
+    web: summarizeWeb(input.web, input.webLastWeek),
     incomplete: input.incomplete,
   };
 }
@@ -203,6 +216,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderReport(briefing));
   lines.push(...renderBottles(briefing));
   lines.push(...renderReservations(briefing.reservations));
+  lines.push(...renderWeb(briefing.web));
   lines.push(...renderNotes(briefing));
   return lines.join('\n');
 }
@@ -264,4 +278,18 @@ export function renderReservations(reservations: Briefing['reservations']): stri
   if (today.bySection.length > 1) next += ' · ' + today.bySection.map(row => `${row.label} ${row.confirmed}`).join(' · ');
   if (today.pending) next += `, čeká na potvrzení ${today.pending}`;
   return [past, next];
+}
+
+const visitsWord = (count: number) => count === 1 ? 'návštěva' : count >= 2 && count <= 4 ? 'návštěvy' : 'návštěv';
+/** The website's day: visits against a week before, what visitors did, and where most of them came from. */
+export function renderWeb(web: Briefing['web']): string[] {
+  if (!web) return [];
+  let line = `Web: ${group(web.visits)} ${visitsWord(web.visits)}`;
+  if (web.lastWeekVisits !== null) {
+    const change = web.lastWeekVisits ? `, ${web.visits >= web.lastWeekVisits ? '+' : '−'}${Math.round(Math.abs(web.visits - web.lastWeekVisits) / web.lastWeekVisits * 100)} %` : '';
+    line += ` (před týdnem ${group(web.lastWeekVisits)}${change})`;
+  }
+  line += `, ${group(web.withAction)} s rezervací, telefonem nebo navigací, odeslané rezervace ${web.reservationsSent}`;
+  if (web.reviewScans) line += `, QR na recenze ${web.reviewScans}×`;
+  return web.topOrigins.length ? [line, 'Odkud: ' + web.topOrigins.map(row => `${row.name} ${group(row.visits)}`).join(' · ')] : [line];
 }
