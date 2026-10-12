@@ -6,3 +6,5 @@ dist/
 *.db
 *.sqlite
 exports/
+wrangler.deploy.json
+wrangler.noarchive.json

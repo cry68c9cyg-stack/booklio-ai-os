@@ -367,6 +367,13 @@ try {
   assert.equal((await ingest('batch-web-1', [bill('w1', 1, 80000, today)], 'Bearer ' + token, 'james-dean')).status, 200);
   const local = (path, init = {}) => mf.dispatchFetch('http://localhost' + path, init);
 
+  // The admin check reads only the list of tables and never shows the token.
+  const check = await (await call('GET', '/admin/t/james-dean/web')).json();
+  assert.deepEqual(check, {url: 'https://jamesdean.cz', secret: 'WEB_TOKEN_JAMES_DEAN', token: true, ok: true, tables: 18, error: null});
+  assert.deepEqual(web.requests.map(entry => entry.path), ['/api/oko1/v1/tabulky']);
+  web.requests.length = 0;
+  assert.equal((await call('GET', '/admin/t/james-dean/web', undefined, null)).status, 401);
+
   // Without an OAuth token the MCP server answers 401 and points to its metadata.
   const rpc = (id, method, params = {}) => JSON.stringify({jsonrpc: '2.0', id, method, params});
   const mcpHeaders = {'content-type': 'application/json', accept: 'application/json, text/event-stream'};
@@ -491,6 +498,7 @@ try {
   const downDay = await mcp('den', {datum: today});
   assert.equal(downDay.data.pokladna.revenueCents, 80000);
   assert.equal(downDay.data.web.varovani, 'Web teď nejde načíst: HTTP 503.');
+  assert.deepEqual(await (await call('GET', '/admin/t/james-dean/web')).json(), {url: 'https://jamesdean.cz', secret: 'WEB_TOKEN_JAMES_DEAN', token: true, ok: false, tables: 0, error: 'HTTP 503'});
   const downCard = (await (await jdBoard('GET', '/web', undefined, jdCookie)).json()).card;
   assert.equal(downCard.error, 'Web teď nejde načíst (HTTP 503).');
   assert.match(await renderCard({'/d/james-dean/data': boardData, '/d/james-dean/web': {card: downCard}}), /Web teď nejde načíst \(HTTP 503\)\./);

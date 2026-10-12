@@ -42,14 +42,37 @@ jobs:
           if out=$(npx wrangler r2 bucket create oko1-archive --jurisdiction eu 2>&1); then echo "Kbelík oko1-archive vytvořen."; echo "ok=true" >> "$GITHUB_OUTPUT"
           elif echo "$out" | grep -qi 'already exists'; then echo "Kbelík oko1-archive už existuje."; echo "ok=true" >> "$GITHUB_OUTPUT"
           else echo "$out" | tail -5; echo "::warning::Archiv R2 nejde vytvořit, OKO1 se nasadí bez archivu."; echo "ok=false" >> "$GITHUB_OUTPUT"; fi
-      - name: Nasazení
+      - name: KV pro přihlášení k MCP serveru (jmenný prostor oko1-oauth, vytvoří se jen poprvé)
+        id: oauth
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          if [ "${{ steps.archive.outputs.ok }}" = true ]; then npx wrangler deploy --env production; exit; fi
-          # Without the bucket the R2 binding would stop the deploy: deploy the same config without it.
-          node -e 'const fs=require("fs");const c=JSON.parse(fs.readFileSync("wrangler.jsonc","utf8").split("\n").filter(l=>!/^\s*\/\//.test(l)).join("\n"));delete c.env.production.r2_buckets;fs.writeFileSync("wrangler.noarchive.json",JSON.stringify(c))'
-          npx wrangler deploy --env production --config wrangler.noarchive.json
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces"
+          id=""
+          for page in 1 2 3 4 5; do
+            r=$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$api?per_page=100&page=$page") || break
+            echo "$r" | jq -e '.success' > /dev/null || break
+            id=$(echo "$r" | jq -r 'first(.result[]? | select(.title == "oko1-oauth") | .id) // empty')
+            if [ -n "$id" ] || [ "$(echo "$r" | jq '.result | length')" -lt 100 ]; then break; fi
+          done
+          if [ -n "$id" ]; then echo "Jmenný prostor oko1-oauth už existuje."
+          else
+            r=$(curl -sS -X POST -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'content-type: application/json' --data '{"title":"oko1-oauth"}' "$api" || true)
+            id=$(echo "$r" | jq -r '.result.id // empty' 2> /dev/null || true)
+            if [ -n "$id" ]; then echo "Jmenný prostor oko1-oauth vytvořen."; else echo "$r" | jq -c '.errors' 2> /dev/null || true; fi
+          fi
+          if [ -n "$id" ]; then echo "id=$id" >> "$GITHUB_OUTPUT"
+          else echo "::warning::KV pro přihlášení k MCP nejde najít ani vytvořit (token potřebuje Workers KV Storage: Edit), OKO1 se nasadí bez MCP serveru."; fi
+      - name: Nasazení
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ARCHIVE_OK: ${{ steps.archive.outputs.ok }}
+          OAUTH_KV_ID: ${{ steps.oauth.outputs.id }}
+        run: |
+          # Config of this deploy: the id of the MCP server's KV (without it no MCP) and, without the bucket, no R2 binding
+          # (it would stop the deploy).
+          node -e 'const fs=require("fs");const c=JSON.parse(fs.readFileSync("wrangler.jsonc","utf8").split("\n").filter(l=>!/^\s*\/\//.test(l)).join("\n"));const p=c.env.production;if(process.env.OAUTH_KV_ID)p.kv_namespaces=[{binding:"OAUTH_KV",id:process.env.OAUTH_KV_ID}];else delete p.kv_namespaces;if(process.env.ARCHIVE_OK!=="true")delete p.r2_buckets;fs.writeFileSync("wrangler.deploy.json",JSON.stringify(c))'
+          npx wrangler deploy --env production --config wrangler.deploy.json
       - name: Správní heslo (odvozené z tokenu, nikde se neukládá)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -75,6 +98,10 @@ jobs:
             link=$(printf '%s' "$ONEDRIVE_REPORTS_LINK" | tr -d '[:space:]')
             if [ "$tenant" = james-dean ] && [ -n "$link" ]; then
               jq --arg l "$link" '.reportsLink = $l' "$RUNNER_TEMP/$tenant.json" > "$RUNNER_TEMP/$tenant.tmp" && mv "$RUNNER_TEMP/$tenant.tmp" "$RUNNER_TEMP/$tenant.json"
+            fi
+            # Live reading of the web James Dean (docs/web-v1.md); its token is the Worker secret WEB_TOKEN_JAMES_DEAN, never in the config.
+            if [ "$tenant" = james-dean ]; then
+              jq '.web = {url: "https://jamesdean.cz"}' "$RUNNER_TEMP/$tenant.json" > "$RUNNER_TEMP/$tenant.tmp" && mv "$RUNNER_TEMP/$tenant.tmp" "$RUNNER_TEMP/$tenant.json"
             fi
             # A wrong link must not stop the other venues and steps: store the config without it and warn.
             if ! out=$(node scripts/admin.ts config "$tenant" "$RUNNER_TEMP/$tenant.json"); then
@@ -124,6 +151,38 @@ jobs:
           if (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/node_modules/.bin/wrangler" secret bulk web.json --name "$WEB"); then echo "Web spárován jako $id."
           else echo "::warning::Tajemství webu se nepodařilo uložit, zkusí se při dalším nasazení."; fi
           rm -f "$RUNNER_TEMP/web.json"
+      - name: Token pro živé čtení webu James Dean (OKO1_CTENI_TOKEN ve webu, WEB_TOKEN_JAMES_DEAN v OKO1)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AI_OS_URL: https://oko1.rr7whdyyhf.workers.dev
+          WEB: james-dean-web-production
+        run: |
+          export AI_OS_ADMIN_SECRET=$(printf '%s' oko1-admin | openssl dgst -sha256 -hmac "$CLOUDFLARE_API_TOKEN" -r | cut -d' ' -f1)
+          check() { node scripts/admin.ts web james-dean 2> /dev/null || echo '{"ok": false, "error": "kontrola selhala"}'; }
+          names=$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WEB/secrets" || true)
+          if ! echo "$names" | jq -e '.success' > /dev/null 2>&1; then echo "::warning::Tajemství webu nejde přečíst, token pro čtení webu se nevytvoří."; exit 0; fi
+          if echo "$names" | jq -e '.result | map(.name) | index("OKO1_CTENI_TOKEN")' > /dev/null; then
+            status=$(check); echo "$status" | jq -c '{ok, tabulky: .tables, chyba: .error}' || true
+            if echo "$status" | jq -e '.ok' > /dev/null 2>&1; then
+              echo "OKO1 čte web. Výměna tokenu: smažte obě tajemství (OKO1_CTENI_TOKEN ve webu, WEB_TOKEN_JAMES_DEAN v OKO1) a spusťte nasazení."; exit 0
+            fi
+            # Only a missing or refused token means a new pair; a web that is down or not deployed yet is just a warning.
+            if ! echo "$status" | jq -e '.token == false or ((.error // "") | startswith("HTTP 401"))' > /dev/null 2>&1; then
+              echo "::warning::OKO1 teď web nepřečte, token zůstává: $(echo "$status" | jq -r '.error // "neznámá chyba"' 2> /dev/null)"; exit 0
+            fi
+          fi
+          # A new pair: OKO1 first, then the web. If the web fails, the next deploy finds the token refused and makes a new pair.
+          token=$(openssl rand -hex 32); echo "::add-mask::$token"
+          if ! printf '%s' "$token" | npx wrangler secret put WEB_TOKEN_JAMES_DEAN --env production > /dev/null; then
+            echo "::warning::Token se do OKO1 nepodařilo uložit, zkusí se při dalším nasazení."; exit 0
+          fi
+          jq -n --arg t "$token" '{OKO1_CTENI_TOKEN: $t}' > "$RUNNER_TEMP/web-cteni.json"
+          # Outside the repo, so OKO1's own wrangler.jsonc does not apply (like the pairing of the reservation system).
+          if (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/node_modules/.bin/wrangler" secret bulk web-cteni.json --name "$WEB" > /dev/null); then echo "Token pro čtení webu uložen do webu i do OKO1."
+          else echo "::warning::Token se do webu nepodařilo uložit, zkusí se při dalším nasazení."; fi
+          rm -f "$RUNNER_TEMP/web-cteni.json"
+          sleep 10
+          check | jq -c '{ok, tabulky: .tables, chyba: .error}' || echo "::warning::Kontrolu čtení webu nejde spustit."
       - name: SMS brána (BulkGate, případně Twilio), jen když jsou tajemství vyplněná
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

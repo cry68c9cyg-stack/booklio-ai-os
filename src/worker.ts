@@ -11,7 +11,7 @@ import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-repo
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
 import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Reservation, type TenantConfig} from './validate.ts';
-import {webSite, type WebEnv} from './web-client.ts';
+import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
 import {dashboardWeb} from './web-views.ts';
 import {MCP_PATH, oauthOptions, type Venues} from './oauth.ts';
 
@@ -486,6 +486,7 @@ export class Registry extends DurableObject<Env> {
 const routes: Record<string, string[]> = {
   'v1/ingest': ['POST'], 'admin/config': ['GET', 'PUT'], 'admin/pair': ['POST'], 'admin/history': ['POST'],
   'admin/briefing': ['GET'], 'admin/briefings': ['GET'], 'admin/tick': ['POST'], 'admin/report': ['GET', 'PUT'], 'admin/fetch': ['POST'], 'admin/logout': ['POST'],
+  'admin/web': ['GET'],
 };
 
 async function readBody(request: Request, limit: number): Promise<unknown | Result> {
@@ -617,5 +618,17 @@ async function app(request: Request, env: Env): Promise<Response> {
   }
   const tenant = match[2];
   const stub = tenantStub(env, tenant);
+  if (route === 'admin/web') return json(await webCheck(env, tenant, stub));
   return json(await stub.handle(tenant, route, request.method, body, token, Object.fromEntries(url.searchParams)));
+}
+
+/** Admin: can OKO1 read the venue's website right now? Reads only the list of tables; never the token or any data. */
+async function webCheck(env: Env, tenant: string, stub: DurableObjectStub<TenantObject>): Promise<Result> {
+  const setup = await stub.setup() as VenueSetup | null;
+  if (!setup) return failure('NOT_CONFIGURED', 409);
+  const status = {url: setup.web?.url ?? null, secret: webTokenName(tenant), token: webToken(env, tenant) !== null};
+  const site = webSite(setup.web, env, tenant);
+  if (!site.ok) return ok({...status, ok: false, tables: 0, error: site.error});
+  const tables = await webTables(site.value);
+  return ok({...status, ok: tables.ok, tables: tables.ok ? tables.value.length : 0, error: tables.ok ? null : tables.error});
 }
