@@ -26,7 +26,7 @@ h1{font-size:20px;margin:0}h2{font-size:15px;margin:0 0 8px;color:var(--muted);f
 table{width:100%;border-collapse:collapse}td,th{padding:5px 4px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}td.n,th.n{text-align:right;white-space:nowrap}
 ul{margin:0;padding-left:18px}li{margin:3px 0}
 button,input{font:inherit;padding:8px 12px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text)}
-button.primary{background:var(--accent);border-color:var(--accent);color:#fff;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;cursor:pointer}button:disabled{opacity:.6;cursor:default}
 nav{display:flex;gap:6px;align-items:center}
 svg{width:100%;height:auto;display:block}
 pre{white-space:pre-wrap;font:13px/1.4 ui-monospace,monospace;margin:0}
@@ -42,7 +42,7 @@ h3{font-size:14px;margin:12px 0 6px}.scroll{overflow-x:auto}
     <h1>OKO1</h1>
     <p class="muted">Zadejte svoje telefonní číslo. Když má přístup, přijde na něj kód v SMS.</p>
     <form id="phoneForm"><p><input id="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+420 …" aria-label="Telefonní číslo" required> <button class="primary" id="send">Poslat kód</button></p></form>
-    <form id="verify" hidden><p><input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6 číslic" aria-label="Kód z SMS"> <button class="primary">Přihlásit</button></p></form>
+    <form id="verify" hidden><p><input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" minlength="6" pattern="[0-9]{6}" placeholder="6 číslic" aria-label="Kód z SMS" required> <button class="primary">Přihlásit</button></p><p id="codeLeft" class="muted" role="timer"></p></form>
     <p id="loginMsg" class="muted" role="status"></p>
   </div>
 </section>
@@ -66,18 +66,45 @@ const czDate = d => { const [y,m,dd] = d.split('-').map(Number); return days[new
 const shift = (d, n) => { const t = new Date(d + 'T12:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
 const post = (path, body) => fetch(base + path, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body ?? {})});
 
+// Countdown of the login code: the seconds come from the server's answer (expiresIn, retryAfter), the page only counts
+// them down. The same answer and countdown for every number, with access or without.
+const pad = n => String(n).padStart(2, '0');
+const codeClock = s => s >= 3600 ? Math.floor(s / 3600) + ':' + pad(Math.floor(s / 60) % 60) + ':' + pad(s % 60) : Math.floor(s / 60) + ':' + pad(s % 60);
+const inTime = s => s < 120 ? s + ' s' : Math.ceil(s / 60) + ' min';
+let codeUntil = 0, sendFrom = 0, countdownTimer = null;
+function countdown() {
+  const now = Date.now(), left = Math.ceil((codeUntil - now) / 1000), wait = Math.ceil((sendFrom - now) / 1000);
+  if (codeUntil) $('codeLeft').textContent = left > 0 ? 'Kód platí ještě ' + codeClock(left) : 'Kód vypršel, pošli nový';
+  $('send').disabled = wait > 0;
+  $('send').textContent = wait > 0 ? 'Poslat znovu za ' + codeClock(wait) : codeUntil ? 'Poslat kód znovu' : 'Poslat kód';
+  if (left <= 0 && wait <= 0) { clearInterval(countdownTimer); countdownTimer = null; }
+}
+function startCountdown(body) {
+  const now = Date.now();
+  if (typeof body.expiresIn === 'number') codeUntil = now + body.expiresIn * 1000;
+  sendFrom = now + (Number(body.retryAfter) || 0) * 1000;
+  if (!countdownTimer) countdownTimer = setInterval(countdown, 1000);
+  countdown();
+}
 $('phoneForm').onsubmit = async e => {
   e.preventDefault();
   $('send').disabled = true;
   const r = await post('/login', {phone: $('phone').value});
   const body = await r.json().catch(() => ({}));
-  $('loginMsg').textContent = r.ok ? 'Pokud má číslo přístup, kód je na cestě. Platí 10 minut.' : body.error === 'TOO_MANY' ? 'Moc pokusů, zkuste to později.' : 'Kód se nepodařilo poslat.';
-  $('verify').hidden = !r.ok; $('send').disabled = false; if (r.ok) $('code').focus();
+  if (r.ok || r.status === 429) {
+    // Too soon after the last code: only the countdown, the code already sent still works.
+    $('loginMsg').textContent = r.ok ? 'Pokud má číslo přístup, kód je na cestě.' : body.error === 'TOO_MANY' ? 'Moc pokusů, další kód půjde poslat za ' + inTime(body.retryAfter) + '.' : '';
+    $('verify').hidden = false;
+    startCountdown(body);
+    if (r.ok) $('code').focus();
+  } else { $('loginMsg').textContent = 'Kód se nepodařilo poslat.'; $('send').disabled = false; }
 };
 $('verify').onsubmit = async e => {
   e.preventDefault();
   const r = await post('/verify', {code: $('code').value.trim()});
-  if (r.ok) { $('login').hidden = true; load(); } else $('loginMsg').textContent = r.status === 429 ? 'Moc chybných kódů, přihlášení je na hodinu zavřené.' : 'Kód nesedí nebo vypršel.';
+  const body = await r.json().catch(() => ({}));
+  if (r.ok) { clearInterval(countdownTimer); $('login').hidden = true; load(); }
+  else $('loginMsg').textContent = r.status === 429 ? 'Moc chybných kódů, přihlášení se otevře za ' + inTime(Number(body.retryAfter) || 3600) + '.' : 'Kód nesedí nebo vypršel.';
 };
 $('logout').onclick = async () => { await post('/logout'); location.reload(); };
 $('date').onchange = () => load($('date').value);

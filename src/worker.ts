@@ -10,6 +10,7 @@ import {addDays, businessDate, isDate} from './time.ts';
 import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-report.ts';
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
+import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
 import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Reservation, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
 import {dashboardWeb} from './web-views.ts';
@@ -34,10 +35,18 @@ export type VenueSetup = {name: string; timeZone: string; businessDayCutoffHour:
 const scoped = <T extends Rpc.DurableObjectBranded | undefined>(env: Env, namespace: DurableObjectNamespace<T>) =>
   env.DATA_JURISDICTION === 'eu' ? namespace.jurisdiction('eu') : namespace;
 const tenantStub = (env: Env, tenant: string) => { const ns = scoped(env, env.TENANTS); return ns.get(ns.idFromName(tenant)); };
+/**
+ * Where a login code is asked for: the venue itself, or for an unknown venue one shared stand-in (its name cannot be
+ * a venue) that answers with the same countdown and limits, so no storage is created per unknown name.
+ */
+export const loginStub = (env: Env, tenant: string, known: boolean) => tenantStub(env, known ? tenant : '~nezname-provozovny');
 const registry = (env: Env) => { const ns = scoped(env, env.REGISTRY); return ns.get(ns.idFromName('registry')); };
 const ok = (body: unknown): Result => ({status: 200, body});
 const failure = (code: string, status: number): Result => ({status, body: {error: code}});
-const json = (result: Result) => Response.json(result.body, {status: result.status, headers: {'cache-control': 'no-store'}});
+const json = (result: Result) => {
+  const retryAfter = (result.body as {retryAfter?: unknown} | null)?.retryAfter;
+  return Response.json(result.body, {status: result.status, headers: {'cache-control': 'no-store', ...(result.status === 429 && typeof retryAfter === 'number' ? {'retry-after': String(retryAfter)} : {})}});
+};
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
 const same = (a: string, b: string) => {
   const left = new TextEncoder().encode(a), right = new TextEncoder().encode(b);
@@ -84,8 +93,14 @@ export class TenantObject extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS report_fetches(business_date TEXT NOT NULL, at TEXT NOT NULL, found INTEGER NOT NULL, warnings TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS login_codes(code_hash TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS login_failures(at INTEGER NOT NULL);
+      -- Every request for a login code, for an allowed number or not (SHA-256 of venue and number): the same clock for all.
+      CREATE TABLE IF NOT EXISTS login_requests(phone_hash TEXT NOT NULL, at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
     `));
+    // Wrong codes for unknown venues are counted per venue name in the shared stand-in (see `loginStub`).
+    if (!this.sql.exec<{name: string}>('PRAGMA table_info(login_failures)').toArray().some(column => column.name === 'scope')) {
+      this.sql.exec("ALTER TABLE login_failures ADD COLUMN scope TEXT NOT NULL DEFAULT ''");
+    }
   }
 
   private config(): TenantConfig | null {
@@ -131,48 +146,77 @@ export class TenantObject extends DurableObject<Env> {
     return config.dashboardPhones ?? config.recipients.slice(0, 1);
   }
 
-  /**
-   * Dashboard login, step 1: the visitor types the phone number. Only a number allowed into the dashboard gets a
-   * six-digit code by SMS; any other number gets the same answer and nothing is sent. At most 5 codes an hour and
-   * 10 a day; each code is counted before it is sent, so parallel requests cannot pass the limit.
-   */
-  async sendLoginCode(phone: unknown): Promise<Result> {
-    const config = this.config();
-    const now = Date.now();
+  /** The number as the dashboard keeps it (+420 for nine digits) and its key for the request clock of this venue. */
+  private loginKey(phone: unknown, scope: string) {
     const number = typeof phone === 'string' ? phone.replace(/[\s().-]/g, '').replace(/^00/, '+') : '';
     const normalised = /^\d{9}$/.test(number) ? '+420' + number : number;
+    return {normalised, key: sha256(`${scope}|${normalised}`)};
+  }
+
+  private requestTimes(key: string): number[] {
+    return this.sql.exec<{at: number}>('SELECT at FROM login_requests WHERE phone_hash=? ORDER BY at', key).toArray().map(row => row.at);
+  }
+
+  /** Countdown of the last code for this number: how long it still lives and when the next one may go. Same for every number. */
+  loginTimes(phone: unknown, scope = '', now = Date.now()) {
+    const times = this.requestTimes(this.loginKey(phone, scope).key).filter(at => at >= now - DAY_MS);
+    const last = times.at(-1);
+    return {expiresIn: last === undefined ? 0 : seconds(last + CODE_MS - now), retryAfter: seconds((nextCode(times, now)?.until ?? now) - now)};
+  }
+
+  /**
+   * Dashboard login, step 1: the visitor types the phone number. Only a number allowed into the dashboard gets a
+   * six-digit code by SMS. Every number, allowed or not, runs on the same clock: the next code at the earliest 60 s
+   * after the last one, at most 5 an hour and 10 a day; the answer (countdown, 429 with seconds) is the same, so it
+   * never shows whether a number may log in. Codes actually sent are limited for the whole venue as well (5 an hour,
+   * 10 a day, 60 s apart), each counted before it is sent, so parallel requests cannot pass the limit. A new code
+   * replaces the venue's earlier codes that are still valid. `scope` is the venue name in the shared stand-in for
+   * unknown venues. `now` only for tests (the routes never pass it).
+   */
+  async sendLoginCode(phone: unknown, scope = '', now = Date.now()): Promise<Result> {
+    const config = this.config();
+    const {normalised, key} = this.loginKey(phone, scope);
     const target = config ? this.dashboardPhones(config).find(entry => same(entry, normalised)) : undefined;
-    if (!target) return ok({sent: true});
     const code = String(randomInt(0, 1000000)).padStart(6, '0');
-    const allowed = this.ctx.storage.transactionSync(() => {
-      this.sql.exec('DELETE FROM login_codes WHERE created_at < ?', now - 86400000);
-      const hour = this.sql.exec<{n: number}>('SELECT COUNT(*) AS n FROM login_codes WHERE created_at >= ?', now - 3600000).one().n;
-      const day = this.sql.exec<{n: number}>('SELECT COUNT(*) AS n FROM login_codes').one().n;
-      if (hour >= 5 || day >= 10) return false;
-      this.sql.exec('INSERT INTO login_codes(code_hash, created_at, expires_at) VALUES(?,?,?)', sha256(code), now, now + 600000);
-      return true;
+    const wait = this.ctx.storage.transactionSync(() => {
+      this.sql.exec('DELETE FROM login_requests WHERE at < ?', now - DAY_MS);
+      this.sql.exec('DELETE FROM login_codes WHERE created_at < ?', now - DAY_MS);
+      const times = this.requestTimes(key);
+      const venue = target ? this.sql.exec<{created_at: number}>('SELECT created_at FROM login_codes ORDER BY created_at').toArray().map(row => row.created_at) : [];
+      const waits = [nextCode(times, now), nextCode(venue, now)].filter((entry): entry is Wait => entry !== null);
+      if (waits.length) return {error: waits.some(entry => entry.error === 'TOO_MANY') ? 'TOO_MANY' : 'TOO_SOON', until: Math.max(...waits.map(entry => entry.until)), last: times.at(-1)};
+      this.sql.exec('INSERT INTO login_requests VALUES(?,?)', key, now);
+      if (target) {
+        this.sql.exec('UPDATE login_codes SET expires_at=0 WHERE expires_at > ?', now);
+        this.sql.exec('INSERT INTO login_codes(code_hash, created_at, expires_at) VALUES(?,?,?)', sha256(code), now, now + CODE_MS);
+      }
+      return null;
     });
-    if (!allowed) return failure('TOO_MANY', 429);
-    const status = await deliver(this.env, [target], `OKO1: kód pro přihlášení ${code}. Platí 10 minut. Nikomu ho nesdělujte.`, {smsOnly: true});
-    // A code that did not go out stays counted but can never be used.
-    if (status !== 'delivered') { this.sql.exec('UPDATE login_codes SET expires_at=0 WHERE code_hash=?', sha256(code)); return failure('NOT_SENT', 503); }
-    return ok({sent: true});
+    if (wait) {
+      return {status: 429, body: {error: wait.error, retryAfter: seconds(wait.until - now), expiresIn: wait.last === undefined ? 0 : seconds(wait.last + CODE_MS - now)}};
+    }
+    if (target) {
+      const status = await deliver(this.env, [target], `OKO1: kód pro přihlášení ${code}. Platí 10 minut. Nikomu ho nesdělujte.`, {smsOnly: true});
+      // A code that did not go out stays counted but can never be used.
+      if (status !== 'delivered') { this.sql.exec('UPDATE login_codes SET expires_at=0 WHERE code_hash=?', sha256(code)); return failure('NOT_SENT', 503); }
+    }
+    return ok({sent: true, expiresAt: new Date(now + CODE_MS).toISOString(), expiresIn: CODE_MS / 1000, retryAfter: RESEND_MS / 1000});
   }
 
   /**
    * Step 2: a valid code opens a 30-day session; only the token's hash is stored. Each code takes at most 5 tries,
-   * and after 10 wrong codes in an hour the venue's login is closed until the hour passes.
+   * and after 10 wrong codes in an hour the venue's login is closed until the hour passes (429 says how long).
    */
-  verifyLoginCode(code: unknown): Result {
-    const now = Date.now();
+  verifyLoginCode(code: unknown, scope = '', now = Date.now()): Result {
     return this.ctx.storage.transactionSync(() => {
-      this.sql.exec('DELETE FROM login_failures WHERE at < ?', now - 3600000);
-      if (this.sql.exec<{n: number}>('SELECT COUNT(*) AS n FROM login_failures').one().n >= 10) return failure('TOO_MANY', 429);
+      this.sql.exec('DELETE FROM login_failures WHERE at < ?', now - HOUR_MS);
+      const wrong = this.sql.exec<{at: number}>('SELECT at FROM login_failures WHERE scope=? ORDER BY at', scope).toArray().map(row => row.at);
+      if (wrong.length >= WRONG_PER_HOUR) return {status: 429, body: {error: 'TOO_MANY', retryAfter: seconds(wrong[wrong.length - WRONG_PER_HOUR] + HOUR_MS - now)}};
       const live = this.sql.exec<{code_hash: string}>('SELECT code_hash FROM login_codes WHERE expires_at > ? AND attempts < 5', now).toArray();
       const match = typeof code === 'string' && /^\d{6}$/.test(code) ? live.find(row => same(row.code_hash, sha256(code))) : undefined;
       if (!match) {
         this.sql.exec('UPDATE login_codes SET attempts = attempts + 1 WHERE expires_at > ? AND attempts < 5', now);
-        this.sql.exec('INSERT INTO login_failures VALUES(?)', now);
+        this.sql.exec('INSERT INTO login_failures(at, scope) VALUES(?,?)', now, scope);
         return failure('INVALID_CODE', 401);
       }
       // A used code stays (expired) until the day is over, so it still counts toward the limits.
@@ -545,12 +589,13 @@ async function dashboard(request: Request, env: Env, tenant: string, action: str
   if (!(request.headers.get('content-type') ?? '').startsWith('application/json')) return json(failure('UNSUPPORTED_MEDIA_TYPE', 415));
   const body = await readBody(request, 1024);
   if (isResult(body)) return json(body);
-  if (action === 'login') return json(known ? await stub.sendLoginCode((body as {phone?: unknown})?.phone) as Result : ok({sent: true}));
+  // An unknown venue gets the same answers from the shared stand-in, which never has a code to send.
+  if (action === 'login') return json(await loginStub(env, tenant, known).sendLoginCode((body as {phone?: unknown})?.phone, known ? '' : tenant) as Result);
   if (action === 'logout') {
     if (known) await stub.logout(cookie(request));
     return Response.json({ok: true}, {headers: {'set-cookie': `${SESSION_COOKIE}=; Path=${path}; HttpOnly; Secure; SameSite=Strict; Max-Age=0`}});
   }
-  const result = known ? await stub.verifyLoginCode((body as {code?: unknown})?.code) as Result : failure('INVALID_CODE', 401);
+  const result = await loginStub(env, tenant, known).verifyLoginCode((body as {code?: unknown})?.code, known ? '' : tenant) as Result;
   if (result.status !== 200) return json(result);
   const token = (result.body as {token: string}).token;
   return Response.json({ok: true}, {headers: {'cache-control': 'no-store', 'set-cookie': `${SESSION_COOKIE}=${token}; Path=${path}; HttpOnly; Secure; SameSite=Strict; Max-Age=${SESSION_MS / 1000}`}});
@@ -572,7 +617,7 @@ async function webCard(env: Env, tenant: string, stub: DurableObjectStub<TenantO
 
 const isResult = (value: unknown): value is Result => !!value && typeof value === 'object' && 'status' in value && 'body' in value && Object.keys(value).length === 2;
 
-const venues = (env: Env): Venues => ({known: tenant => registry(env).has(tenant), stub: tenant => tenantStub(env, tenant)});
+const venues = (env: Env): Venues => ({known: tenant => registry(env).has(tenant), stub: tenant => tenantStub(env, tenant), login: (tenant, known) => loginStub(env, tenant, known)});
 /** Paths of the MCP server and its OAuth (metadata, registration, token, the authorization page). */
 const isOAuthPath = (path: string) => path === MCP_PATH || path.startsWith(`${MCP_PATH}/`) || path.startsWith('/oauth/') || path.startsWith('/.well-known/oauth-');
 /** One OAuth provider per origin (its resource URL must be absolute); null = an origin where OAuth is not possible. */

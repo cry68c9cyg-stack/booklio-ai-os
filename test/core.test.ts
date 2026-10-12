@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {bottleLosses, buildBriefing, crowns, renderBriefing, renderReservations, renderWeb, summarizeReservations, summarizeWeb} from '../src/briefing.ts';
 import {briefingDecision, reportDate} from '../src/schedule.ts';
+import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
 import {businessDate} from '../src/time.ts';
 import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type TenantConfig} from '../src/validate.ts';
@@ -198,4 +199,30 @@ test('website traffic: a short line against last week, top origins only with vis
     'Web: 1 250 návštěv (před týdnem 1 500, −17 %), 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0', 'Odkud: B 900 · A 5']);
   assert.deepEqual(renderWeb(summarizeWeb({...day, visits: 3, origins: []}, undefined)), ['Web: 3 návštěvy, 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0']);
   assert.deepEqual(renderWeb(summarizeWeb({...day, visits: 1, origins: []}, {...day, visits: 0})), ['Web: 1 návštěva (před týdnem 0), 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0']);
+});
+
+test('login clock: the next code 60 s after the last, at most 5 an hour and 10 a day, with the moment it frees up', () => {
+  const t = 1_000_000_000_000, s = 1000, min = 60 * s, h = 60 * min;
+  assert.equal(nextCode([], t), null);
+  assert.deepEqual(nextCode([t - 18 * s], t), {error: 'TOO_SOON', until: t + 42 * s});
+  assert.equal(nextCode([t - 60 * s], t), null);
+  const hour = [t - 50 * min, t - 40 * min, t - 30 * min, t - 20 * min, t - 10 * min];
+  assert.deepEqual(nextCode(hour, t), {error: 'TOO_MANY', until: t + 10 * min});
+  assert.equal(nextCode(hour.slice(1), t), null);
+  const day = [...Array.from({length: 5}, (_, i) => t - 20 * h + i * 2 * min), ...Array.from({length: 5}, (_, i) => t - 5 * h + i * 2 * min)];
+  assert.deepEqual(nextCode(day, t), {error: 'TOO_MANY', until: t + 4 * h});
+  assert.deepEqual(nextCode([...hour.slice(1), t - 30 * s], t), {error: 'TOO_MANY', until: t + 20 * min}, 'a limit wins over the 60 seconds');
+  assert.equal(seconds(1), 1);
+  assert.equal(seconds(-5000), 0);
+});
+
+test('BulkGate: rows from every answer shape', async () => {
+  const {bulkGateRows} = await import('../src/delivery.ts');
+  assert.deepEqual(bulkGateRows({response: [{status: 'accepted', number: 'x'}]}), [{status: 'accepted'}]);
+  assert.deepEqual(bulkGateRows([{status: 'scheduled'}]), [{status: 'scheduled'}]);
+  assert.deepEqual(bulkGateRows({status: 'accepted', sms_id: 'x'}), [{status: 'accepted'}]);
+  assert.deepEqual(bulkGateRows({response: {status: 'sent'}}), [{status: 'sent'}]);
+  assert.deepEqual(bulkGateRows({total: {status: {sent: 0, accepted: 1, scheduled: 0, error: 0}}}), [{status: 'accepted'}]);
+  assert.deepEqual(bulkGateRows({total: {status: {accepted: 0, error: 1}}}), [{status: 'error'}]);
+  assert.deepEqual(bulkGateRows(null), []);
 });

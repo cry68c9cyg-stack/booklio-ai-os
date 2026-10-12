@@ -20,7 +20,11 @@ const SESSION_ENDED = 'The OKO1 login has ended, connect again.';
 
 /** What an OAuth grant of OKO1 carries: the venue and the session opened by the SMS code. */
 export type McpProps = {tenant: string; session: string};
-export type Venues = {known(tenant: string): Promise<boolean>; stub(tenant: string): DurableObjectStub<TenantObject>};
+export type Venues = {
+  known(tenant: string): Promise<boolean>; stub(tenant: string): DurableObjectStub<TenantObject>;
+  /** Where login codes are asked for: the venue, or the shared stand-in for unknown venues (same answers). */
+  login(tenant: string, known: boolean): DurableObjectStub<TenantObject>;
+};
 
 const isProps = (value: unknown): value is McpProps => {
   const props = value as Partial<McpProps> | undefined;
@@ -73,7 +77,61 @@ export function oauthOptions(origin: string, app: (request: Request, env: Env, c
 const escape = (value: string) => value.replace(/[&<>"']/g, char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[char]!);
 const randomHex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
 
-type Page = {client?: {name: string; host: string; local: boolean}; step: 'phone' | 'code' | 'invalid'; tenant?: string; error?: string};
+type Client = {name: string; host: string; local: boolean};
+type Page = {
+  client?: Client; step: 'phone' | 'code' | 'invalid'; tenant?: string; phone?: string; error?: string;
+  /** Countdown from the server's answer: seconds the last code still lives and until the next one may be sent. */
+  expiresIn?: number; retryAfter?: number; sent?: boolean;
+};
+
+/** What the venue answers to a login step (a Result of the Durable Object). */
+type Answer = {status: number; body: {error?: string; retryAfter?: number; expiresIn?: number; token?: string}};
+
+const minutes = (s: number) => s < 120 ? `${s} s` : `${Math.ceil(s / 60)} min`;
+
+/**
+ * Countdown on the code step (only with JavaScript): "Kód platí ještě 9:41", then "Kód vypršel, pošli nový"; the
+ * resend button stays disabled with "Poslat znovu za 0:42". The seconds come from the server's answer (data-*), the
+ * browser only counts them down from the moment the page loaded. Without JavaScript the static text and an enabled
+ * button stay, and the server keeps the 60 seconds.
+ */
+const COUNTDOWN = `(() => {
+  const box = document.querySelector('[data-countdown]'), again = document.querySelector('[data-again]');
+  if (!box || !again) return;
+  const start = Date.now(), expires = start + Number(box.dataset.expiresIn) * 1000, retry = start + Number(box.dataset.retryAfter) * 1000;
+  const left = box.querySelector('[data-left]'), label = again.textContent;
+  const pad = n => String(n).padStart(2, '0');
+  const clock = s => s >= 3600 ? Math.floor(s / 3600) + ':' + pad(Math.floor(s / 60) % 60) + ':' + pad(s % 60) : Math.floor(s / 60) + ':' + pad(s % 60);
+  let timer;
+  const tick = () => {
+    const now = Date.now(), e = Math.ceil((expires - now) / 1000), r = Math.ceil((retry - now) / 1000);
+    left.textContent = e > 0 ? 'Kód platí ještě ' + clock(e) : 'Kód vypršel, pošli nový';
+    again.disabled = r > 0;
+    again.textContent = r > 0 ? 'Poslat znovu za ' + clock(r) : label;
+    if (e <= 0 && r <= 0) clearInterval(timer);
+  };
+  timer = setInterval(tick, 1000);
+  tick();
+})();`;
+
+function codeStep(view: Page): string {
+  const expiresIn = view.expiresIn ?? 0, retryAfter = view.retryAfter ?? 0;
+  const still = expiresIn >= 600 ? 'Platí 10 minut.' : expiresIn > 0 ? `Platí ještě ${Math.ceil(expiresIn / 60)} min.` : 'Kód vypršel, pošli nový.';
+  const hidden = `<input type="hidden" name="provozovna" value="${escape(view.tenant ?? '')}"><input type="hidden" name="telefon" value="${escape(view.phone ?? '')}">`;
+  return `<form method="post">
+  <input type="hidden" name="krok" value="overit">${hidden}
+  <label for="kod">Kód z SMS</label><input id="kod" name="kod" inputmode="numeric" autocomplete="one-time-code" maxlength="6" minlength="6" pattern="[0-9]{6}" required autofocus>
+  <button>Připojit</button>
+  ${view.sent ? '<p class="muted">Pokud má číslo přístup, kód je na cestě.</p>' : ''}
+  <p class="muted" data-countdown data-expires-in="${expiresIn}" data-retry-after="${retryAfter}"><span data-left>${still}</span> Připojení pak vydrží 30 dní.</p>
+  <p class="warn" role="alert">${escape(view.error ?? '')}</p>
+</form>
+<form method="post" class="again">
+  <input type="hidden" name="krok" value="kod">${hidden}
+  <button class="secondary" data-again>Poslat kód znovu</button>
+  ${retryAfter > 0 && !view.sent ? `<noscript><p class="muted">Nový kód půjde poslat za ${minutes(retryAfter)}.</p></noscript>` : ''}
+</form>`;
+}
 
 function page(view: Page, status: number): Response {
   const nonce = randomHex(16);
@@ -83,18 +141,14 @@ function page(view: Page, status: number): Response {
     : `<p class="notice">Přístup k datům OKO1 a k rezervacím, hostům a dalším datům webu dostane: <strong>${escape(client!.host)}</strong>.
   Pokračujte, jen když jste připojení sami spustili ve svém Claudovi. Když vám odkaz někdo poslal, nic nezadávejte.</p>
 <p>Připojuje se <strong>${escape(client!.name)}</strong>.${client!.local ? ' Přístup půjde do aplikace v tomhle počítači.' : ''}</p>
-<form method="post">${view.step === 'phone' ? `
+${view.step === 'phone' ? `<form method="post">
   <input type="hidden" name="krok" value="kod">
   <label for="provozovna">Provozovna</label><input id="provozovna" name="provozovna" value="${escape(view.tenant ?? '')}" placeholder="james-dean" autocomplete="off" required>
-  <label for="telefon">Telefon</label><input id="telefon" name="telefon" type="tel" inputmode="tel" autocomplete="tel" placeholder="+420 …" required>
+  <label for="telefon">Telefon</label><input id="telefon" name="telefon" type="tel" inputmode="tel" autocomplete="tel" value="${escape(view.phone ?? '')}" placeholder="+420 …" required>
   <button>Poslat kód</button>
-  <p class="muted">Kód v SMS přijde jen na číslo, které smí na dashboard OKO1.</p>` : `
-  <input type="hidden" name="krok" value="overit"><input type="hidden" name="provozovna" value="${escape(view.tenant ?? '')}">
-  <label for="kod">Kód z SMS</label><input id="kod" name="kod" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required autofocus>
-  <button>Připojit</button>
-  <p class="muted">Pokud má číslo přístup, kód je na cestě. Platí 10 minut. Připojení pak vydrží 30 dní.</p>`}
+  <p class="muted">Kód v SMS přijde jen na číslo, které smí na dashboard OKO1.</p>
   <p class="warn" role="alert">${escape(view.error ?? '')}</p>
-</form>`;
+</form>` : codeStep(view)}`;
   return new Response(`<!doctype html>
 <html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow">
 <title>Připojit Clauda k OKO1</title>
@@ -104,12 +158,13 @@ function page(view: Page, status: number): Response {
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:440px;margin:8vh auto;padding:16px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px}
 h1{font-size:20px;margin:0 0 12px}form{display:grid;gap:8px}input,button{font:inherit;padding:9px 12px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text)}
-button{background:var(--accent);border-color:var(--accent);color:#fff;cursor:pointer}.muted{color:var(--muted);font-size:14px}.warn{color:var(--warn)}
+button{background:var(--accent);border-color:var(--accent);color:#fff;cursor:pointer}button.secondary{background:var(--card);color:var(--text);border-color:var(--line)}
+button:disabled{opacity:.6;cursor:default}.again{margin-top:8px}.muted{color:var(--muted);font-size:14px}.warn{color:var(--warn)}
 .notice{background:var(--note);padding:12px;border-radius:8px;font-weight:600;overflow-wrap:anywhere}
 </style></head>
-<body><main><div class="card"><h1>Připojit Clauda k OKO1</h1>${body}</div></main></body></html>`, {status, headers: {
+<body><main><div class="card"><h1>Připojit Clauda k OKO1</h1>${body}</div></main>${view.step === 'code' ? `<script nonce="${nonce}">${COUNTDOWN}</script>` : ''}</body></html>`, {status, headers: {
     'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'same-origin',
-    'content-security-policy': `default-src 'none'; style-src 'nonce-${nonce}'; base-uri 'none'; frame-ancestors 'none'`,
+    'content-security-policy': `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; base-uri 'none'; frame-ancestors 'none'`,
   }});
 }
 
@@ -142,22 +197,30 @@ export async function authorize(request: Request, oauth: OAuthHelpers, venues: V
   const fields = await form(request);
   if (!fields) return page({client, step: 'phone', error: 'Formulář je příliš velký.'}, 413);
   const tenant = (fields.get('provozovna') ?? '').trim().toLowerCase();
-  const validTenant = /^[a-z0-9-]{3,64}$/.test(tenant);
-  // An unknown venue answers exactly like a known one, and no storage is created for it.
-  const known = validTenant && await venues.known(tenant);
+  const phone = (fields.get('telefon') ?? '').slice(0, 40);
+  if (!/^[a-z0-9-]{3,64}$/.test(tenant)) return page({client, step: 'phone', phone, error: 'Provozovna je krátký název, např. james-dean.'}, 400);
+  // An unknown venue and a number without access answer exactly like an allowed one (the shared stand-in, no storage).
+  const known = await venues.known(tenant);
+  const login = venues.login(tenant, known), scope = known ? '' : tenant;
+  const view = {client, step: 'code' as const, tenant, phone};
   if (fields.get('krok') === 'kod') {
-    if (!validTenant) return page({client, step: 'phone', error: 'Provozovna je krátký název, např. james-dean.'}, 400);
-    const sent = known ? await venues.stub(tenant).sendLoginCode(fields.get('telefon')) : {status: 200, body: {sent: true}};
-    if (sent.status === 429) return page({client, step: 'phone', tenant, error: 'Moc pokusů, zkuste to později.'}, 429);
-    if (sent.status !== 200) return page({client, step: 'phone', tenant, error: 'Kód se nepodařilo poslat.'}, 503);
-    return page({client, step: 'code', tenant}, 200);
+    const sent = await login.sendLoginCode(phone, scope) as unknown as Answer;
+    const answer = sent.body;
+    if (sent.status === 429) {
+      const error = answer.error === 'TOO_MANY' ? `Moc pokusů, další kód půjde poslat za ${minutes(answer.retryAfter ?? 0)}.` : undefined;
+      return page({...view, expiresIn: answer.expiresIn, retryAfter: answer.retryAfter, error}, 429);
+    }
+    if (sent.status !== 200) return page({client, step: 'phone', tenant, phone, error: 'Kód se nepodařilo poslat.'}, 503);
+    return page({...view, expiresIn: answer.expiresIn, retryAfter: answer.retryAfter, sent: true}, 200);
   }
-  const verified = known ? await venues.stub(tenant).verifyLoginCode(fields.get('kod')) : {status: 401, body: {error: 'INVALID_CODE'}};
+  const verified = await login.verifyLoginCode(fields.get('kod'), scope) as unknown as Answer;
   if (verified.status !== 200) {
+    const times = await login.loginTimes(phone, scope);
     const tooMany = verified.status === 429;
-    return page({client, step: 'code', tenant, error: tooMany ? 'Moc chybných kódů, přihlášení je na hodinu zavřené.' : 'Kód nesedí nebo vypršel.'}, tooMany ? 429 : 401);
+    const error = tooMany ? `Moc chybných kódů, přihlášení se otevře za ${minutes(verified.body.retryAfter ?? 3600)}.` : 'Kód nesedí nebo vypršel.';
+    return page({...view, ...times, error}, tooMany ? 429 : 401);
   }
-  const props: McpProps = {tenant, session: (verified.body as unknown as {token: string}).token};
+  const props: McpProps = {tenant, session: verified.body.token!};
   const {redirectTo} = await oauth.completeAuthorization({request: auth, userId: tenant, metadata: {client: client.name}, scope: auth.scope, props});
   return new Response(null, {status: 302, headers: {location: redirectTo, 'cache-control': 'no-store'}});
 }
