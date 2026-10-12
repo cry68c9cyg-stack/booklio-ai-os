@@ -1,4 +1,5 @@
-import {CASH_DIFFERENCE_CENTS, crowns, mismatch, noShowAlarm, noShowText, unusual, type Briefing} from './briefing.ts';
+import {weekday} from './time.ts';
+import {CASH_DIFFERENCE_CENTS, crowns, mismatch, noShowAlarm, noShowText, reviewDrop, reviewDropText, unusual, type Briefing} from './briefing.ts';
 
 export type TodoItem = {level: 'warn' | 'info'; text: string; amountCents: number | null};
 const LIMIT = 15;
@@ -17,6 +18,7 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   for (const row of briefing.report?.paymentMismatches ?? []) warn(`Platba nesedí s deníkem, ${mismatch(row)}`, row.reportCents - row.journalCents);
   for (const row of briefing.unusualDiscounts) warn(`Neobvyklá sleva: ${unusual(row)}`, row.amountCents - row.usualCents);
   if (noShowAlarm(briefing.noShows)) warn(`No-show: ${noShowText(briefing.noShows!)}`);
+  if (briefing.week && weekday(briefing.businessDate) === 0 && reviewDrop(briefing.week)) warn(`Recenze klesají: ${reviewDropText(briefing.week)}`);
   for (const source of briefing.silent) warn(`${source.name} neposílá data od ${source.since}`);
   if (briefing.reservations?.today.pending) warn(`Rezervace na dnešek čekající na potvrzení: ${briefing.reservations.today.pending}`);
   const reviews = briefing.reviews;

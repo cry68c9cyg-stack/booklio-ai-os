@@ -162,8 +162,12 @@ function weekCard(w) {
   rows.push('<tr><td>Návštěvy webu</td><td class="n">' + (n.visits === null ? '–' : num(n.visits) + (p.visits !== null && p.visitDays === n.visitDays ? vs(n.visits, p.visits) : '')) + '</td><td class="n muted">' + (p.visits === null ? '–' : num(p.visits)) + '</td></tr>');
   const stars = t => t === null ? '' : ', ' + (t / 10).toFixed(1).replace('.', ',') + ' ★';
   rows.push('<tr><td>Web: odeslané formuláře → potvrzené rezervace z webu</td><td class="n">' + n.webSent + ' → ' + n.webConfirmed + '</td><td class="n muted">' + p.webSent + ' → ' + p.webConfirmed + '</td></tr>');
-  rows.push('<tr><td>Nové recenze</td><td class="n">' + n.reviews + stars(n.starsTenths) + '</td><td class="n muted">' + p.reviews + stars(p.starsTenths) + '</td></tr>');
-  return '<div class="card"><h2>Týden ' + short(w.from) + '–' + short(w.to) + '</h2><table><tr><th></th><th class="n">7 dní</th><th class="n">7 dní předtím</th></tr>' + rows.join('') + '</table></div>';
+  const u = w.reviewsUsual, drop = !!w.reviewDrop;
+  rows.push('<tr><td>Nové recenze' + (u && u.rated >= 10 ? ' <span class="muted">(4 týdny předtím ' + stars(u.starsTenths).slice(2) + ' z ' + u.rated + ')</span>' : '') + '</td><td class="n' + (drop ? ' warn' : '') + '">' + n.reviews + stars(n.starsTenths) + (drop ? ' · klesá' : '') + '</td><td class="n muted">' + p.reviews + stars(p.starsTenths) + '</td></tr>');
+  const before = new Map(p.origins.map(r => [r.key, r.visits]));
+  const origins = n.origins.length ? '<details><summary>Odkud na web <span class="muted">(s akcí = otevřeli rezervaci, volali nebo navigovali)</span></summary><table><tr><th></th><th class="n">7 dní</th><th class="n">7 dní předtím</th></tr>' +
+    n.origins.map(r => '<tr><td>' + esc(r.name) + '</td><td class="n">' + num(r.visits) + (r.withAction ? ' <span class="muted">(' + num(r.withAction) + ' s akcí)</span>' : '') + '</td><td class="n muted">' + (before.has(r.key) ? num(before.get(r.key)) : '–') + '</td></tr>').join('') + '</table></details>' : '';
+  return '<div class="card"><h2>Týden ' + short(w.from) + '–' + short(w.to) + '</h2><table><tr><th></th><th class="n">7 dní</th><th class="n">7 dní předtím</th></tr>' + rows.join('') + '</table>' + origins + '</div>';
 }
 
 // The month up to the shown day against the same days of the month before, and the cash the cash book paid out.
@@ -179,10 +183,28 @@ function monthCard(m) {
     (p.revenueCents && (p.revenueDays === n.revenueDays || (n.revenueDays === Number(m.through.slice(8)) && p.revenueDays === Number(p.through.slice(8)))) ? ' <span class="muted">(' + signed(pct(n.revenueCents, p.revenueCents)) + ')</span>' : '') + '</td><td class="n muted">' + kc(p.revenueDays ? p.revenueCents : null) + '</td></tr>');
   const before = new Map((p.bySection ?? []).map(r => [r.section, r.revenueCents]));
   for (const r of n.bySection ?? []) rows.push('<tr><td class="muted">' + esc(r.label) + '</td><td class="n">' + kc(r.revenueCents) + '</td><td class="n muted">' + kc(before.has(r.section) ? before.get(r.section) : null) + '</td></tr>');
+  if (m.reviews && m.reviews.reviews) rows.push('<tr><td>Nové recenze</td><td class="n">' + m.reviews.reviews + (m.reviews.starsTenths !== null ? ', ' + (m.reviews.starsTenths / 10).toFixed(1).replace('.', ',') + ' ★' : '') + '</td><td></td></tr>');
   const list = (title, total, items, limit) => total ? '<details><summary>' + esc(title) + ' <b>' + kc(total) + '</b></summary><table>' +
     items.slice(0, limit).map(r => '<tr><td>' + esc(r.label) + '</td><td class="n">' + kc(r.amountCents) + '</td></tr>').join('') + '</table></details>' : '';
   return '<div class="card"><h2>' + esc(name(m.month)[0].toUpperCase() + name(m.month).slice(1)) + (m.complete ? ' celkem' : ' do ' + esc(short(m.through))) + '</h2><table>' + rows.join('') + '</table>' +
     list('Výplaty v hotovosti' + (n.revenueCents > 0 && m.payoutsCents ? ' (' + (Math.round(m.payoutsCents / n.revenueCents * 1000) / 10).toFixed(1).replace('.', ',') + ' % tržby)' : ''), m.payoutsCents, m.payouts, 20) + list('Výdaje z kasy', m.expensesCents, m.expenses, 10) + list('Slevy a odpisy', m.discountsCents, m.discounts, 10) + '</div>';
+}
+
+// Revenue forecast from the day after the shown one: weekday averages of 4 weeks × last year's seasonality.
+function forecastCard(f) {
+  if (!f) return '';
+  const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.';
+  const name = mo => monthNames[Number(mo.slice(5, 7)) - 1];
+  const round = c => c === null ? null : Math.round(c / 100000) * 100000;
+  const days = ['ne', 'po', 'út', 'st', 'čt', 'pá', 'so'], wd = d => days[new Date(d + 'T12:00:00Z').getUTCDay()];
+  const m = f.month, missing = m.elapsedDays - m.actualDays, rows = [];
+  rows.push('<tr><td>Zítra <span class="muted">(' + wd(f.tomorrow.date) + ' ' + short(f.tomorrow.date) + ')</span></td><td class="n">' + kc(round(f.tomorrow.cents)) + '</td></tr>');
+  rows.push('<tr><td>7 dní od dneška <span class="muted">(' + short(f.week.from) + '–' + short(f.week.to) + ')</span></td><td class="n">' + kc(round(f.week.cents)) + '</td></tr>');
+  rows.push('<tr><td>' + esc(name(m.month)[0].toUpperCase() + name(m.month).slice(1)) + ' celkem' + (m.elapsedDays ? ' <span class="muted">(zatím ' + kc(m.actualCents) + (missing > 0 ? ', ' + missing + (missing === 1 ? ' den' : missing <= 4 ? ' dny' : ' dní') + ' bez dat odhadnuto' : '') + ')</span>' : '') + '</td><td class="n">' + kc(round(m.totalCents)) + '</td></tr>');
+  rows.push('<tr><td>' + esc(name(f.nextMonth.month)[0].toUpperCase() + name(f.nextMonth.month).slice(1)) + '</td><td class="n">' + kc(round(f.nextMonth.cents)) + '</td></tr>');
+  const seasons = Object.keys(f.seasonal).sort().map(k => name(k) + ' ×' + String(f.seasonal[k]).replace('.', ','));
+  return '<div class="card"><h2>Odhad tržby od ' + short(f.today) + '</h2><table>' + rows.join('') + '</table><p class="muted">Průměr stejného dne v týdnu za poslední 4 týdny' +
+    (seasons.length ? ', upravený podle loňska (' + esc(seasons.join(', ')) + ')' : '; loňská data na sezónnost zatím nejsou') + '. Rezervace, počasí a akce zatím nezapočítává.</p></div>';
 }
 
 // Who sends data to OKO1 and when it last arrived; a sender silent too long is marked.
@@ -247,7 +269,7 @@ function render(data) {
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card" id="todo">' + todoCard(data.todo) + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
-  html += weekCard(data.week) + monthCard(data.month) + sourcesCard(data.sources);
+  html += forecastCard(b.forecast) + weekCard(data.week) + monthCard(data.month) + sourcesCard(data.sources);
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
   if (r) {

@@ -1,5 +1,5 @@
 import {DEFAULT_BOTTLE_LOSS_CENTS, type Bill, type BottleCheck, type CashClosing, type Reservation, type ReviewSummary, type TenantConfig, type WebTraffic} from './validate.ts';
-import {weekday} from './time.ts';
+import {addDays, weekday} from './time.ts';
 import {line, total, type DailyReport} from './daily-report.ts';
 import type {NotePoint, NotesAnalysis} from './notes.ts';
 
@@ -46,6 +46,8 @@ export type Briefing = {
   month: Month | null;
   /** The day that is starting: revenue plan and booked guests against the usual for this weekday (4 weeks before). */
   outlook: {planCents: number | null; guests: number; usualGuests: number | null};
+  /** Revenue forecast from the day that is starting: tomorrow, 7 days, this month in total and the next month. `null` = not asked for. */
+  forecast: Forecast | null;
   /** No-shows of the reported day against the 28 days before, in guests; per mille. `null` = too few bookings to say. */
   noShows: {guests: number; confirmedGuests: number; ratePermille: number; usualPermille: number | null} | null;
   /** Revenue of the same weekday a week before. `null` = no data for that day. */
@@ -60,7 +62,11 @@ export type Briefing = {
   incomplete: boolean;
 };
 export type WeekPart = {revenueCents: number; revenueDays: number; reservations: number; guests: number; noShows: number; noShowGuests: number;
-  visits: number | null; visitDays: number; webSent: number; webConfirmed: number; reviews: number; starsTenths: number | null};
+  visits: number | null; visitDays: number; webSent: number; webConfirmed: number; reviews: number; rated: number; starsTenths: number | null;
+  /** Website visits by where they came from, with the visits that booked, called or navigated; most visits first. */
+  origins: {key: string; name: string; visits: number; withAction: number}[]};
+/** New reviews over a stretch of days: all, those with stars, and their average in tenths. */
+export type ReviewStats = {reviews: number; rated: number; starsTenths: number | null};
 export type MonthPart = {revenueCents: number; revenueDays: number; bySection: {section: string; label: string; revenueCents: number}[] | null};
 /** Revenue of one month up to a day against the same days of the month before, and the cash the cash book paid out. */
 export type Month = {
@@ -68,11 +74,23 @@ export type Month = {
   payouts: {label: string; amountCents: number}[]; payoutsCents: number;
   expenses: {label: string; amountCents: number}[]; expensesCents: number;
   discounts: {label: string; amountCents: number}[]; discountsCents: number;
+  reviews?: ReviewStats;
 };
 /** Discounts by type summed over the same weekday of the previous weeks that have a managers' report (`days` of them). */
 export type DiscountHistory = {days: number; totals: Record<string, number>};
 export type UnusualDiscount = {key: string; label: string; amountCents: number; usualCents: number};
-export type Week = {from: string; to: string; current: WeekPart; previous: WeekPart};
+/** Revenue forecast; a part is `null` when a weekday it needs has under two weeks of revenue. */
+export type Forecast = {
+  today: string;
+  tomorrow: {date: string; cents: number | null};
+  week: {from: string; to: string; cents: number | null};
+  /** The month the starting day is in: revenue so far (days with data of the elapsed ones), the forecast for the rest and elapsed days without data, both together. */
+  month: {month: string; actualCents: number; actualDays: number; elapsedDays: number; restCents: number | null; totalCents: number | null};
+  nextMonth: {month: string; cents: number | null};
+  /** Last year's seasonality applied per month (1 = none); only months with enough data from last year. */
+  seasonal: Record<string, number>;
+};
+export type Week = {from: string; to: string; current: WeekPart; previous: WeekPart; reviewsUsual?: ReviewStats | null; reviewDrop?: boolean};
 export type MonthResult = {
   month: string; through: string; rows: {account: string; name: string; amountCents: number}[];
   revenueCents: number; revenueDays: number; error: string | null;
@@ -188,6 +206,16 @@ const percent = (permille: number) => `${Math.round(permille / 10)} %`;
 export const noShowText = (rate: NonNullable<Briefing['noShows']>) =>
   `nedorazilo ${rate.guests} ${guestsWord(rate.guests)} z ${rate.confirmedGuests} rezervovaných (${percent(rate.ratePermille)}${rate.usualPermille !== null ? `, obvykle ${percent(rate.usualPermille)}` : ''})`;
 
+/** The week's reviews fall behind when at least 5 have stars and their average is 0,3 ★ or more under the 4 weeks before (10 or more rated). */
+export function reviewDrop(week: Briefing['week']): boolean {
+  const usual = week?.reviewsUsual;
+  return !!week && !!usual && week.current.rated >= 5 && usual.rated >= 10 && week.current.starsTenths !== null && usual.starsTenths !== null
+    && week.current.starsTenths <= usual.starsTenths - 3;
+}
+const stars = (tenths: number) => `${(tenths / 10).toFixed(1).replace('.', ',')} ★`;
+export const reviewDropText = (week: Week) =>
+  `průměr recenzí za týden ${stars(week.current.starsTenths!)} z ${week.current.rated} hodnocených (4 týdny předtím ${stars(week.reviewsUsual!.starsTenths!)})`;
+
 /** A discount type counts as unusual when it is at least twice its usual amount and at least 1 000 Kč above it. */
 export const UNUSUAL_DISCOUNT_CENTS = 100000;
 /**
@@ -207,6 +235,36 @@ export function unusualDiscounts(report: DailyReport, history: DiscountHistory):
     .sort((a, b) => (b.amountCents - b.usualCents) - (a.amountCents - a.usualCents) || a.key.localeCompare(b.key));
 }
 
+/** Last year's seasonality is used only within these limits, so one odd month cannot double or halve the forecast. */
+export const SEASON_MIN = 0.5, SEASON_MAX = 2;
+const monthEnd = (month: string) => addDays(nextMonthOf(month) + '-01', -1);
+const nextMonthOf = (month: string) => { const [year, number] = month.split('-').map(Number); return number === 12 ? `${year + 1}-01` : `${year}-${String(number + 1).padStart(2, '0')}`; };
+/**
+ * Forecast from the day that is starting (`today`): each day = the average revenue of its weekday over the last 4 weeks (`bases`, Sunday first)
+ * × last year's seasonality of its month (`seasonal`, missing = 1). Sums are `null` when any day in them has no base.
+ */
+export function forecast(input: {today: string; bases: (number | null)[]; seasonal: Record<string, number>; monthActual: {cents: number; days: number; missing?: string[]}}): Forecast {
+  const day = (date: string) => { const base = input.bases[weekday(date)]; return base === null || base === undefined ? null : Math.round(base * (input.seasonal[date.slice(0, 7)] ?? 1)); };
+  const sum = (from: string, to: string) => {
+    let total = 0;
+    for (let date = from; date <= to; date = addDays(date, 1)) { const value = day(date); if (value === null) return null; total += value; }
+    return total;
+  };
+  const month = input.today.slice(0, 7), next = nextMonthOf(month);
+  // Elapsed days without data are forecast too, so the month total is not too low.
+  const gaps = (input.monthActual.missing ?? []).map(day), rest = sum(input.today, monthEnd(month));
+  const restCents = rest === null || gaps.includes(null) ? null : rest + gaps.reduce<number>((total, value) => total + value!, 0);
+  return {
+    today: input.today,
+    tomorrow: {date: addDays(input.today, 1), cents: day(addDays(input.today, 1))},
+    week: {from: input.today, to: addDays(input.today, 6), cents: sum(input.today, addDays(input.today, 6))},
+    month: {month, actualCents: input.monthActual.cents, actualDays: input.monthActual.days, elapsedDays: Number(input.today.slice(8)) - 1,
+      restCents, totalCents: restCents === null ? null : input.monthActual.cents + restCents},
+    nextMonth: {month: next, cents: sum(next + '-01', monthEnd(next))},
+    seasonal: input.seasonal,
+  };
+}
+
 /** Plan = average revenue of the same weekday over the previous weeks that have data (at least two). */
 export function planFrom(history: {revenueCents: number}[]): Briefing['plan'] {
   if (history.length < 2) return null;
@@ -222,7 +280,7 @@ export function buildBriefing(input: {
   costs?: MonthResult | null; costsPrevious?: MonthResult | null;
   reviews?: ReviewSummary;
   week?: Week | null; silent?: {name: string; since: string}[];
-  month?: Month | null; lastWeekRevenueCents?: number | null;
+  month?: Month | null; lastWeekRevenueCents?: number | null; forecast?: Forecast | null;
   /** Revenue of the starting day's weekday over the previous weeks, and its confirmed guests on those days (days with bookings only). */
   todayPlanHistory?: {revenueCents: number}[]; todayGuestHistory?: number[];
   /** Confirmed and no-show guests over the 28 days before the reported day. */
@@ -306,6 +364,7 @@ export function buildBriefing(input: {
     month: input.month ?? null,
     lastWeekRevenueCents: input.lastWeekRevenueCents ?? null,
     outlook: outlook(input.reservationsToday ?? [], input.todayPlanHistory ?? [], input.todayGuestHistory ?? []),
+    forecast: input.forecast ?? null,
     noShows: noShowRate(input.reservations ?? [], input.noShowHistory ?? null),
     unusualDiscounts: report ? unusualDiscounts(report, input.discountHistory ?? {days: 0, totals: {}}) : [],
     silent: input.silent ?? [],
@@ -357,6 +416,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderBottles(briefing));
   lines.push(...renderReservations(briefing.reservations, briefing.outlook));
   if (noShowAlarm(briefing.noShows)) lines.push(`⚠ No-show: ${noShowText(briefing.noShows!)}`);
+  lines.push(...renderForecast(briefing.forecast));
   lines.push(...renderWeb(briefing.web));
   lines.push(...renderReviews(briefing.reviews));
   lines.push(...renderCosts(briefing.costs, briefing.costsPrevious));
@@ -484,8 +544,26 @@ export function renderWeek(week: Briefing['week']): string[] {
   if (now.reservations || before.reservations) parts.push(`rezervace ${now.reservations}, ${now.guests} ${guestsWord(now.guests)}${change(now.guests, before.guests)}${now.noShowGuests ? `, ${notCame(now.noShowGuests)} ${now.noShowGuests} ${guestsWord(now.noShowGuests)} (${percent(Math.round(now.noShowGuests / now.guests * 1000))})` : ''}`);
   if (now.visits !== null) parts.push(`web ${group(now.visits)} ${visitsWord(now.visits)}${before.visits !== null && before.visitDays === now.visitDays ? change(now.visits, before.visits) : ''}`
     + (now.webSent || now.webConfirmed ? ` · rezervační formulář odeslán ${now.webSent}× · potvrzené rezervace z webu na tyto dny ${now.webConfirmed}` : ''));
-  if (now.reviews) parts.push(`recenze ${now.reviews}${now.starsTenths !== null ? `, průměr ${(now.starsTenths / 10).toFixed(1).replace('.', ',')} ★` : ''}`);
-  return parts.length ? [`Týden ${shortDate(week.from)}–${shortDate(week.to)}: ${parts.join(' · ')}`] : [];
+  if (now.reviews) parts.push(`recenze ${now.reviews}${now.starsTenths !== null ? `, průměr ${stars(now.starsTenths)}` : ''}`);
+  const lines = parts.length ? [`Týden ${shortDate(week.from)}–${shortDate(week.to)}: ${parts.join(' · ')}`] : [];
+  if (now.origins.length) lines.push('Odkud na web za týden: ' + now.origins.slice(0, 5).map(row => `${row.name} ${group(row.visits)}${row.withAction ? ` (${group(row.withAction)} s akcí)` : ''}`).join(' · '));
+  if (reviewDrop(week)) lines.push(`⚠ Recenze: ${reviewDropText(week)}`);
+  return lines;
+}
+
+const thousands = (cents: number) => crowns(Math.round(cents / 100000) * 100000);
+const weekdayShort = ['ne', 'po', 'út', 'st', 'čt', 'pá', 'so'];
+/** "Odhad tržby: zítra (út 14. 10.) 120 000 Kč · 7 dní od dneška 900 000 Kč · říjen celkem 3 800 000 Kč (zatím 1 200 000 Kč) · listopad 3 500 000 Kč" */
+export function renderForecast(forecast: Briefing['forecast']): string[] {
+  if (!forecast) return [];
+  const parts: string[] = [];
+  if (forecast.tomorrow.cents !== null) parts.push(`zítra (${weekdayShort[weekday(forecast.tomorrow.date)]} ${shortDate(forecast.tomorrow.date)}) ${thousands(forecast.tomorrow.cents)}`);
+  if (forecast.week.cents !== null) parts.push(`7 dní od dneška ${thousands(forecast.week.cents)}`);
+  const month = forecast.month, missing = month.elapsedDays - month.actualDays;
+  if (month.totalCents !== null) parts.push(`${monthName(month.month)} celkem ${thousands(month.totalCents)}`
+    + (month.elapsedDays ? ` (zatím ${crowns(month.actualCents)}${missing > 0 ? `, ${daysWord(missing)} bez dat odhadnuto` : ''})` : ''));
+  if (forecast.nextMonth.cents !== null) parts.push(`${monthName(forecast.nextMonth.month)} ${thousands(forecast.nextMonth.cents)}`);
+  return parts.length ? [`Odhad tržby: ${parts.join(' · ')}`] : [];
 }
 
 /** "Říjen: tržba … (+4 % proti září) · Diner … · výplaty v hotovosti … · výdaje z kasy …" */
@@ -504,6 +582,7 @@ export function renderMonth(month: Briefing['month']): string[] {
   if (month.payoutsCents) parts.push(`výplaty v hotovosti ${crowns(month.payoutsCents)}${share(month.payoutsCents, now.revenueCents)}`);
   if (month.expensesCents) parts.push(`výdaje z kasy ${crowns(month.expensesCents)}`);
   if (month.discountsCents) parts.push(`slevy ${crowns(month.discountsCents)}`);
+  if (month.reviews?.reviews) parts.push(`recenze ${month.reviews.reviews}${month.reviews.starsTenths !== null ? `, průměr ${stars(month.reviews.starsTenths)}` : ''}`);
   return [`${title}${month.complete ? ' celkem' : ` do ${shortDate(month.through)}`}: ${parts.join(' · ')}`];
 }
 

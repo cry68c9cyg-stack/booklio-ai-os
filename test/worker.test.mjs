@@ -116,16 +116,25 @@ try {
   assert.equal((await ingest('batch-0003p', [{...reviewDay, text: 'Super'}])).status, 400, 'no text');
   assert.equal((await ingest('batch-0003q', [{...reviewDay, sources: [{...reviewDay.sources[0], stars: [1, 2, 3, 4]}]}])).status, 400, 'five star counts');
   assert.equal((await ingest('batch-0003r', [reviewDay])).status, 200);
+  // Review averages: this week from 5. 10., the 4 weeks before from 7. 9. to 4. 10.; 6. 9. counts in neither.
+  const reviewsOn = (businessDate, stars) => ({...reviewDay, id: `reviews-${businessDate}`, businessDate, sources: [{key: 'google', name: 'Google', stars, unrated: 0}]});
+  assert.equal((await ingest('batch-0003t', [reviewsOn('2026-09-06', [5, 0, 0, 0, 0]), reviewsOn('2026-09-07', [0, 0, 0, 0, 5]), reviewsOn('2026-09-30', [0, 0, 0, 0, 5]),
+    reviewsOn('2026-10-04', [0, 0, 0, 0, 5]), reviewsOn('2026-10-05', [2, 0, 0, 0, 0])])).status, 200);
   // Outlook, no-shows and the web funnel come from SQL sums over the stored bookings and traffic.
   await ingest('batch-0003s', [booking('r10', 1, '2026-10-01', 'diner', 5, 'confirmed', null)]);
   const outlookDay = (await (await call('GET', '/admin/t/test-venue/briefing?date=2026-10-14')).json()).briefing;
   assert.deepEqual([outlookDay.outlook.usualGuests, outlookDay.noShows], [6, null], 'Thursdays 8. 10. (4 + 2 guests) and 1. 10. (5 guests)');
   const sunday = (await (await call('GET', '/admin/t/test-venue/briefing?date=2026-10-11')).json()).briefing;
   assert.deepEqual([sunday.week.current.guests, sunday.week.current.noShowGuests, sunday.week.current.webSent, sunday.week.current.webConfirmed], [19, 2, 4, 6]);
+  assert.deepEqual(sunday.week.current.origins, [{key: 'google', name: 'Google hledání', visits: 60, withAction: 6}, {key: 'instagram', name: 'Instagram', visits: 40, withAction: 5}],
+    'website origins summed over the week, most visits first, none without visits');
+  assert.deepEqual([sunday.week.current.reviews, sunday.week.current.rated, sunday.week.current.starsTenths, sunday.week.reviewsUsual.rated, sunday.week.reviewsUsual.starsTenths, sunday.week.reviewDrop], [6, 6, 32, 15, 50, true]);
+  const monthEnd = (await (await call('GET', '/admin/t/test-venue/briefing?date=2026-10-31')).json()).briefing;
+  assert.deepEqual(monthEnd.month.reviews, {reviews: 11, rated: 11, starsTenths: 40}, 'reviews of October on its last day, none from September');
   // Who sends and when (admin): installations, last batches and types, never the records themselves.
   const status = await (await call('GET', '/admin/t/test-venue/ingest')).json();
   assert.deepEqual(status.installations.map(row => row.installationId), ['pos-installation-1']);
-  assert.ok(status.installations[0].lastSeenAt && status.batches.length && status.records.some(row => row.type === 'review_summary' && row.count === 1));
+  assert.ok(status.installations[0].lastSeenAt && status.batches.length && status.records.some(row => row.type === 'review_summary' && row.count === 6));
   assert.ok(!JSON.stringify(status).includes('Burger'), 'no record content');
   const sent = await tick('2026-10-09T06:00:00Z'); // 8:00 local
   assert.equal(sent.decision, 'send');
@@ -762,6 +771,27 @@ try {
     assert.ok(!['Dodavatel s.r.o', 'dodavatel@example.com', 'Faktura', 'test-only-iucto-key'].some(text => bytes.includes(text)), file.name);
   }
   mf = new Miniflare(options);
+
+  // Revenue forecast: 4 weeks of weekday averages (Saturdays higher), last year's November 1,5× its base weeks.
+  assert.equal((await call('PUT', '/admin/t/forecast-venue/config', {...config, name: 'Odhad'})).status, 200);
+  const historyRows = [];
+  for (let day = new Date('2025-09-15T12:00:00Z'); day <= new Date('2026-10-13T12:00:00Z'); day.setUTCDate(day.getUTCDate() + 1)) {
+    const businessDate = day.toISOString().slice(0, 10);
+    if (businessDate > '2025-11-30' && businessDate < '2026-09-16') continue;
+    historyRows.push({businessDate, revenueCents: businessDate >= '2026-09-16' ? (day.getUTCDay() === 6 ? 300000 : 100000) : businessDate >= '2025-11-01' ? 150000 : 100000});
+  }
+  assert.deepEqual(await (await call('POST', '/admin/t/forecast-venue/history', {rows: historyRows})).json(), {imported: historyRows.length});
+  const forecastDay = (await (await call('GET', '/admin/t/forecast-venue/briefing?date=2026-10-13')).json());
+  const f = forecastDay.briefing.forecast;
+  assert.deepEqual([f.today, f.tomorrow.cents, f.week.cents, f.month.actualCents, f.month.actualDays, f.month.totalCents, f.nextMonth.cents, f.seasonal],
+    ['2026-10-14', 100000, 900000, 1700000, 13, 1700000 + 15 * 100000 + 3 * 300000, Math.round(26 * 150000 + 4 * 450000), {'2026-10': 1, '2026-11': 1.5}],
+    'Saturdays 3 000 Kč, the rest 1 000 Kč; November × 1,5');
+  // A weekday with no revenue in 4 weeks is closed (0) and does not blank the sums.
+  assert.equal((await call('PUT', '/admin/t/closed-venue/config', {...config, name: 'Zavřeno v pondělí'})).status, 200);
+  assert.deepEqual(await (await call('POST', '/admin/t/closed-venue/history', {rows: historyRows.filter(row => row.businessDate >= '2026-09-16' && new Date(row.businessDate + 'T12:00:00Z').getUTCDay() !== 1)})).json(), {imported: 24});
+  const mondaysClosed = (await (await call('GET', '/admin/t/closed-venue/briefing?date=2026-10-13')).json()).briefing.forecast;
+  assert.deepEqual([mondaysClosed.week.cents, mondaysClosed.nextMonth.cents], [800000, 21 * 100000 + 4 * 300000 + 5 * 0], 'no Monday revenue; November without last year');
+  assert.match(forecastDay.text, /\nOdhad tržby: zítra \(čt 15\. 10\.\) 1 000 Kč · 7 dní od dneška 9 000 Kč · říjen celkem 41 000 Kč \(zatím 17 000 Kč\) · listopad 57 000 Kč$/);
 
   // The admin script talks to a real HTTP endpoint: config, rkeeper-style CSV import, preview.
   await mf.dispose();

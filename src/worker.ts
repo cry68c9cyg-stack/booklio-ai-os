@@ -1,7 +1,7 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
-import {buildBriefing, planFrom, renderBriefing, type DiscountHistory, type Month, type MonthPart, type Week, type WeekPart} from './briefing.ts';
+import {buildBriefing, forecast, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
@@ -540,8 +540,8 @@ export class TenantObject extends DurableObject<Env> {
 
   /** One stretch of days for the weekly summary: revenue, confirmed bookings, website visits, new reviews. */
   private weekPart(from: string, to: string): WeekPart {
-    const part: WeekPart = {revenueCents: 0, revenueDays: 0, reservations: 0, guests: 0, noShows: 0, noShowGuests: 0, visits: null, visitDays: 0, webSent: 0, webConfirmed: 0, reviews: 0, starsTenths: null};
-    let rated = 0, starSum = 0;
+    const part: WeekPart = {revenueCents: 0, revenueDays: 0, reservations: 0, guests: 0, noShows: 0, noShowGuests: 0, visits: null, visitDays: 0, webSent: 0, webConfirmed: 0, reviews: 0, rated: 0, starsTenths: null, origins: []};
+    const origins = new Map<string, WeekPart['origins'][number]>();
     for (let date = from; date <= to; date = addDays(date, 1)) {
       const revenue = this.dayRevenue(date);
       if (revenue !== null) { part.revenueCents += revenue; part.revenueDays++; }
@@ -552,13 +552,25 @@ export class TenantObject extends DurableObject<Env> {
       }
       const web = this.day<WebTraffic>('web_traffic', date)[0];
       if (web) { part.visits = (part.visits ?? 0) + web.visits; part.visitDays++; part.webSent += web.actions['rezervace-odeslana'] ?? 0; }
-      for (const source of this.day<ReviewSummary>('review_summary', date)[0]?.sources ?? []) {
-        source.stars.forEach((count, i) => { rated += count; starSum += count * (i + 1); });
-        part.reviews += source.stars.reduce((sum, count) => sum + count, 0) + source.unrated;
+      for (const origin of web?.origins ?? []) {
+        const row = origins.get(origin.key) ?? {key: origin.key, name: origin.name, visits: 0, withAction: 0};
+        row.visits += origin.visits; row.withAction += origin.withAction; origins.set(origin.key, row);
       }
     }
-    part.starsTenths = rated ? Math.round(starSum / rated * 10) : null;
-    return part;
+    part.origins = [...origins.values()].filter(row => row.visits > 0).sort((a, b) => b.visits - a.visits || a.key.localeCompare(b.key));
+    return {...part, ...this.reviewStats(from, to)};
+  }
+
+  /** New reviews over a stretch of days (counts by stars only). */
+  private reviewStats(from: string, to: string): ReviewStats {
+    let reviews = 0, rated = 0, starSum = 0;
+    for (let date = from; date <= to; date = addDays(date, 1)) {
+      for (const source of this.day<ReviewSummary>('review_summary', date)[0]?.sources ?? []) {
+        source.stars.forEach((count, i) => { rated += count; starSum += count * (i + 1); });
+        reviews += source.stars.reduce((sum, count) => sum + count, 0) + source.unrated;
+      }
+    }
+    return {reviews, rated, starsTenths: rated ? Math.round(starSum / rated * 10) : null};
   }
 
   /** Revenue of a stretch of days, and by section when every day with revenue has its sections (POS bills or the managers' report). */
@@ -615,7 +627,8 @@ export class TenantObject extends DurableObject<Env> {
     const payouts = this.reportSums('payout', from, date), expenses = this.reportSums('expense', from, date), discounts = this.discountSums(from, date);
     return {month: date.slice(0, 7), through: date, complete,
       current: this.monthPart(config, from, date), previous: {...this.monthPart(config, previousMonth + '-01', previousThrough), month: previousMonth, through: previousThrough},
-      payouts, payoutsCents: sum(payouts), expenses, expensesCents: sum(expenses), discounts: discounts.rows, discountsCents: discounts.totalCents};
+      payouts, payoutsCents: sum(payouts), expenses, expensesCents: sum(expenses), discounts: discounts.rows, discountsCents: discounts.totalCents,
+      reviews: this.reviewStats(from, date)};
   }
 
   /** Discounts by type on the same weekday of the 4 weeks before, counting only days whose managers' report has the discount block. */
@@ -653,9 +666,45 @@ export class TenantObject extends DurableObject<Env> {
     return {confirmedGuests: row?.confirmed ?? 0, noShowGuests: row?.noShow ?? 0};
   }
 
+  /**
+   * Revenue forecast from the day after the reported one: weekday averages of the 4 weeks up to the reported day,
+   * times last year's seasonality (a month's daily average last year against the same 4 weeks last year, 52 weeks back; 20 days of data each).
+   */
+  private forecast(date: string): Forecast {
+    const today = addDays(date, 1), month = today.slice(0, 7);
+    // Each day's revenue is read once (the month so far overlaps the 4 weeks).
+    const cache = new Map<string, number | null>();
+    const revenue = (entry: string) => { if (!cache.has(entry)) cache.set(entry, this.dayRevenue(entry)); return cache.get(entry)!; };
+    const window = Array.from({length: 28}, (_, i) => addDays(date, -i));
+    const history = Array.from({length: 7}, (_, day) => window.filter(entry => weekday(entry) === day).map(revenue).filter((value): value is number => value !== null));
+    // A weekday with no revenue in 4 weeks while at least 4 others have it counts as closed (0), so it does not blank the sums.
+    const open = history.filter(values => values.length >= 2).length;
+    const bases = history.map(values => !values.length && open >= 4 ? 0 : planFrom(values.map(revenueCents => ({revenueCents})))?.revenueCents ?? null);
+    const average = (dates: string[]) => {
+      const values = dates.map(revenue).filter((value): value is number => value !== null);
+      return values.length >= 20 ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+    };
+    const baseLastYear = average(window.map(entry => addDays(entry, -364)));
+    // The month of every forecast day: the 7 days, the rest of this month and the whole next one (the 1st + 31 days is always in it).
+    const months = new Set([month, addDays(month + '-01', 31).slice(0, 7), ...Array.from({length: 7}, (_, i) => addDays(today, i).slice(0, 7))]);
+    const seasonal: Record<string, number> = {};
+    for (const entry of baseLastYear ? months : []) {
+      const lastYear = `${Number(entry.slice(0, 4)) - 1}${entry.slice(4)}`, days: string[] = [];
+      for (let day = lastYear + '-01'; day.startsWith(lastYear); day = addDays(day, 1)) days.push(day);
+      const value = average(days);
+      if (value !== null) seasonal[entry] = Math.round(Math.min(SEASON_MAX, Math.max(SEASON_MIN, value / baseLastYear!)) * 100) / 100;
+    }
+    let cents = 0, days = 0;
+    const missing: string[] = [];
+    for (let day = month + '-01'; day <= date; day = addDays(day, 1)) { const value = revenue(day); if (value !== null) { cents += value; days++; } else missing.push(day); }
+    return forecast({today, bases, seasonal, monthActual: {cents, days, missing}});
+  }
+
   /** The 7 days up to the reported day against the 7 days before them. */
   private week(date: string): Week {
-    return {from: addDays(date, -6), to: date, current: this.weekPart(addDays(date, -6), date), previous: this.weekPart(addDays(date, -13), addDays(date, -7))};
+    const week: Week = {from: addDays(date, -6), to: date, current: this.weekPart(addDays(date, -6), date), previous: this.weekPart(addDays(date, -13), addDays(date, -7)),
+      reviewsUsual: this.reviewStats(addDays(date, -34), addDays(date, -7))};
+    return {...week, reviewDrop: reviewDrop(week)};
   }
 
   private senders(now: Date) {
@@ -693,7 +742,7 @@ export class TenantObject extends DurableObject<Env> {
       week: weekday(date) === 0 ? this.week(date) : null, silent: this.silentSources(config, date, now),
       month: weekday(date) === 0 || addDays(date, 1).endsWith('-01') ? this.month(config, date) : null,
       lastWeekRevenueCents: this.dayRevenue(addDays(date, -7)), discountHistory: this.discountHistory(date),
-      ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date),
+      ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast: this.forecast(date),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};
   }
