@@ -81,14 +81,43 @@ async function deliverBulkGate(env: DeliveryEnv, recipients: string[], text: str
       }),
       signal: AbortSignal.timeout(15000),
     });
-    const result = await response.json().catch(() => null) as {data?: {response?: {status?: string}[]}; type?: string; code?: number; error?: string} | null;
-    const rows = result?.data?.response ?? [];
-    const ok = response.ok && rows.length === recipients.length && rows.every(row => ['accepted', 'scheduled', 'sent'].includes(row.status ?? ''));
+    const result = await response.json().catch(() => null) as {data?: unknown; type?: string; code?: number; error?: string} | null;
+    const rows = bulkGateRows(result?.data);
+    const ok = response.ok && rows.length >= recipients.length && rows.every(row => ['accepted', 'scheduled', 'sent'].includes(row.status ?? ''));
     // Why BulkGate refused, without numbers or keys (long digit runs masked), so a failed login code can be diagnosed.
-    if (!ok) console.error('bulkgate refused', response.status, JSON.stringify({type: result?.type, code: result?.code, error: result?.error, statuses: rows.map(row => row.status)}).replace(/\d{6,}/g, '[n]'));
+    if (!ok) console.error('bulkgate refused', response.status, JSON.stringify({type: result?.type, code: result?.code, error: result?.error, statuses: rows.map(row => row.status), shape: shapeOf(result?.data)}).replace(/\d{6,}/g, '[n]'));
     return ok ? 'delivered' : 'failed';
   } catch (error) {
     console.error('bulkgate unreachable', error instanceof Error ? error.name : 'Error');
     return 'failed';
   }
 }
+
+/**
+ * Per-number results from a BulkGate answer. The advanced API answers `data.response: [{status}]`; some answers carry
+ * the rows directly in `data` (an array), a single `data: {status}`, or only `data.total.status` counts. Each shape counts.
+ */
+export function bulkGateRows(data: unknown): {status?: string}[] {
+  const row = (value: unknown) => (typeof value === 'object' && value !== null && typeof (value as {status?: unknown}).status === 'string' ? {status: (value as {status: string}).status} : {});
+  if (Array.isArray(data)) return data.map(row);
+  if (typeof data !== 'object' || data === null) return [];
+  const d = data as {response?: unknown; status?: unknown; total?: {status?: Record<string, unknown>}};
+  if (Array.isArray(d.response)) return d.response.map(row);
+  if (typeof d.response === 'object' && d.response !== null) return [row(d.response)];
+  if (typeof d.status === 'string') return [{status: d.status}];
+  const counts = d.total?.status;
+  if (counts && typeof counts === 'object') {
+    const good = ['accepted', 'scheduled', 'sent'].reduce((sum, key) => sum + (Number(counts[key]) || 0), 0);
+    const bad = Object.entries(counts).filter(([key]) => !['accepted', 'scheduled', 'sent'].includes(key)).reduce((sum, [, n]) => sum + (Number(n) || 0), 0);
+    return [...Array(good).fill({status: 'accepted'}), ...Array(bad).fill({status: 'error'})];
+  }
+  return [];
+}
+
+/** Shape of an answer for the log: keys and value types only, never values. */
+function shapeOf(value: unknown, depth = 0): unknown {
+  if (Array.isArray(value)) return depth > 2 ? 'array' : value.slice(0, 1).map(item => shapeOf(item, depth + 1));
+  if (typeof value === 'object' && value !== null) return depth > 2 ? 'object' : Object.fromEntries(Object.entries(value).slice(0, 12).map(([k, v]) => [k, shapeOf(v, depth + 1)]));
+  return typeof value;
+}
+
