@@ -1,5 +1,7 @@
 import {DEFAULT_BOTTLE_LOSS_CENTS, type Bill, type BottleCheck, type CashClosing, type TenantConfig} from './validate.ts';
 import {weekday} from './time.ts';
+import {line, total, type DailyReport} from './daily-report.ts';
+import type {NotePoint, NotesAnalysis} from './notes.ts';
 
 export type Briefing = {
   businessDate: string;
@@ -19,8 +21,15 @@ export type Briefing = {
   /** Morning bottle check: only meaningful losses, largest in CZK first. `null` = no check for this day. */
   bottles: {countedAt: string; checked: number; minLossCents: number; lossCents: number; losses: BottleLoss[]} | null;
   bottleCheckMissing: boolean;
+  /** Where the revenue comes from: POS bills, the managers' daily report (interim), or nothing yet. */
+  source: 'pos' | 'report' | 'none';
+  /** Figures only the managers' report has today: cash expenses, cash payouts, safe, discount detail. */
+  report: {expensesCents: number; payoutsCents: number; safeCents: number | null; discounts: {label: string; count: number | null; amountCents: number}[]} | null;
+  /** "Report dne": points from the analysis, or the raw text while it is not analysed. */
+  notes: {points: NotePoint[]; summary: string | null; raw: string | null} | null;
   incomplete: boolean;
 };
+const positive = (report: DailyReport, kind: 'expense' | 'payout') => report.lines.filter(entry => entry.kind === kind && entry.amountCents > 0).reduce((sum, entry) => sum + entry.amountCents, 0);
 export type BottleLoss = {name: string; lossMl: number; lossCents: number};
 
 /**
@@ -47,6 +56,7 @@ export function planFrom(history: {revenueCents: number}[]): Briefing['plan'] {
 export function buildBriefing(input: {
   businessDate: string; config: TenantConfig; bills: Bill[]; closings: CashClosing[];
   planHistory: {revenueCents: number}[]; incomplete: boolean; bottleChecks?: BottleCheck[];
+  report?: DailyReport | null; notes?: NotesAnalysis | null;
 }): Briefing {
   const closed = input.bills.filter(bill => bill.status === 'closed');
   const add = <K>(map: Map<K, number>, key: K, value: number) => map.set(key, (map.get(key) ?? 0) + value);
@@ -76,6 +86,20 @@ export function buildBriefing(input: {
   const check = [...(input.bottleChecks ?? [])].sort((a, b) => b.countedAt.localeCompare(a.countedAt) || b.version - a.version)[0];
   const minLossCents = input.config.bottleCheck?.minLossCents ?? DEFAULT_BOTTLE_LOSS_CENTS;
   const order = Object.keys(input.config.sections);
+  const report = input.report ?? null;
+  // Until Pexeso runs, the managers' report is the only source of revenue; POS bills win as soon as there are any.
+  const source = closed.length ? 'pos' : report && report.lines.some(entry => entry.kind === 'revenue_section') ? 'report' : 'none';
+  if (source === 'report' && report) {
+    for (const entry of report.lines.filter(entry => entry.kind === 'revenue_section')) {
+      revenueCents += entry.amountCents;
+      sections.set(entry.key, {revenueCents: entry.amountCents, bills: 0});
+    }
+    for (const entry of report.lines.filter(entry => entry.kind === 'payment')) add(payments, entry.key, entry.amountCents);
+    discountsCents = line(report, 'total', 'discounts')?.amountCents ?? total(report, 'discount');
+    const voided = report.lines.filter(entry => entry.kind === 'void');
+    voids.count = voided.reduce((sum, entry) => sum + (entry.count ?? (entry.amountCents ? 1 : 0)), 0);
+    voids.amountCents = total(report, 'void');
+  }
   return {
     businessDate: input.businessDate,
     revenueCents, bills: closed.length, guests,
@@ -93,12 +117,20 @@ export function buildBriefing(input: {
     topItems: [...items].map(([name, row]) => ({name, ...row})).sort((a, b) => b.revenueCents - a.revenueCents || a.name.localeCompare(b.name)).slice(0, 5),
     bottles: check ? {countedAt: check.countedAt, checked: check.items.length, minLossCents, ...bottleLosses(check, minLossCents)} : null,
     bottleCheckMissing: !check && !!input.config.bottleCheck,
+    source,
+    report: report ? {
+      expensesCents: positive(report, 'expense'), payoutsCents: positive(report, 'payout'), safeCents: line(report, 'balance', 'safe')?.amountCents ?? null,
+      discounts: report.lines.filter(entry => entry.kind === 'discount' && entry.amountCents > 0).sort((a, b) => b.amountCents - a.amountCents)
+        .map(({label, count, amountCents}) => ({label, count, amountCents})),
+    } : null,
+    notes: input.notes ? {points: input.notes.points, summary: input.notes.summary, raw: null}
+      : report?.notes ? {points: [], summary: null, raw: report.notes} : null,
     incomplete: input.incomplete,
   };
 }
 
 const days = ['neděle', 'pondělí', 'úterý', 'středa', 'čtvrtek', 'pátek', 'sobota'];
-const methods: Record<string, string> = {cash: 'hotovost', card: 'karta', voucher: 'poukaz', transfer: 'převod'};
+const methods: Record<string, string> = {cash: 'hotovost', card: 'karta', customer_card: 'zákaznická karta', voucher: 'poukaz', transfer: 'převod'};
 
 /** Whole crowns with a space as the thousands separator: 84 320 Kč. */
 export function crowns(cents: number): string {
@@ -123,7 +155,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   }
   lines.push(revenue);
   if (briefing.bySection.length > 1) lines.push(briefing.bySection.map(row => `${row.label} ${crowns(row.revenueCents)}`).join(' · '));
-  lines.push(`Účty ${briefing.bills} · hosté ${briefing.guests}${briefing.averageBillCents === null ? '' : ` · průměrný účet ${crowns(briefing.averageBillCents)}`}`);
+  if (briefing.source !== 'report') lines.push(`Účty ${briefing.bills} · hosté ${briefing.guests}${briefing.averageBillCents === null ? '' : ` · průměrný účet ${crowns(briefing.averageBillCents)}`}`);
   const paid = briefing.payments.reduce((sum, row) => sum + row.amountCents, 0);
   if (paid > 0) lines.push('Platby: ' + briefing.payments.map(row => `${methods[row.method] ?? row.method} ${Math.round(row.amountCents / paid * 100)} %`).join(', '));
   const control = [`slevy ${crowns(briefing.discountsCents)}`, `storna ${briefing.voids.count}× ${crowns(briefing.voids.amountCents)}`];
@@ -134,7 +166,9 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   if (differences.length) lines.push('⚠ Rozdíl v hotovosti: ' + differences.map(row => `${row.registerId} ${row.differenceCents > 0 ? '+' : ''}${crowns(row.differenceCents)}`).join(', '));
   else if (briefing.cash.length) lines.push('Hotovost v pokladnách sedí.');
   if (briefing.topItems.length) lines.push('Nejvíc tržeb: ' + briefing.topItems.slice(0, 3).map(row => `${row.name} ${row.quantity}×`).join(', '));
+  lines.push(...renderReport(briefing));
   lines.push(...renderBottles(briefing));
+  lines.push(...renderNotes(briefing));
   return lines.join('\n');
 }
 
@@ -151,4 +185,30 @@ export function renderBottles(briefing: Pick<Briefing, 'bottles' | 'bottleCheckM
     ...shown.map(row => `⚠ ${row.name} −${group(row.lossMl)} ml (${crowns(row.lossCents)})`),
     ...(bottles.losses.length > shown.length ? [`… a další ${bottles.losses.length - shown.length}`] : []),
   ];
+}
+
+const count = (value: number | null) => value === null ? '' : `${value}× `;
+/** Cash the POS does not see yet: expenses and payouts from the cash book, the safe, where discounts went. */
+export function renderReport(briefing: Pick<Briefing, 'report'>): string[] {
+  const report = briefing.report;
+  if (!report) return [];
+  const lines: string[] = [];
+  if (report.discounts.length) lines.push('Slevy a odpisy: ' + report.discounts.slice(0, 3).map(row => `${row.label} ${count(row.count)}${crowns(row.amountCents)}`).join(', '));
+  if (report.expensesCents || report.payoutsCents) lines.push(`Výdaje z kasy ${crowns(report.expensesCents)} · výplaty v hotovosti ${crowns(report.payoutsCents)}`);
+  if (report.safeCents !== null && report.safeCents < 0) lines.push(`⚠ Trezor je v deníku záporný: ${crowns(report.safeCents)}`);
+  return lines;
+}
+
+const NOTE_LINES = 3;
+const marks: Record<NotePoint['kind'], string> = {incident: '⚠', problem: '⚠', task: '•', info: '•'};
+const kinds: NotePoint['kind'][] = ['incident', 'problem', 'task', 'info'];
+/** The most important points of "Report dne"; incidents and problems first. */
+export function renderNotes(briefing: Pick<Briefing, 'notes'>): string[] {
+  const notes = briefing.notes;
+  if (!notes) return [];
+  if (notes.raw) return [`Report dne: ${notes.raw.length > 280 ? notes.raw.slice(0, 279) + '…' : notes.raw}`.replace(/\s*\n\s*/g, ' / ')];
+  if (!notes.points.length) return notes.summary ? [`Report dne: ${notes.summary}`] : [];
+  const points = [...notes.points].sort((a, b) => kinds.indexOf(a.kind) - kinds.indexOf(b.kind));
+  return ['Report dne:', ...points.slice(0, NOTE_LINES).map(point => `${marks[point.kind]} ${point.text}`),
+    ...(notes.points.length > NOTE_LINES ? [`… a další ${notes.points.length - NOTE_LINES}`] : [])];
 }

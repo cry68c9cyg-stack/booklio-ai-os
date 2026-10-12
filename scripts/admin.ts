@@ -10,7 +10,9 @@ const usage = `Použití:
   node scripts/admin.ts pair <tenant> <parovani.json>         spáruje pokladnu (soubor z Pexesa: {installationId, token})
   node scripts/admin.ts history <tenant> <export.csv> [--dry-run]   nahraje denní tržby (např. export z rkeeperu)
   node scripts/admin.ts preview <tenant> <YYYY-MM-DD>         ukáže ranní přehled za den
-  node scripts/admin.ts briefings <tenant>                    vypíše uložené a odeslané přehledy`;
+  node scripts/admin.ts briefings <tenant>                    vypíše uložené a odeslané přehledy
+  node scripts/admin.ts report <tenant> <YYYY-MM-DD>          ukáže uložený denní report manažerů a rozbor „Report dne“
+  node scripts/admin.ts fetch <tenant> <YYYY-MM-DD>           načte denní report z OneDrive hned (mimo ranní okno)`;
 
 function fail(message: string): never {
   console.error(message);
@@ -75,6 +77,12 @@ switch (command) {
     for (const row of await call('GET', 'briefings') as {businessDate: string; status: string; text: string}[]) {
       console.log(`--- ${row.businessDate} (${row.status})\n${row.text}\n`);
     }
+    break;
+  case 'report':
+    console.log(JSON.stringify(await call('GET', 'report', undefined, `?date=${encodeURIComponent(arg ?? '')}`), null, 2));
+    break;
+  case 'fetch':
+    console.log(JSON.stringify(await call('POST', 'fetch', {date: arg}), null, 2));
     break;
   default:
     fail(usage);

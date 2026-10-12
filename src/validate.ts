@@ -28,6 +28,8 @@ export type TenantConfig = {
   registers: string[]; sections: Record<string, string>; recipients: string[];
   /** Set = the venue counts bottles every morning: show losses from `minLossCents` up and say when the count is missing. */
   bottleCheck: {minLossCents: number} | null;
+  /** Read-only OneDrive share link to the managers' report folder (interim until Pexeso). Set from a GitHub secret, never in Git. */
+  reportsLink: string | null;
 };
 /** Loss threshold when a check arrives but the venue has no `bottleCheck` setting. */
 export const DEFAULT_BOTTLE_LOSS_CENTS = 10000;
@@ -132,8 +134,17 @@ export function validateBatch(raw: unknown): Batch {
   };
 }
 
+/** Only OneDrive / SharePoint share links over HTTPS. */
+function shareLink(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 1000) fail();
+  let url: URL;
+  try { url = new URL((value as string).trim()); } catch { return fail(); }
+  if (url.protocol !== 'https:' || !/(^|\.)(1drv\.ms|onedrive\.live\.com|sharepoint\.com)$/.test(url.hostname)) fail();
+  return url.toString();
+}
+
 export function validateConfig(raw: unknown): TenantConfig {
-  const value = object(raw, ['name', 'timeZone', 'businessDayCutoffHour', 'sendHours', 'registers', 'sections', 'recipients'], ['bottleCheck']);
+  const value = object(raw, ['name', 'timeZone', 'businessDayCutoffHour', 'sendHours', 'registers', 'sections', 'recipients'], ['bottleCheck', 'reportsLink']);
   const timeZone = text(value.timeZone, 60);
   try { new Intl.DateTimeFormat('en', {timeZone}); } catch { fail(); }
   const sendHours = list(value.sendHours, 6, hour => int(hour, 0, 23));
@@ -149,6 +160,7 @@ export function validateConfig(raw: unknown): TenantConfig {
       return item as string;
     }),
     bottleCheck: value.bottleCheck == null ? null : {minLossCents: int(object(value.bottleCheck, ['minLossCents']).minLossCents, 0, 1e7)},
+    reportsLink: value.reportsLink == null || value.reportsLink === '' ? null : shareLink(value.reportsLink),
   };
 }
 

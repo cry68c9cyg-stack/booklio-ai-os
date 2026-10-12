@@ -20,6 +20,8 @@
       "workers_dev": true,
       "preview_urls": false,
       "vars": {"DATA_JURISDICTION": "eu"},
+      // Archiv původních dat a denní export, jen v EU. Kbelík vytvoří nasazení (deploy.yml).
+      "r2_buckets": [{"binding": "ARCHIVE", "bucket_name": "oko1-archive", "jurisdiction": "eu"}],
       "durable_objects": {"bindings": [
         {"name": "TENANTS", "class_name": "TenantObject"},
         {"name": "REGISTRY", "class_name": "Registry"}
