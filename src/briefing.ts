@@ -34,7 +34,14 @@ export type Briefing = {
   } | null;
   /** The website on the reported calendar day, against the same weekday a week before. `null` = the website sent nothing. */
   web: {visits: number; withAction: number; lastWeekVisits: number | null; reservationsSent: number; reviewScans: number; topOrigins: {name: string; visits: number}[]} | null;
+  /** Posted costs from accounting (iÚčto) against OKO1's revenue: this month so far, and the month before in its first half. */
+  costs: MonthResult | null;
+  costsPrevious: MonthResult | null;
   incomplete: boolean;
+};
+export type MonthResult = {
+  month: string; through: string; rows: {account: string; name: string; amountCents: number}[];
+  revenueCents: number; revenueDays: number; error: string | null;
 };
 const positive = (report: DailyReport, kind: 'expense' | 'payout') => report.lines.filter(entry => entry.kind === kind && entry.amountCents > 0).reduce((sum, entry) => sum + entry.amountCents, 0);
 
@@ -101,6 +108,7 @@ export function buildBriefing(input: {
   report?: DailyReport | null; notes?: NotesAnalysis | null;
   reservations?: Reservation[]; reservationsToday?: Reservation[];
   web?: WebTraffic; webLastWeek?: WebTraffic;
+  costs?: MonthResult | null; costsPrevious?: MonthResult | null;
 }): Briefing {
   const closed = input.bills.filter(bill => bill.status === 'closed');
   const add = <K>(map: Map<K, number>, key: K, value: number) => map.set(key, (map.get(key) ?? 0) + value);
@@ -171,6 +179,7 @@ export function buildBriefing(input: {
       : report?.notes ? {points: [], summary: null, raw: report.notes} : null,
     reservations: summarizeReservations(input.config, input.reservations ?? [], input.reservationsToday ?? []),
     web: summarizeWeb(input.web, input.webLastWeek),
+    costs: input.costs ?? null, costsPrevious: input.costsPrevious ?? null,
     incomplete: input.incomplete,
   };
 }
@@ -217,6 +226,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderBottles(briefing));
   lines.push(...renderReservations(briefing.reservations));
   lines.push(...renderWeb(briefing.web));
+  lines.push(...renderCosts(briefing.costs, briefing.costsPrevious));
   lines.push(...renderNotes(briefing));
   return lines.join('\n');
 }
@@ -292,4 +302,27 @@ export function renderWeb(web: Briefing['web']): string[] {
   line += `, ${group(web.withAction)} s rezervací, telefonem nebo navigací, odeslané rezervace ${web.reservationsSent}`;
   if (web.reviewScans) line += `, QR na recenze ${web.reviewScans}×`;
   return web.topOrigins.length ? [line, 'Odkud: ' + web.topOrigins.map(row => `${row.name} ${group(row.visits)}`).join(' · ')] : [line];
+}
+
+const MONTHS = ['leden', 'únor', 'březen', 'duben', 'květen', 'červen', 'červenec', 'srpen', 'září', 'říjen', 'listopad', 'prosinec'];
+const monthName = (month: string) => MONTHS[Number(month.slice(5, 7)) - 1] ?? month;
+const COST_LINES = 3;
+/**
+ * Costs from accounting: the month so far (largest accounts) and revenue − costs; the month before while invoices
+ * for it still arrive. Accounting lags behind, so the costs are "posted so far", never a final result.
+ */
+export function renderCosts(costs: MonthResult | null, previous: MonthResult | null): string[] {
+  if (!costs) return [];
+  const lines: string[] = [];
+  const total = (month: MonthResult) => month.rows.reduce((sum, row) => sum + row.amountCents, 0);
+  const result = (month: MonthResult) => `tržby ${crowns(month.revenueCents)} − náklady ${crowns(total(month))} = ${crowns(month.revenueCents - total(month))}`;
+  const day = Number(costs.through.slice(8, 10)), monthOf = Number(costs.through.slice(5, 7));
+  if (costs.rows.length) {
+    const top = costs.rows.slice(0, COST_LINES).map(row => `${row.name} ${crowns(row.amountCents)}`).join(' · ');
+    lines.push(`Náklady ${monthName(costs.month)} do ${day}. ${monthOf}. (zaúčtované): ${crowns(total(costs))} · ${top}`);
+    lines.push(`${monthName(costs.month)[0].toUpperCase()}${monthName(costs.month).slice(1)} zatím: ${result(costs)}`);
+  } else if (!costs.error) lines.push(`Náklady ${monthName(costs.month)}: zatím nic zaúčtováno.`);
+  if (previous?.rows.length) lines.push(`${monthName(previous.month)[0].toUpperCase()}${monthName(previous.month).slice(1)} celkem: ${result(previous)}`);
+  if (costs.error) lines.push(`⚠ Náklady z iÚčta se dnes nepodařilo načíst (${costs.error})${costs.rows.length || previous?.rows.length ? ', čísla jsou z posledního načtení' : ''}.`);
+  return lines;
 }

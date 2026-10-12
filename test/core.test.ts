@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, crowns, renderBriefing, renderReservations, renderWeb, summarizeReservations, summarizeWeb} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, crowns, renderBriefing, renderCosts, renderReservations, renderWeb, summarizeReservations, summarizeWeb, type MonthResult} from '../src/briefing.ts';
+import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
@@ -199,6 +200,44 @@ test('website traffic: a short line against last week, top origins only with vis
     'Web: 1 250 návštěv (před týdnem 1 500, −17 %), 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0', 'Odkud: B 900 · A 5']);
   assert.deepEqual(renderWeb(summarizeWeb({...day, visits: 3, origins: []}, undefined)), ['Web: 3 návštěvy, 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0']);
   assert.deepEqual(renderWeb(summarizeWeb({...day, visits: 1, origins: []}, {...day, visits: 0})), ['Web: 1 návštěva (před týdnem 0), 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0']);
+});
+
+test('iÚčto: chart of accounts, journal pages and costs per synthetic account', () => {
+  const chart = parseChart({'1': '518100 - Služby ostatní', '2': '221000 - Bankovní účty', '3': '501 - Potraviny', '4': '549000 - Manka', x: '500 - špatné id', '5': 'bez čísla'});
+  assert.deepEqual([...chart!.keys()], [1, 2, 3, 4]);
+  assert.equal(parseChart([]), null);
+  const page = parseJournalPage({pageCount: 2, _embedded: {journal: [
+    {chartaccount_md: 1, chartaccount_dal: 2, price: '1210.50', supplier: {name: 'Dodavatel s.r.o.'}},
+    {chartaccount_md: '3', chartaccount_dal: '2', price: 300},
+    {chartaccount_md: 2, chartaccount_dal: 3, price: 100}, // a correction (dobropis) on the credit side
+    {chartaccount_md: 4, chartaccount_dal: 2, price: 50}, {chartaccount_md: 2, chartaccount_dal: 4, price: 50},
+    {chartaccount_md: 2, chartaccount_dal: 99, price: 1e6}, // an account outside the chart and a non-cost one are ignored
+  ]}});
+  assert.equal(page!.pageCount, 2);
+  assert.deepEqual(Object.keys(page!.entries[0]), ['md', 'dal', 'price'], 'nothing but accounts and the amount is kept');
+  assert.deepEqual(sumCosts(page!.entries, chart!), [{account: '518', name: 'Služby', amountCents: 121050}, {account: '501', name: 'Spotřeba materiálu', amountCents: 20000}]);
+  assert.equal(parseJournalPage({_embedded: {journal: [{chartaccount_md: 1, chartaccount_dal: 2, price: 'x'}]}}), null);
+  assert.equal(parseJournalPage({}), null);
+  assert.equal(iuctoKey({IUCTO_KEY_JAMES_DEAN: ' abcdef123456 '}, 'james-dean'), 'abcdef123456');
+  assert.equal(iuctoKey({IUCTO_KEY_JAMES_DEAN: 'kratký'}, 'james-dean'), null);
+  assert.equal(iuctoKey({}, 'james-dean'), null);
+});
+
+test('costs in the briefing: the month so far with revenue − costs, the month before, a failed read', () => {
+  const month: MonthResult = {month: '2026-10', through: '2026-10-11', revenueCents: 50_000_00, revenueDays: 11, error: null, rows: [
+    {account: '504', name: 'Prodané zboží', amountCents: 20_000_00}, {account: '521', name: 'Mzdy', amountCents: 15_000_00},
+    {account: '518', name: 'Služby', amountCents: 5_000_00}, {account: '501', name: 'Spotřeba materiálu', amountCents: 1_000_00}]};
+  const previous: MonthResult = {...month, month: '2026-09', through: '2026-09-30', revenueCents: 120_000_00, rows: [{account: '504', name: 'Prodané zboží', amountCents: 130_000_00}]};
+  assert.deepEqual(renderCosts(null, previous), []);
+  assert.deepEqual(renderCosts(month, previous), [
+    'Náklady říjen do 11. 10. (zaúčtované): 41 000 Kč · Prodané zboží 20 000 Kč · Mzdy 15 000 Kč · Služby 5 000 Kč',
+    'Říjen zatím: tržby 50 000 Kč − náklady 41 000 Kč = 9 000 Kč',
+    'Září celkem: tržby 120 000 Kč − náklady 130 000 Kč = −10 000 Kč',
+  ]);
+  assert.deepEqual(renderCosts({...month, rows: []}, null), ['Náklady říjen: zatím nic zaúčtováno.']);
+  assert.deepEqual(renderCosts({...month, rows: [], error: 'iÚčto: HTTP 402 (vyčerpaný denní limit nebo tarif bez API)'}, null), [
+    '⚠ Náklady z iÚčta se dnes nepodařilo načíst (iÚčto: HTTP 402 (vyčerpaný denní limit nebo tarif bez API)).',
+  ]);
 });
 
 test('login clock: the next code 60 s after the last, at most 5 an hour and 10 a day, with the moment it frees up', () => {

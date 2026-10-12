@@ -669,6 +669,59 @@ try {
   assert.deepEqual(leaked, [], 'no file of the Durable Objects, KV or R2 contains data from the web');
   mf = new Miniflare(options);
 
+  // Costs from iÚčto: read once a day with the venue's key (only GETs), only sums per account are kept, a failed read
+  // keeps the last sums and says so.
+  await mf.dispose();
+  const iucto = [];
+  let iuctoDown = false;
+  mf = new Miniflare({...options,
+    bindings: {...options.bindings, IUCTO_KEY_IUCTO_VENUE: 'test-only-iucto-key'},
+    outboundService: async request => {
+      const url = new URL(request.url);
+      iucto.push({method: request.method, path: url.pathname, query: Object.fromEntries(url.searchParams), key: request.headers.get('x-auth-key')});
+      if (iuctoDown) return new Response('{}', {status: 402});
+      if (url.pathname === '/api/1.3/chart_account') return Response.json({'11': '518100 - Služby ostatní', '12': '321000 - Dodavatelé', '13': '504000 - Prodané zboží', '14': '521000 - Mzdy'});
+      if (url.pathname !== '/api/1.3/journal') return new Response('unexpected', {status: 599});
+      const supplier = {name: 'Syntetický Dodavatel s.r.o.', email: 'dodavatel@example.com'};
+      const october = url.searchParams.get('date_expense_from') === '2026-10-01';
+      const pages = october ? [
+        [{chartaccount_md: 13, chartaccount_dal: 12, price: '150.00', supplier, text: 'Faktura Syntetický Dodavatel'}, {chartaccount_md: 11, chartaccount_dal: 12, price: 100, supplier}],
+        [{chartaccount_md: 12, chartaccount_dal: 11, price: 20, supplier}],
+      ] : [[{chartaccount_md: 14, chartaccount_dal: 12, price: 800}]];
+      const page = Number(url.searchParams.get('page'));
+      return Response.json({page, pageCount: pages.length, _embedded: {journal: pages[page - 1]}});
+    },
+  });
+  await call('PUT', '/admin/t/iucto-venue/config', config);
+  await call('POST', '/admin/t/iucto-venue/pair', {installationId: 'pos-installation-1', token});
+  await ingest('batch-iucto-1', [bill('i1', 1, 60000), closing], 'Bearer ' + token, 'iucto-venue');
+  const tickIucto = async at => (await call('POST', '/admin/t/iucto-venue/tick', {at})).json();
+  const costsSent = await tickIucto('2026-10-09T05:00:00Z');
+  assert.equal(costsSent.decision, 'send');
+  assert.match(costsSent.text, /\nNáklady říjen do 8\. 10\. \(zaúčtované\): 230 Kč · Prodané zboží 150 Kč · Služby 80 Kč\nŘíjen zatím: tržby 600 Kč − náklady 230 Kč = 370 Kč\nZáří celkem: tržby 0 Kč − náklady 800 Kč = −800 Kč/);
+  assert.ok(iucto.every(entry => entry.method === 'GET' && entry.key === 'test-only-iucto-key'));
+  assert.deepEqual(iucto.map(entry => entry.path + (entry.query.page ? ` ${entry.query.date_expense_from}–${entry.query.date_expense_to} ${entry.query.page}` : '')), [
+    '/api/1.3/chart_account', '/api/1.3/journal 2026-10-01–2026-10-08 1', '/api/1.3/journal 2026-10-01–2026-10-08 2',
+    '/api/1.3/chart_account', '/api/1.3/journal 2026-09-01–2026-09-30 1',
+  ]);
+  // The same day is not read again; the next morning iÚčto is down: the briefing keeps the sums and warns.
+  await tickIucto('2026-10-09T06:00:00Z');
+  assert.equal(iucto.length, 5);
+  iuctoDown = true;
+  const costsDown = await tickIucto('2026-10-10T07:00:00Z');
+  assert.equal(costsDown.decision, 'send-incomplete');
+  assert.match(costsDown.text, /Náklady říjen do 8\. 10\. \(zaúčtované\): 230 Kč[\s\S]*⚠ Náklady z iÚčta se dnes nepodařilo načíst \(iÚčto: HTTP 402 \(vyčerpaný denní limit nebo tarif bez API\)\), čísla jsou z posledního načtení\./);
+  const dashboardCosts = (await (await call('GET', '/admin/t/iucto-venue/briefing?date=2026-10-08')).json());
+  assert.equal(dashboardCosts.briefing.costs.revenueCents, 60000);
+  // Nothing about suppliers, customers or entry texts is stored, and the key is nowhere in the Durable Object.
+  await mf.dispose();
+  for (const file of await readdir(dir, {recursive: true, withFileTypes: true})) {
+    if (!file.isFile()) continue;
+    const bytes = await readFile(join(file.parentPath, file.name));
+    assert.ok(!['Dodavatel s.r.o', 'dodavatel@example.com', 'Faktura', 'test-only-iucto-key'].some(text => bytes.includes(text)), file.name);
+  }
+  mf = new Miniflare(options);
+
   // The admin script talks to a real HTTP endpoint: config, rkeeper-style CSV import, preview.
   await mf.dispose();
   mf = new Miniflare({...options, port: 0});
