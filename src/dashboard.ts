@@ -225,6 +225,21 @@ function forecastCard(f) {
 }
 
 // Who sends data to OKO1 and when it last arrived; a sender silent too long is marked.
+// The menu from the website: items per part and category with base prices, and its changes over 30 days.
+function menuCard(m) {
+  if (!m) return '';
+  const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.';
+  const changeText = c => c.kind === 'added' ? 'nová položka za ' + esc(c.newText) : c.kind === 'removed' ? 'zrušeno (bylo ' + esc(c.oldText) + ')' : esc(c.oldText) + ' → ' + esc(c.newText);
+  const range = c => c.minCents === c.maxCents ? kc(c.minCents) : kc(c.minCents) + ' – ' + kc(c.maxCents);
+  let h = '<div class="card"><h2>Jídelní a nápojový lístek</h2><div class="muted">' + m.items + (m.items === 1 ? ' položka' : m.items >= 2 && m.items <= 4 ? ' položky' : ' položek') + ' · ' + m.parts.map(p => esc(p.name.toLowerCase()) + ' ' + p.items).join(', ') + ' · z webu, naposledy ' + esc(m.received) + '</div>';
+  h += '<h3>Změny za 30 dní</h3>' + (m.changes.length ? '<ul>' + m.changes.map(c => '<li>' + esc(short(c.date)) + ' <b>' + esc(c.name) + '</b>: ' + changeText(c) + '</li>').join('') + '</ul>' : '<span class="muted">beze změn</span>');
+  for (const p of m.parts) {
+    h += '<details><summary>' + esc(p.name) + ' (' + p.items + ')</summary><div class="scroll"><table><tr><th>Kategorie</th><th class="n">Položek</th><th class="n">Cena od – do</th><th class="n">Průměr</th></tr>' +
+      p.categories.map(c => '<tr><td>' + esc(c.name) + '</td><td class="n">' + c.items + '</td><td class="n">' + range(c) + '</td><td class="n">' + kc(c.avgCents) + '</td></tr>').join('') + '</table></div></details>';
+  }
+  return h + '</div>';
+}
+
 function sourcesCard(s) {
   if (!s) return '';
   const rows = s.senders.map(x => '<tr><td>' + esc(x.name) + '</td><td class="n' + (x.silent ? ' warn' : '') + '">' + (x.lastSeen ? esc(x.lastSeen) : 'zatím nic') + (x.silent ? ' · neposílá' : '') + '</td></tr>')
@@ -293,7 +308,7 @@ function render(data) {
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card" id="todo">' + todoCard(data.todo) + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
-  html += forecastCard(b.forecast) + weekCard(data.week) + monthCard(data.month) + sourcesCard(data.sources);
+  html += forecastCard(b.forecast) + weekCard(data.week) + monthCard(data.month) + menuCard(data.menu) + sourcesCard(data.sources);
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
   if (r) {

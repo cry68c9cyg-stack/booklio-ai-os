@@ -155,6 +155,37 @@ Doplněno 12. 10. 2026 zpětně kompatibilně. Web posílá veřejné akce podni
 
 Ranní zpráva ukáže dnešní akce s počtem potvrzených hostů rezervovaných ten den v jejich prostoru; odhad tržby u dne s akcí použije, kolik dny s akcí za posledních 26 týdnů obvykle udělaly proti průměru svého dne v týdnu (medián, aspoň 4 dny, jen zvýšení 1–2×; s rezervacemi navíc platí větší z obou). Dashboard ukazuje akce v tabulce odhadu na 7 dní.
 
+### Jídelní a nápojový lístek (`menu`)
+
+Doplněno 12. 10. 2026 zpětně kompatibilně (rozhodnutí MC 12. 10. 2026: celý lístek z webu do OKO1 jako základ pro ceny, food cost, menu engineering, virtuální přeceňování a výdělek po položkách). Web posílá celý lístek, jak ho zveřejňuje (jídlo, koktejly, nápoje), vždy když se od posledního úspěšného odeslání změnil; OKO1 drží poslední lístek a každou jeho změnu (nová položka, zrušená položka, nová cena) s datem, takže zná cenu každé položky v kterýkoli den. Lístek je veřejný, nic o hostech. AI OS se musí nasadit dřív, než web začne lístek posílat.
+
+`{type: "menu", id, version, businessDate, source, items, notes}`
+
+| Pole | Typ | Poznámka |
+|---|---|---|
+| `id` | string | lístek odesílatele, web posílá `menu-web` |
+| `version` | int ≥ 1 | čas odeslání v ms; vyšší verze lístek celý nahradí |
+| `businessDate` | `YYYY-MM-DD` | pražský den odeslání; k tomuto dni se zapíšou změny cen |
+| `source` | string | odkud lístek je, např. `web` |
+| `items[]` | ≤ 2000 položek, viz níže | `id` se v lístku neopakuje |
+| `notes[]` | ≤ 100 `{part, category, text}` | poznámky lístku, např. „Alternativní mléko za příplatek 20 Kč.“; `text` ≤ 500 |
+
+Položka `items[]`: `{id, part, category, name, pricesCents, group?, description?, volume?, volumeMl?, tip?}`
+
+| Pole | Typ | Poznámka |
+|---|---|---|
+| `id` | string `[\w.:-]{1,100}` | stálý klíč položky u odesílatele; jiné `id` = jiná položka |
+| `part` | `food` \| `cocktails` \| `drinks` | část lístku: jídlo, koktejly, ostatní nápoje |
+| `category` | string ≤ 100 | kategorie lístku, např. „Burgery“, „Destiláty“ |
+| `group` | string ≤ 100 \| `null` | podskupina, např. „Gin“ v destilátech |
+| `name` | string ≤ 200 | název položky |
+| `description` | string ≤ 1000 \| `null` | popis (složení), podklad pro receptury |
+| `volume`, `volumeMl` | string ≤ 40 \| `null`, int ≥ 1 \| `null` | objem, jak ho lístek píše („0,04 l“), a v celých ml |
+| `pricesCents` | 1–5 × int ≥ 0 | ceny s DPH v haléřích, jak je lístek uvádí, základní první (burger „225 / 255 Kč“ = `[22500, 25500]`) |
+| `tip` | bool | tip šéfkuchaře / doporučení |
+
+Změnou ceny se rozumí jiná kterákoli z cen položky; OKO1 zapíše starou a novou základní cenu i oba texty („225 / 255 Kč“ → „225 / 265 Kč“). První lístek je výchozí stav, změny se počítají až od dalšího. Dashboard má kartu „Jídelní a nápojový lístek“ (položky po kategoriích s cenami od–do a průměrem, změny za 30 dní), MCP server nástroj `listek` (celý lístek a změny za rok).
+
 ## Kdy posílat
 
 Po uzavření každého účtu nebo v intervalu 5–15 minut, a vždy hned po uzávěrce a po dokončení kontroly lahví. Neodeslané dávky drží pokladna ve své frontě a posílá je s opakováním.

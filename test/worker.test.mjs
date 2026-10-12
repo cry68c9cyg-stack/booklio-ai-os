@@ -496,6 +496,23 @@ try {
   assert.equal((await call('PUT', '/admin/t/james-dean/config', jdConfig)).status, 200);
   await call('POST', '/admin/t/james-dean/pair', {installationId: 'pos-installation-1', token});
   assert.equal((await ingest('batch-web-1', [bill('w1', 1, 80000, today)], 'Bearer ' + token, 'james-dean')).status, 200);
+  // The menu from the website (synthetic items): the first one is the starting point, then every change is kept.
+  const menuItem = (id, part, category, name, pricesCents, extra = {}) => ({id, part, category, name, pricesCents, ...extra});
+  const menu = (version, items) => ({type: 'menu', id: 'menu-web', version, businessDate: today, source: 'web', items,
+    notes: [{part: 'drinks', category: 'Káva', text: 'Alternativní mléko za příplatek 20 Kč.'}]});
+  const firstMenu = menu(1, [menuItem('food:burgery:classic', 'food', 'Burgery', 'Classic <b>Burger</b>', [22500, 25500], {description: '90 / 150 g hovězího', tip: true}),
+    menuItem('food:burgery:texas', 'food', 'Burgery', 'Texas Burger', [24500]), menuItem('drinks:kava:espresso', 'drinks', 'Káva', 'Espresso', [6200]),
+    menuItem('drinks:vodka:x', 'drinks', 'Destiláty', 'Vodka X', [9000], {group: 'Vodka', volume: '0,04 l', volumeMl: 40})]);
+  const jdIngest = (batchId, records) => ingest(batchId, records, 'Bearer ' + token, 'james-dean');
+  assert.equal((await jdIngest('batch-menu-0', [{...firstMenu, items: [...firstMenu.items, firstMenu.items[0]]}])).status, 400, 'item ids are unique');
+  assert.equal((await jdIngest('batch-menu-0', [{...firstMenu, items: [{...firstMenu.items[0], pricesCents: []}]}])).status, 400, 'an item has a price');
+  assert.equal((await jdIngest('batch-menu-0', [{...firstMenu, items: [{...firstMenu.items[0], part: 'club'}]}])).status, 400, 'known parts only');
+  assert.equal((await jdIngest('batch-menu-0', [{...firstMenu, items: [{...firstMenu.items[0], cost: 100}]}])).status, 400, 'no unknown fields');
+  assert.deepEqual(await (await jdIngest('batch-menu-1', [firstMenu])).json(), {batchId: 'batch-menu-1', accepted: 1, stale: 0});
+  const secondMenu = menu(2, [{...firstMenu.items[0], pricesCents: [22500, 26500]}, {...firstMenu.items[1], pricesCents: [25900]}, firstMenu.items[2],
+    menuItem('food:dezerty:pie', 'food', 'Dezerty', 'Apple Pie', [14500])]);
+  assert.deepEqual(await (await jdIngest('batch-menu-2', [secondMenu])).json(), {batchId: 'batch-menu-2', accepted: 1, stale: 0});
+  assert.deepEqual(await (await jdIngest('batch-menu-3', [firstMenu])).json(), {batchId: 'batch-menu-3', accepted: 0, stale: 1}, 'an older menu changes nothing');
   const local = (path, init = {}) => mf.dispatchFetch('http://localhost' + path, init);
 
   // The admin check reads only the list of tables and never shows the token.
@@ -600,7 +617,7 @@ try {
     body: rpc(1, 'initialize', {protocolVersion: '2025-06-18', capabilities: {}, clientInfo: {name: 'test', version: '1'}})})).json();
   assert.equal(initialized.result.serverInfo.name, 'oko1');
   const listed = await (await local('/mcp', {method: 'POST', headers: {...mcpHeaders, authorization: 'Bearer ' + tokens.access_token}, body: rpc(2, 'tools/list')})).json();
-  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['den', 'kontrola_lahvi', 'ranni_prehled', 'report_manazeru', 'trzby_dne', 'trzby_obdobi', 'ucty',
+  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['den', 'kontrola_lahvi', 'listek', 'ranni_prehled', 'report_manazeru', 'trzby_dne', 'trzby_obdobi', 'ucty',
     'web_blokace_a_akce', 'web_darkove_karty', 'web_host', 'web_navstevnost', 'web_platby_lahvi', 'web_prehled', 'web_recenze', 'web_rezervace', 'web_rezervace_detail', 'web_tabulka']);
   assert.ok(listed.result.tools.every(entry => entry.annotations.readOnlyHint === true), 'read only');
 
@@ -630,6 +647,12 @@ try {
   assert.equal((await mcp('trzby_dne', {datum: '12.10.2026'})).error, true);
   assert.equal((await mcp('trzby_obdobi', {od: addDays(today, -6), do: today})).data.totalCents, 80000);
   assert.equal((await mcp('ucty', {datum: today})).data.bills[0].id, 'w1');
+  const menuTool = (await mcp('listek')).data;
+  assert.deepEqual(menuTool.menu.items.map(item => [item.id, item.pricesCents]), [['food:burgery:classic', [22500, 26500]], ['food:burgery:texas', [25900]],
+    ['drinks:kava:espresso', [6200]], ['food:dezerty:pie', [14500]]]);
+  assert.deepEqual(menuTool.changes.map(change => [change.itemId, change.kind, change.oldCents, change.newCents, change.oldText, change.newText]).sort(), [
+    ['drinks:vodka:x', 'removed', 9000, null, '90 Kč', null], ['food:burgery:classic', 'price', 22500, 22500, '225 / 255 Kč', '225 / 265 Kč'],
+    ['food:burgery:texas', 'price', 24500, 25900, '245 Kč', '259 Kč'], ['food:dezerty:pie', 'added', null, 14500, null, '145 Kč']]);
   const both = await mcp('den', {datum: today});
   assert.equal(both.data.pokladna.revenueCents, 80000);
   assert.equal(both.data.web.pocetRezervaci, 3);
@@ -650,16 +673,22 @@ try {
   assert.deepEqual([card.otherReservations, card.pending, card.reviewsWaiting, card.visits.today.navstevy, card.visits.yesterday.navstevy], [1, 2, 1, 42, 30]);
   const pageHtml = await (await jdBoard('GET', '')).text();
   const pageScript = pageHtml.match(/<script nonce="[a-f0-9]+">([\s\S]*?)<\/script>/)[1];
-  const renderCard = async answers => {
+  const renderCard = async (answers, box = 'web') => {
     const elements = {};
     const element = id => elements[id] ??= {hidden: false, value: '', textContent: '', innerHTML: '', disabled: false, focus() {}};
     const fetch = async url => { const body = answers[url.split('?')[0]]; return {ok: true, status: 200, json: async () => body}; };
     vm.runInNewContext(pageScript, {document: {getElementById: element}, location: {reload() {}}, fetch, console});
     await new Promise(resolve => setTimeout(resolve, 100));
-    return elements.web.innerHTML;
+    return elements[box].innerHTML;
   };
   const boardData = await (await jdBoard('GET', '/data', undefined, jdCookie)).json();
   const shown = await renderCard({'/d/james-dean/data': boardData, '/d/james-dean/web': {card}});
+  // The menu card: items per part and category, and the changes, escaped.
+  assert.deepEqual([boardData.menu.items, boardData.menu.parts.map(part => [part.part, part.items]), boardData.menu.changes.length], [4, [['food', 3], ['drinks', 1]], 4]);
+  assert.deepEqual(boardData.menu.parts[0].categories[0], {name: 'Burgery', items: 2, minCents: 22500, maxCents: 25900, avgCents: 24200});
+  const content = await renderCard({'/d/james-dean/data': boardData, '/d/james-dean/web': {card}}, 'content');
+  assert.ok(content.includes('Jídelní a nápojový lístek') && content.includes('4 položky · jídlo 3, nápoje 1') && content.includes('245 Kč → 259 Kč') && content.includes('225 Kč – 259 Kč'));
+  assert.ok(content.includes('Classic &lt;b&gt;Burger&lt;/b&gt;') && !content.includes('<b>Burger</b>'), 'item names are escaped');
   assert.ok(shown.includes('Zuzana &lt;b&gt;Testovaci&lt;/b&gt; Hostova') && !shown.includes('<b>Testovaci</b>'), 'guest names are escaped');
   assert.ok(shown.includes('&lt;img src=x onerror=alert(1)&gt;') && !shown.includes('<img'), 'notes are escaped');
   assert.ok(shown.includes('Recenzent &lt;i&gt;X&lt;/i&gt;') && shown.includes('stůl') && shown.includes('4, 5') && shown.includes('klub A'));

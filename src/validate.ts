@@ -70,8 +70,26 @@ export type ReviewSummary = {
   /** All reviews in the admin now: waiting for a reply, handed to management, reply failed to send. */
   waiting: number; forManagement: number; failed: number;
 };
+/** Parts of the menu as the website shows them: the food menu, cocktails and the other drinks. */
+export const MENU_PARTS = ['food', 'cocktails', 'drinks'] as const;
+/**
+ * One item of the menu. `pricesCents` holds the prices as listed, the base first (a burger "225 / 255 Kč" has two sizes).
+ * `id` is the sender's stable key of the item; a new id means a new item.
+ */
+export type MenuItem = {
+  id: string; part: typeof MENU_PARTS[number]; category: string; group: string | null; name: string; description: string | null;
+  volume: string | null; volumeMl: number | null; pricesCents: number[]; tip: boolean;
+};
+/**
+ * The whole food and drink menu as published (decision of MC, 12. 10. 2026): the base for prices, food cost, menu
+ * engineering, simulated repricing and profit by item. Public data, nothing about guests. A higher `version` replaces it.
+ */
+export type Menu = {
+  type: 'menu'; id: string; version: number; businessDate: string; source: string; items: MenuItem[];
+  notes: {part: MenuItem['part']; category: string; text: string}[];
+};
 export const RESERVATION_STATUSES = ['pending', 'confirmed', 'declined', 'expired', 'cancelled'] as const;
-export type IngestRecord = Bill | CashClosing | BottleCheck | Reservation | WebTraffic | ReviewSummary | VenueEvent;
+export type IngestRecord = Bill | CashClosing | BottleCheck | Reservation | WebTraffic | ReviewSummary | VenueEvent | Menu;
 export type Batch = {batchId: string; installationId: string; records: IngestRecord[]};
 
 export type TenantConfig = {
@@ -253,6 +271,33 @@ function reviewSummary(raw: Obj): ReviewSummary {
   };
 }
 
+function menuPart(value: unknown): MenuItem['part'] {
+  if (!(MENU_PARTS as readonly unknown[]).includes(value)) fail();
+  return value as MenuItem['part'];
+}
+
+function menu(raw: Obj): Menu {
+  const value = object(raw, ['type', 'id', 'version', 'businessDate', 'source', 'items', 'notes']);
+  const items = list(value.items, 2000, item => {
+    const row = object(item, ['id', 'part', 'category', 'name', 'pricesCents'], ['group', 'description', 'volume', 'volumeMl', 'tip']);
+    const pricesCents = list(row.pricesCents, 5, cents => int(cents, 0, 1e8));
+    if (!pricesCents.length || (row.tip !== undefined && typeof row.tip !== 'boolean')) fail();
+    return {
+      id: id(row.id), part: menuPart(row.part), category: text(row.category, 100), group: optionalText(row.group, 100), name: text(row.name, 200),
+      description: guestText(row.description, 1000), volume: guestText(row.volume, 40), volumeMl: row.volumeMl == null ? null : int(row.volumeMl, 1, 100000),
+      pricesCents, tip: row.tip === true,
+    };
+  });
+  if (new Set(items.map(item => item.id)).size !== items.length) fail();
+  return {
+    type: 'menu', id: id(value.id), version: int(value.version, 1, Number.MAX_SAFE_INTEGER), businessDate: date(value.businessDate), source: id(value.source), items,
+    notes: list(value.notes, 100, item => {
+      const note = object(item, ['part', 'category', 'text']);
+      return {part: menuPart(note.part), category: text(note.category, 100), text: text(note.text, 500)};
+    }),
+  };
+}
+
 export function validateBatch(raw: unknown): Batch {
   const value = object(raw, ['batchId', 'installationId', 'records']);
   if (typeof value.batchId !== 'string' || !/^[\w-]{8,128}$/.test(value.batchId)) fail();
@@ -267,6 +312,7 @@ export function validateBatch(raw: unknown): Batch {
       if (row?.type === 'web_traffic') return webTraffic(row);
       if (row?.type === 'review_summary') return reviewSummary(row);
       if (row?.type === 'event') return venueEvent(row);
+      if (row?.type === 'menu') return menu(row);
       return fail();
     }),
   };
