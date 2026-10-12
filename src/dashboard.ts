@@ -249,6 +249,8 @@ function render(data) {
     (b.report.cashDifferenceCents !== null && b.report.cashDifferenceCents !== undefined ? '<div>rozdíl přepočtu <b class="' + (Math.abs(b.report.cashDifferenceCents) >= 50000 ? 'warn' : '') + '">' + (b.report.cashDifferenceCents > 0 ? '+' : '') + kc(b.report.cashDifferenceCents) + '</b></div>' : '') +
     (data.balances.bank !== undefined ? '<div>banka <b>' + kc(data.balances.bank) + '</b></div>' : '') + '<div>výdaje z kasy <b>' + kc(b.report.expensesCents) + '</b></div><div>výplaty v hotovosti <b>' + kc(b.report.payoutsCents) + '</b></div></div>');
   const rv = b.reservations, hosts = n => n + ' ' + (n === 1 ? 'host' : n >= 2 && n <= 4 ? 'hosté' : 'hostů');
+  const pa = b.pendingAhead ? '<div class="warn">příštích 7 dní čeká na potvrzení ' + b.pendingAhead.count + ' (' + hosts(b.pendingAhead.guests) + '), nejbližší ' + esc(czDate(b.pendingAhead.first.date)) + ' ' + esc(b.pendingAhead.first.time) + '</div>' : '';
+  if (!rv && pa) cards.push('<div class="card"><h2>Rezervace</h2>' + pa + '</div>');
   if (rv) cards.push('<div class="card"><h2>Rezervace</h2><div class="big">' + rv.day.confirmed + '</div><div class="muted">' + hosts(rv.day.guests) +
     (rv.day.noShows ? ' · <span class="warn">nedorazilo ' + rv.day.noShows + ' (' + hosts(rv.day.noShowGuests) + ')</span>' : '') + (rv.day.cancelled ? ' · zrušeno ' + rv.day.cancelled : '') + '</div>' +
     '<div>' + esc(czDate(shift(data.businessDate, 1))) + ': <b>' + rv.today.confirmed + '</b> (' + hosts(rv.today.guests) + ')' +
@@ -256,11 +258,11 @@ function render(data) {
     (rv.today.pending ? ' · <span class="warn">čeká ' + rv.today.pending + '</span>' : '') + '</div>' +
     (b.outlook && (b.outlook.usualGuests || b.outlook.planCents) ? '<div class="muted">' + [b.outlook.usualGuests ? 'obvykle za celý den ' + hosts(b.outlook.usualGuests) : '',
       b.outlook.planCents ? 'plán tržby ' + kc(b.outlook.planCents) : ''].filter(Boolean).join(' · ') + '</div>' : '') +
-    ((rv.today.byHour || []).length ? '<div>nejvíc hostů: ' + rv.today.byHour.slice().sort((x, y) => y.guests - x.guests || x.hour - y.hour).slice(0, 2)
+    ((rv.today.byHour || []).length ? '<div>nejvíc hostů: ' + rv.today.byHour.slice().sort((x, y) => y.guests - x.guests || (x.hour + 18) % 24 - (y.hour + 18) % 24).slice(0, 2)
       .sort((x, y) => (x.hour + 18) % 24 - (y.hour + 18) % 24).map(r => '<b>' + r.hour + '–' + (r.hour + 1) % 24 + ' h</b> ' + r.guests).join(', ') + '</div>' : '') +
     ((rv.today.groups || []).length ? '<div>skupiny: ' + rv.today.groups.map(g => esc(g.time) + ' ' + esc(g.label) + ' <b>' + g.partySize + '</b>').join(', ') + '</div>' : '') +
     (b.noShows && b.noShows.guests ? '<div class="muted">nedorazilo ' + Math.round(b.noShows.ratePermille / 10) + ' % rezervovaných hostů' + (b.noShows.usualPermille !== null ? ' (obvykle ' + Math.round(b.noShows.usualPermille / 10) + ' %)' : '') + '</div>' : '') +
-    (b.pendingAhead ? '<div class="warn">příštích 7 dní čeká na potvrzení ' + b.pendingAhead.count + ' (' + hosts(b.pendingAhead.guests) + '), nejbližší ' + esc(czDate(b.pendingAhead.first.date)) + ' ' + esc(b.pendingAhead.first.time) + '</div>' : '') + '</div>');
+    pa + '</div>');
   const w = b.web, visits = n => n + ' ' + (n === 1 ? 'návštěva' : n >= 2 && n <= 4 ? 'návštěvy' : 'návštěv');
   if (w) cards.push('<div class="card"><h2>Návštěvnost webu</h2><div class="big">' + w.visits + '</div><div class="muted">' + visits(w.visits) +
     (w.lastWeekVisits !== null ? ' · před týdnem ' + w.lastWeekVisits + (w.lastWeekVisits ? ' (' + signed(pct(w.visits, w.lastWeekVisits)) + ')' : '') : '') + '</div>' +

@@ -548,16 +548,18 @@ export class TenantObject extends DurableObject<Env> {
   private weekPart(from: string, to: string): WeekPart {
     const part: WeekPart = {revenueCents: 0, revenueDays: 0, reservations: 0, guests: 0, noShows: 0, noShowGuests: 0, cancelled: 0, visits: null, visitDays: 0, webSent: 0, webConfirmed: 0, reviews: 0, rated: 0, starsTenths: null, origins: []};
     const origins = new Map<string, WeekPart['origins'][number]>();
+    // Bookings summed in SQL: nothing of the guests is read for a count.
+    const booked = this.sql.exec<Record<'reservations' | 'guests' | 'noShows' | 'noShowGuests' | 'webConfirmed' | 'cancelled', number | null>>(`SELECT
+        SUM(status = 'confirmed') AS reservations, SUM(CASE WHEN status = 'confirmed' THEN size ELSE 0 END) AS guests,
+        SUM(status = 'confirmed' AND arrival = 'no_show') AS noShows, SUM(CASE WHEN status = 'confirmed' AND arrival = 'no_show' THEN size ELSE 0 END) AS noShowGuests,
+        SUM(status = 'confirmed' AND source = 'web') AS webConfirmed, SUM(status = 'cancelled') AS cancelled
+      FROM (SELECT json_extract(json, '$.status') AS status, json_extract(json, '$.partySize') AS size, json_extract(json, '$.arrival') AS arrival,
+        json_extract(json, '$.source') AS source FROM records WHERE type='reservation' AND business_date BETWEEN ? AND ?)`, from, to).toArray()[0];
+    for (const key of ['reservations', 'guests', 'noShows', 'noShowGuests', 'webConfirmed', 'cancelled'] as const) part[key] = booked?.[key] ?? 0;
     for (let date = from; date <= to; date = addDays(date, 1)) {
       const revenue = this.dayRevenue(date);
       if (revenue !== null) { part.revenueCents += revenue; part.revenueDays++; }
-      const bookings = this.day<Reservation>('reservation', date);
-      part.cancelled! += bookings.filter(row => row.status === 'cancelled').length;
-      for (const row of bookings.filter(row => row.status === 'confirmed')) {
-        part.reservations++; part.guests += row.partySize;
-        if (row.arrival === 'no_show') { part.noShows++; part.noShowGuests += row.partySize; }
-        if (row.source === 'web') part.webConfirmed++;
-      }
+
       const web = this.day<WebTraffic>('web_traffic', date)[0];
       if (web) { part.visits = (part.visits ?? 0) + web.visits; part.visitDays++; part.webSent += web.actions['rezervace-odeslana'] ?? 0; }
       for (const origin of web?.origins ?? []) {
@@ -766,7 +768,7 @@ export class TenantObject extends DurableObject<Env> {
       week: weekday(date) === 0 ? this.week(date) : null, silent: this.silentSources(config, date, now),
       month: weekday(date) === 0 || addDays(date, 1).endsWith('-01') ? this.month(config, date) : null,
       lastWeekRevenueCents: this.dayRevenue(addDays(date, -7)), discountHistory: this.discountHistory(date),
-      ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast: this.forecast(date), pendingAhead: this.pendingAhead(config, date),
+      ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast: this.forecast(date), pendingAhead: this.pendingAhead(config, date, now),
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};
@@ -815,7 +817,9 @@ export class TenantObject extends DurableObject<Env> {
   }
 
   /** Bookings for the 7 days after the starting one still waiting for confirmation: counts and the first start only, summed in SQL. */
-  private pendingAhead(config: TenantConfig, date: string): Briefing['pendingAhead'] {
+  private pendingAhead(config: TenantConfig, date: string, now: Date): Briefing['pendingAhead'] {
+    // Only for the latest day: on an old day the bookings still waiting would be today's, not that day's.
+    if (date !== reportDate(now, config.timeZone, config.businessDayCutoffHour)) return null;
     const where = `FROM records WHERE type='reservation' AND business_date BETWEEN ? AND ? AND json_extract(json, '$.status') = 'pending'`;
     const total = this.sql.exec<{count: number; guests: number | null}>(`SELECT count(*) AS count, SUM(json_extract(json, '$.partySize')) AS guests ${where}`,
       addDays(date, 2), addDays(date, 8)).toArray()[0];

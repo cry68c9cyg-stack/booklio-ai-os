@@ -560,7 +560,7 @@ export function renderReservations(reservations: Briefing['reservations'], outlo
   if (outlook?.planCents) next += ` · plán tržby ${crowns(outlook.planCents)}`;
   const lines = [past, next];
   // The busiest hours for the staff plan: the two with the most booked guests, in time order.
-  const peaks = [...today.byHour ?? []].sort((a, b) => b.guests - a.guests || a.hour - b.hour).slice(0, 2)
+  const peaks = [...today.byHour ?? []].sort((a, b) => b.guests - a.guests || (a.hour + 18) % 24 - (b.hour + 18) % 24).slice(0, 2)
     .sort((a, b) => (a.hour + 18) % 24 - (b.hour + 18) % 24);
   if (peaks.length) lines.push('Nejvíc rezervovaných hostů: ' + peaks.map(row => `${row.hour}–${(row.hour + 1) % 24} h ${row.guests}`).join(', '));
   if (today.groups?.length) lines.push(`Skupiny od ${GROUP_MIN_GUESTS} osob: ` + today.groups.map(row => `${row.time} ${row.label} ${row.partySize}`).join(', '));

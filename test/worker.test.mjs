@@ -813,19 +813,19 @@ try {
   // Thursdays before: 20 confirmed guests each; tomorrow (Thursday 15. 10.) 50 confirmed and 3 waiting: 2,5× the usual, so at most 1,5× the revenue.
   assert.equal((await ingest('batch-w1', [booking('w1', 1, '2026-10-08', 'diner', 20, 'confirmed', 'arrived'), booking('w2', 1, '2026-10-01', 'diner', 20, 'confirmed', 'arrived'),
     booking('w3', 1, '2026-10-15', 'diner', 30, 'confirmed', null), booking('w4', 1, '2026-10-15', 'bar', 20, 'confirmed', null), booking('w5', 1, '2026-10-15', 'bar', 3, 'pending', null),
-    booking('w6', 1, '2026-10-17', 'club', 4, 'pending', null), booking('w7', 1, '2026-10-22', 'club', 6, 'pending', null),
+    booking('w6', 1, '2026-10-17', 'club', 4, 'pending', null), booking('w8', 1, '2026-10-14', 'diner', 2, 'pending', null), // today's own count, not in the 7 days booking('w7', 1, '2026-10-22', 'club', 6, 'pending', null),
     {...closing, id: 'wc-13', businessDate: '2026-10-13'}, {...closing, id: 'wc-14', businessDate: '2026-10-14'}], 'Bearer ' + token, 'weather-venue')).status, 200);
   const tickWeather = async at => (await call('POST', '/admin/t/weather-venue/tick', {at})).json();
   // 7:00: the message fails, so its forecast is not kept.
   const failedMorning = await tickWeather('2026-10-14T05:00:00Z');
   assert.equal(failedMorning.status, 'failed');
   assert.deepEqual(weatherCalls, [{url: 'https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=50.0899&lon=14.42', agent: 'OKO1/1.0 github.com/cry68c9cyg-stack/booklio-ai-os'}]);
-  assert.match(failedMorning.text, /\nDnes plán tržby 10 000 Kč\n/);
+  assert.match(failedMorning.text, / · plán tržby 10 000 Kč\n/);
   // 8:00: an earlier Wednesday changed (7. 10.: 20 000 Kč); the message that goes out plans 12 500 Kč and that is kept.
   await call('POST', '/admin/t/weather-venue/history', {rows: [{businessDate: '2026-10-07', revenueCents: 2000000}]});
   const weatherMorning = await tickWeather('2026-10-14T06:00:00Z');
   assert.equal(weatherMorning.status, 'delivered');
-  assert.match(weatherMorning.text, /\nDnes plán tržby 12 500 Kč\n/);
+  assert.match(weatherMorning.text, / · plán tržby 12 500 Kč\n/);
   assert.match(weatherMorning.text, /\nOdhad tržby: zítra \(čt 15\. 10\.\) 15 000 Kč \(víc rezervací než obvykle\), 14 °C, déšť · 7 dní od dneška 78 000 Kč · /);
   // Waiting bookings for the next 7 days (15.–21. 10.): counted and summed, the first one with its local time; 22. 10. is outside.
   assert.match(weatherMorning.text, /\nNa příštích 7 dní čeká na potvrzení 2 rezervace \(7 hostů\), nejbližší čt 15\. 10\. 20:00\n/);
