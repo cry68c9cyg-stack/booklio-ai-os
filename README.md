@@ -73,6 +73,6 @@ Technika: Cloudflare Worker, jeden SQLite Durable Object na provozovnu, ranní c
 - Do repozitáře nepatří tajemství, `.dev.vars`, exporty z pokladny ani data hostů.
 - `ADMIN_SECRET` patří do Cloudflare secret, lokálně do ignorovaného `.dev.vars`.
 - Tokeny pokladen se ukládají jen jako SHA-256 otisk.
-- **Osobní údaje hostů** (jména, telefony, e-maily, poznámky): od 12. 10. 2026 (schválil MC) je OKO1 čte živě z webu James Dean a ukazuje je jen vedení přes MCP server a dashboard, oboje za přihlášením kódem z SMS. Neukládá je do SQLite, R2, KV ani logů a neposílá je do ranní zprávy ani do LLM, které si samo volá. Kontrakt ingest dál nese jen počty rezervací. Viz [docs/web-v1.md](docs/web-v1.md).
+- **Osobní údaje hostů** (jména, telefony, e-maily, poznámky): od 12. 10. 2026 (schválil MC) je OKO1 čte živě z webu James Dean a ukazuje je jen vedení přes MCP server a dashboard, oboje za přihlášením kódem z SMS. Živě čtené údaje neukládá. Uložené jsou jen údaje hosta, které web posílá u rezervací přes ingest v1 (pole `guest`, rozhodnutí MC 12. 10. 2026), a to jen v SQLite provozovny, nikdy v R2, exportu, KV ani logu. Údaje hostů neposílá je do ranní zprávy ani do LLM, které si samo volá. Viz [docs/web-v1.md](docs/web-v1.md).
 - Token pro čtení webu je tajemství Workeru `WEB_TOKEN_<TENANT>` (James Dean: `WEB_TOKEN_JAMES_DEAN`), ve webu `OKO1_CTENI_TOKEN`; vytváří ho nasazení, výměna = smazat obě a nasadit.
 - Výchozí konfigurace vypíná `workers.dev` i preview URL. Před nasazením je potřeba Cloudflare účet, doména a umístění dat v EU.

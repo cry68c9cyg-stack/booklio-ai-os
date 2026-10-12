@@ -85,7 +85,15 @@ try {
   // Bookings from the reservation system: counts only, no guest names. A later change is a higher version.
   const booking = (id, version, businessDate, section, partySize, status, arrival) =>
     ({type: 'reservation', id, version, businessDate, startsAt: `${businessDate}T18:00:00Z`, section, partySize, status, arrival, source: 'web'});
-  assert.equal((await ingest('batch-0003e', [{...booking('r1', 1, '2026-10-08', 'diner', 4, 'confirmed', null), name: 'Jan'}])).status, 400, 'guest data refused');
+  assert.equal((await ingest('batch-0003e', [{...booking('r1', 1, '2026-10-08', 'diner', 4, 'confirmed', null), name: 'Jan'}])).status, 400, 'guest data only inside guest');
+  // Guest details (synthetic) are accepted inside `guest`; the briefing still shows only counts.
+  assert.deepEqual(await (await ingest('batch-0003h', [{...booking('r9', 1, '2026-10-07', 'bar', 2, 'confirmed', null),
+    guest: {code: 'JD-TEST', name: 'Zkušební Hostka', contactType: 'email', contact: 'host@example.test', tables: ['p1']}}])).json(), {batchId: 'batch-0003h', accepted: 1, stale: 0});
+  // A booking stored with counts only takes its guest details at the same version, once; the same version again is stale.
+  const counted = booking('r8', 5, '2026-10-06', 'bar', 2, 'confirmed', null);
+  await ingest('batch-0003i', [counted]);
+  assert.deepEqual(await (await ingest('batch-0003j', [{...counted, guest: {name: 'Zkušební Hostka'}}])).json(), {batchId: 'batch-0003j', accepted: 1, stale: 0});
+  assert.deepEqual(await (await ingest('batch-0003k', [{...counted, guest: {name: 'Jiná'}}])).json(), {batchId: 'batch-0003k', accepted: 0, stale: 1});
   assert.deepEqual(await (await ingest('batch-0003f', [
     booking('r1', 1, '2026-10-08', 'diner', 4, 'confirmed', null), booking('r2', 1, '2026-10-08', 'club', 2, 'confirmed', 'no_show'),
     booking('r3', 1, '2026-10-09', 'diner', 3, 'confirmed', null), booking('r4', 1, '2026-10-09', 'club', 6, 'confirmed', null),
@@ -116,6 +124,9 @@ try {
   const list = await (await call('GET', '/admin/t/test-venue/briefings')).json();
   assert.deepEqual(list.map(row => [row.businessDate, row.status, row.incomplete]), [['2026-10-09', 'stored', 1], ['2026-10-08', 'stored', 0]]);
   const preview = await (await call('GET', '/admin/t/test-venue/briefing?date=2026-10-08')).json();
+  const guestDay = await (await call('GET', '/admin/t/test-venue/briefing?date=2026-10-07')).json();
+  assert.match(guestDay.text, /Rezervace: 1 \(2 hosté\)/);
+  assert.doesNotMatch(JSON.stringify(guestDay), /Zkušební Hostka|example\.test|JD-TEST/, 'no guest details in the briefing');
   assert.equal(preview.briefing.revenueCents, 120000);
   assert.equal((await call('GET', '/admin/t/test-venue/briefing?date=2026-13-01')).status, 400);
   assert.equal((await call('GET', '/admin/t/other-venue/briefing?date=2026-10-08')).status, 409);

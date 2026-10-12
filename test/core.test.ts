@@ -4,7 +4,7 @@ import {bottleLosses, buildBriefing, crowns, renderBriefing, renderReservations,
 import {briefingDecision, reportDate} from '../src/schedule.ts';
 import {todoList} from '../src/todo.ts';
 import {businessDate} from '../src/time.ts';
-import {InputError, validateBatch, validateConfig, type Bill, type BottleCheck, type Reservation, type TenantConfig} from '../src/validate.ts';
+import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type TenantConfig} from '../src/validate.ts';
 
 const config: TenantConfig = {
   name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9],
@@ -173,4 +173,18 @@ test('reservations: the reported day counts confirmed bookings and no-shows, tod
     reservations: [], reservationsToday: [booking('h', '2026-10-09', 'diner', 2, 'pending'), booking('i', '2026-10-09', 'diner', 3, 'pending')]});
   assert.ok(todoList(briefing).some(item => item.level === 'warn' && item.text === 'Rezervace na dnešek čekající na potvrzení: 2'));
   assert.throws(() => validateBatch({batchId: 'batch-0001', installationId: 'booklio', records: [{...booking('x', '2026-10-09', 'diner', 2, 'confirmed'), status: 'seated'}]}), InputError);
+});
+
+test('reservations: guest details are validated, optional, and stripped for the archive and export', () => {
+  const base = {type: 'reservation', id: 'rez-1', version: 1, businessDate: '2026-10-09', startsAt: '2026-10-09T18:00:00Z', section: 'diner', partySize: 2, status: 'confirmed', arrival: null, source: 'web'};
+  const guest = {code: 'JD-TEST', name: 'Testovací Host', contactType: 'phone', contact: '+420000000000', milkshake: '', wish: 'Stůl u okna', note: null, reason: null, language: 'cs', origin: 'qr', tables: ['p3', 'p4']};
+  const [record] = validateBatch({batchId: 'batch-guest-1', installationId: 'booklio', records: [{...base, guest}]}).records;
+  assert.deepEqual((record as Reservation).guest, {...guest, milkshake: null});
+  assert.equal('guest' in withoutGuest(record), false);
+  assert.equal('guest' in validateBatch({batchId: 'batch-guest-2', installationId: 'booklio', records: [base]}).records[0], false, 'counts only still accepted');
+  const anonymised = {code: 'JD-TEST', name: null, contactType: null, contact: null, wish: null, note: null, tables: ['p3']};
+  assert.equal((validateBatch({batchId: 'batch-guest-3', installationId: 'booklio', records: [{...base, version: 2, guest: anonymised}]}).records[0] as Reservation).guest?.name, null);
+  for (const bad of [{...guest, contactType: 'fax'}, {...guest, email: 'x@example.test'}, {...guest, tables: 'p3'}, {...guest, name: 'x'.repeat(201)}]) {
+    assert.throws(() => validateBatch({batchId: 'batch-guest-4', installationId: 'booklio', records: [{...base, guest: bad}]}), InputError);
+  }
 });

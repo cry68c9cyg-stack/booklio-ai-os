@@ -4,11 +4,11 @@
 
 OKO1 dosud nesmělo pracovat se jmény a kontakty hostů: z rezervačního systému dostávalo jen počty ([kontrakt ingest v1](ingest-v1.md)) a „Report dne“ posílá do Clauda jen po pseudonymizaci. **Nově OKO1 čte z webu James Dean živě všechna data, která vidí admin webu, včetně jmen, telefonů, e-mailů a poznámek hostů, a předává je přes svůj MCP server do Clauda vedení.** Neukládá si je: žádná tabulka, archiv R2, log ani kopie. Data se přečtou ve chvíli dotazu (otázka v Claudovi, otevření dashboardu) a jdou jen do odpovědi.
 
-Vlastník (MC) 12. 10. 2026: „Chci dát oku plný přístup“, „ať si ukládá i osobní údaje, tedy jména a všechno. Jména i kontakty.“ a po upřesnění „aby oko jedna mělo kdykoliv například na dotaz přes MCP server aktuální online informace, ne staré hodinu“ a „vlastní MCP server v OKO1, pokladna i web dohromady“. Hodinové stahování s kopií v OKO1 se proto nedělá.
+Vlastník (MC) 12. 10. 2026: „Chci dát oku plný přístup“, „ať si ukládá i osobní údaje, tedy jména a všechno. Jména i kontakty.“ a po upřesnění „aby oko jedna mělo kdykoliv například na dotaz přes MCP server aktuální online informace, ne staré hodinu“ a „vlastní MCP server v OKO1, pokladna i web dohromady“. Ve 13:01 MC doplnil: „Chci, aby oko jedna mělo údaje hostů živě, a zároveň si je i ukládalo.“ Vedle živého čtení proto web posílá údaje hosta u každé rezervace i hodinově přes [ingest v1](ingest-v1.md) (pole `guest`) a OKO1 je ukládá do SQLite provozovny.
 
 Záruky, na kterých tahle změna stojí:
 
-- **Nic z webu se neukládá.** Ani v SQLite provozovny (Durable Object), ani v archivu R2 (`ingest`, `onedrive`, `export/{den}.json`), ani v KV pro OAuth, ani v logu. Hlídá to e2e test, který po celém průchodu prohledá všechny soubory Durable Objects, KV a R2.
+- **Nic, co OKO1 čte živě, se neukládá.** Výjimka je jen pole `guest` u rezervací, které web posílá přes ingest v1: to se ukládá do SQLite provozovny a nikam jinam. Živě čtená data nejsou ani v SQLite provozovny (Durable Object), ani v archivu R2 (`ingest`, `onedrive`, `export/{den}.json`), ani v KV pro OAuth, ani v logu. Hlídá to e2e test, který po celém průchodu prohledá všechny soubory Durable Objects, KV a R2.
 - **Nic z webu nejde do ranní zprávy** (SMS, WhatsApp), do `Briefing`, do „K vyřízení“ ani do promptu LLM, které si OKO1 samo volá (rozbor „Report dne“). Do Clauda jdou údaje hostů jen jako odpověď MCP na dotaz vedení.
 - **Přístup jen pro vedení:** MCP i karta dashboardu jsou za přihlášením kódem z SMS na číslo z `dashboardPhones` (jinak první z `recipients`, tedy majitel).
 - **Web je zdroj pravdy:** co web smaže nebo anonymizuje (rezervace po 3 měsících, karty a recenze po 13 měsících), OKO1 už nikdy neukáže.

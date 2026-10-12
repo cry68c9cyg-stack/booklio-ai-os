@@ -20,11 +20,27 @@ export type CashClosing = {
 export type BottleCheckItem = {itemId: string; name: string; countedMl: number; expectedMl: number; costPerLitreCents: number};
 /** Morning bottle count; `expectedMl` is computed by the POS, AI OS only stores and renders. */
 export type BottleCheck = {type: 'bottle_check'; id: string; version: number; businessDate: string; countedAt: string; items: BottleCheckItem[]};
-/** One table booking from the reservation system. No guest names or contacts, only counts. */
+/**
+ * Guest details of a booking (decision of MC, 12 Oct 2026). Personal data: kept only in the venue's database, never in the R2
+ * archive, the export or the morning message. `null` everywhere once the reservation system anonymises the booking.
+ */
+export type ReservationGuest = {
+  code: string | null; name: string | null; contactType: 'phone' | 'email' | null; contact: string | null; milkshake: string | null;
+  wish: string | null; note: string | null; reason: string | null; language: string | null; origin: string | null; tables: string[];
+};
+/** One table booking from the reservation system; `guest` is optional (a sender may send counts only). */
 export type Reservation = {
   type: 'reservation'; id: string; version: number; businessDate: string; startsAt: string; section: string; partySize: number;
   status: 'pending' | 'confirmed' | 'declined' | 'expired' | 'cancelled'; arrival: 'arrived' | 'no_show' | null; source: string | null;
+  guest?: ReservationGuest;
 };
+const GUEST_FIELDS = ['code', 'name', 'contactType', 'contact', 'milkshake', 'wish', 'note', 'reason', 'language', 'origin', 'tables'];
+/** The record without guest details, for anything that leaves the venue's database (archive, export). */
+export function withoutGuest<T extends IngestRecord>(record: T): T {
+  if (record.type !== 'reservation' || !('guest' in record)) return record;
+  const {guest: _guest, ...rest} = record as Reservation;
+  return rest as T;
+}
 export const RESERVATION_STATUSES = ['pending', 'confirmed', 'declined', 'expired', 'cancelled'] as const;
 export type IngestRecord = Bill | CashClosing | BottleCheck | Reservation;
 export type Batch = {batchId: string; installationId: string; records: IngestRecord[]};
@@ -135,14 +151,32 @@ function bottleCheck(raw: Obj): BottleCheck {
   return {type: 'bottle_check', id: id(value.id), version: int(value.version, 1), businessDate: date(value.businessDate), countedAt: instant(value.countedAt), items};
 }
 
+/** Free text from guests or staff: an empty string counts as missing. */
+function guestText(value: unknown, max: number): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || value.length > max) fail();
+  return value as string;
+}
+function guest(raw: unknown): ReservationGuest {
+  const value = object(raw, [], GUEST_FIELDS);
+  if (value.contactType != null && value.contactType !== 'phone' && value.contactType !== 'email') fail();
+  return {
+    code: guestText(value.code, 40), name: guestText(value.name, 200), contactType: (value.contactType ?? null) as ReservationGuest['contactType'],
+    contact: guestText(value.contact, 200), milkshake: guestText(value.milkshake, 200), wish: guestText(value.wish, 2000),
+    note: guestText(value.note, 2000), reason: guestText(value.reason, 2000), language: guestText(value.language, 10),
+    origin: guestText(value.origin, 100), tables: value.tables == null ? [] : list(value.tables, 50, id),
+  };
+}
+
 function reservation(raw: Obj): Reservation {
-  const value = object(raw, ['type', 'id', 'version', 'businessDate', 'startsAt', 'section', 'partySize', 'status'], ['arrival', 'source']);
+  const value = object(raw, ['type', 'id', 'version', 'businessDate', 'startsAt', 'section', 'partySize', 'status'], ['arrival', 'source', 'guest']);
   if (!(RESERVATION_STATUSES as readonly unknown[]).includes(value.status)) fail();
   if (value.arrival != null && value.arrival !== 'arrived' && value.arrival !== 'no_show') fail();
   return {
     type: 'reservation', id: id(value.id), version: int(value.version, 1, Number.MAX_SAFE_INTEGER), businessDate: date(value.businessDate), startsAt: instant(value.startsAt),
     section: id(value.section), partySize: int(value.partySize, 1, 1000), status: value.status as Reservation['status'],
     arrival: (value.arrival ?? null) as Reservation['arrival'], source: value.source == null ? null : id(value.source),
+    ...(value.guest === undefined ? {} : {guest: guest(value.guest)}),
   };
 }
 
