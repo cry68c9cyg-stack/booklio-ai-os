@@ -81,11 +81,14 @@ async function deliverBulkGate(env: DeliveryEnv, recipients: string[], text: str
       }),
       signal: AbortSignal.timeout(15000),
     });
-    const result = await response.json().catch(() => null) as {data?: {response?: {status?: string}[]}} | null;
+    const result = await response.json().catch(() => null) as {data?: {response?: {status?: string}[]}; type?: string; code?: number; error?: string} | null;
     const rows = result?.data?.response ?? [];
     const ok = response.ok && rows.length === recipients.length && rows.every(row => ['accepted', 'scheduled', 'sent'].includes(row.status ?? ''));
+    // Why BulkGate refused, without numbers or keys (long digit runs masked), so a failed login code can be diagnosed.
+    if (!ok) console.error('bulkgate refused', response.status, JSON.stringify({type: result?.type, code: result?.code, error: result?.error, statuses: rows.map(row => row.status)}).replace(/\d{6,}/g, '[n]'));
     return ok ? 'delivered' : 'failed';
-  } catch {
+  } catch (error) {
+    console.error('bulkgate unreachable', error instanceof Error ? error.name : 'Error');
     return 'failed';
   }
 }
