@@ -193,8 +193,8 @@ export function outlook(today: Reservation[], planHistory: {revenueCents: number
     usualGuests: guestHistory.length >= 2 ? Math.round(guestHistory.reduce((sum, value) => sum + value, 0) / guestHistory.length) : null};
 }
 /** Today's plan is the forecast for today when there is one (seasonality and bookings included), the same number tomorrow's message checks. */
-const forecastOutlook = (base: Briefing['outlook'], forecast: Forecast | null): Briefing['outlook'] =>
-  forecast?.days[0]?.cents ? {...base, planCents: forecast.days[0].cents} : base;
+const forecastOutlook = (base: Briefing['outlook'], forecast: Forecast | null, logged: number | null): Briefing['outlook'] =>
+  logged ? {...base, planCents: logged} : forecast?.days[0]?.cents ? {...base, planCents: forecast.days[0].cents} : base;
 /** No-shows are worth a warning from 6 guests, at least 10 % of the booked guests and at least twice the usual share. */
 export const NO_SHOW_MIN_GUESTS = 6;
 export function noShowRate(day: Reservation[], history: {confirmedGuests: number; noShowGuests: number} | null): Briefing['noShows'] {
@@ -246,10 +246,10 @@ export function unusualDiscounts(report: DailyReport, history: DiscountHistory):
 }
 
 /**
- * More confirmed guests than the weekday's usual raise that day's forecast in proportion, at most by half:
- * walk-ins are not booked, so the whole revenue does not grow with the bookings.
+ * Clearly more confirmed guests than the weekday's usual (at least 10 usual and 10 more) raise that day's forecast
+ * by half the extra share, at most by half: walk-ins and the bar are not booked, so the revenue grows slower than the bookings.
  */
-export const BOOKING_BOOST_MAX = 1.5;
+export const BOOKING_BOOST_MAX = 1.5, BOOKING_MIN_GUESTS = 10;
 /** Average distance of the actual revenue from the forecast, in per mille of the forecast; at least 7 days. */
 export function forecastAccuracy(rows: {forecastCents: number; actualCents: number}[]): Forecast['accuracy'] {
   const valid = rows.filter(row => row.forecastCents > 0);
@@ -269,7 +269,8 @@ export function forecast(input: {today: string; bases: (number | null)[]; season
   bookings?: Record<string, {guests: number; usualGuests: number | null}>; weather?: WeatherDay[]; accuracy?: Forecast['accuracy']}): Forecast {
   const boost = (date: string) => {
     const booked = input.bookings?.[date];
-    return booked?.usualGuests && booked.guests > booked.usualGuests ? Math.min(BOOKING_BOOST_MAX, Math.round(booked.guests / booked.usualGuests * 100) / 100) : 1;
+    if (!booked?.usualGuests || booked.usualGuests < BOOKING_MIN_GUESTS || booked.guests - booked.usualGuests < BOOKING_MIN_GUESTS) return 1;
+    return Math.min(BOOKING_BOOST_MAX, Math.round((1 + (booked.guests / booked.usualGuests - 1) / 2) * 100) / 100);
   };
   const day = (date: string) => {
     const base = input.bases[weekday(date)];
@@ -317,6 +318,8 @@ export function buildBriefing(input: {
   month?: Month | null; lastWeekRevenueCents?: number | null; forecast?: Forecast | null;
   /** The forecast OKO1 made for this day the morning before (its "plan for today"); wins over the weekday average. */
   forecastPlanCents?: number | null;
+  /** The plan the message about this day gave for the next one (kept), so an old day shows what was sent. */
+  todayPlanCents?: number | null;
   /** Revenue of the starting day's weekday over the previous weeks, and its confirmed guests on those days (days with bookings only). */
   todayPlanHistory?: {revenueCents: number}[]; todayGuestHistory?: number[];
   /** Confirmed and no-show guests over the 28 days before the reported day. */
@@ -399,7 +402,7 @@ export function buildBriefing(input: {
     week: input.week ?? null,
     month: input.month ?? null,
     lastWeekRevenueCents: input.lastWeekRevenueCents ?? null,
-    outlook: forecastOutlook(outlook(input.reservationsToday ?? [], input.todayPlanHistory ?? [], input.todayGuestHistory ?? []), input.forecast ?? null),
+    outlook: forecastOutlook(outlook(input.reservationsToday ?? [], input.todayPlanHistory ?? [], input.todayGuestHistory ?? []), input.forecast ?? null, input.todayPlanCents ?? null),
     forecast: input.forecast ?? null,
     noShows: noShowRate(input.reservations ?? [], input.noShowHistory ?? null),
     unusualDiscounts: report ? unusualDiscounts(report, input.discountHistory ?? {days: 0, totals: {}}) : [],

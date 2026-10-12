@@ -111,7 +111,7 @@ jobs:
               jq 'del(.reportsLink)' "$RUNNER_TEMP/$tenant.json" > "$RUNNER_TEMP/$tenant.tmp" && mv "$RUNNER_TEMP/$tenant.tmp" "$RUNNER_TEMP/$tenant.json"
               out=$(node scripts/admin.ts config "$tenant" "$RUNNER_TEMP/$tenant.json")
             fi
-            echo "$out" | jq -c '(.reportsLink |= (if . then "nastaven" else null end)) | del(.recipients)'
+            echo "$out" | jq -c '(.reportsLink |= (if . then "nastaven" else null end)) | del(.recipients, .dashboardPhones)'
             rm "$RUNNER_TEMP/$tenant.json"
           done
       - name: Načtení dnů z OneDrive (jen ručně spuštěné nasazení s rozsahem dnů)

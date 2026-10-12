@@ -348,16 +348,15 @@ test('weather from MET Norway: local days, rain without overlaps, the symbol aro
     ...(one ? {next_1_hours: {summary: {symbol_code: one[0]}, details: {precipitation_amount: one[1]}}} : {}),
     ...(six ? {next_6_hours: {summary: {symbol_code: six[0]}, details: {precipitation_amount: six[1]}}} : {})}});
   const answer = {properties: {timeseries: [
-    step('2026-10-14T21:30:00Z', 9.6, ['cloudy', 0], ['cloudy', 5]), // 23:30 local on the 14th
+    step('2026-10-14T21:00:00Z', 9.6, ['cloudy', 0], ['cloudy', 5]), // 23:00 local on the 14th: no afternoon, left out
     step('2026-10-14T22:00:00Z', 9.4, ['lightrain', 0.4], ['rain', 3]), // midnight local: the 15th
     step('2026-10-15T10:00:00Z', 14.4, ['lightrain_day', 0.6], ['rain', 2]), // noon
     step('2026-10-15T12:00:00Z', 13.8, null, ['heavyrain', 2.25]), // 6-hour steps once the hourly ones end
     step('2026-10-15T18:00:00Z', 'x', null, ['rain', 9]), // no temperature: skipped
   ]}};
   assert.deepEqual(weatherDays(answer, 'Europe/Prague'), [
-    {date: '2026-10-14', minC: 10, maxC: 10, rainMm: 0, symbol: 'cloudy'},
-    {date: '2026-10-15', minC: 9, maxC: 14, rainMm: 3.3, symbol: 'lightrain_day'},
-  ]);
+    {date: '2026-10-15', minC: 9, maxC: 14, rainMm: 3.3, symbol: 'rain'},
+  ], 'hourly rain 0,4 + 0,6, then the 6-hour 2,25; the 6-hour summary at noon');
   assert.equal(weatherText({date: '2026-10-15', minC: 9, maxC: 14, rainMm: 3.3, symbol: 'lightrain_day'}), '14 °C, slabý déšť');
   assert.equal(weatherText({date: '2026-10-15', minC: 9, maxC: 21, rainMm: 0, symbol: 'partlycloudy_night'}), '21 °C, polojasno');
   assert.equal(weatherText({date: '2026-10-15', minC: -3, maxC: -1, rainMm: 1, symbol: 'heavysnowshowers_day'}), '-1 °C, sníh');
@@ -366,19 +365,20 @@ test('weather from MET Norway: local days, rain without overlaps, the symbol aro
   assert.deepEqual(weatherDays({properties: {timeseries: [{time: 'x'}, null]}}, 'Europe/Prague'), []);
 });
 
-test('forecast: more booked guests than usual raise a day (at most by half), weather and how well it hit', () => {
+test('forecast: clearly more booked guests than usual raise a day by half the extra share (at most 1,5×), weather and how well it hit', () => {
   const bases = Array(7).fill(10000000);
-  const bookings = {'2026-10-15': {guests: 120, usualGuests: 100}, '2026-10-16': {guests: 400, usualGuests: 100}, '2026-10-17': {guests: 50, usualGuests: 100}, '2026-10-18': {guests: 80, usualGuests: null}};
+  const bookings = {'2026-10-15': {guests: 120, usualGuests: 100}, '2026-10-16': {guests: 400, usualGuests: 100}, '2026-10-17': {guests: 50, usualGuests: 100}, '2026-10-18': {guests: 80, usualGuests: null},
+    '2026-10-19': {guests: 8, usualGuests: 2}, '2026-10-20': {guests: 105, usualGuests: 100}};
   const weather = [{date: '2026-10-15', minC: 9, maxC: 14, rainMm: 3, symbol: 'rain'}];
   const accuracy = forecastAccuracy([{forecastCents: 100, actualCents: 110}, {forecastCents: 100, actualCents: 90}, ...Array(5).fill({forecastCents: 100, actualCents: 100}), {forecastCents: 0, actualCents: 50}]);
   assert.deepEqual(accuracy, {days: 7, errorPermille: 29}, 'a day without a forecast does not count');
   assert.equal(forecastAccuracy(Array(6).fill({forecastCents: 100, actualCents: 100})), null, 'under 7 days');
   const result = forecast({today: '2026-10-14', bases, seasonal: {}, monthActual: {cents: 0, days: 0}, bookings, weather, accuracy});
-  assert.deepEqual(result.days.map(day => [day.date, day.cents, day.boost]), [['2026-10-14', 10000000, 1], ['2026-10-15', 12000000, 1.2], ['2026-10-16', 15000000, 1.5],
-    ['2026-10-17', 10000000, 1], ['2026-10-18', 10000000, 1], ['2026-10-19', 10000000, 1], ['2026-10-20', 10000000, 1]], 'fewer guests than usual never lower it');
-  assert.equal(result.week.cents, 77000000);
+  assert.deepEqual(result.days.map(day => [day.date, day.cents, day.boost]), [['2026-10-14', 10000000, 1], ['2026-10-15', 11000000, 1.1], ['2026-10-16', 15000000, 1.5],
+    ['2026-10-17', 10000000, 1], ['2026-10-18', 10000000, 1], ['2026-10-19', 10000000, 1], ['2026-10-20', 10000000, 1]], 'fewer guests never lower it; under 10 usual or 10 more is no signal');
+  assert.equal(result.week.cents, 76000000);
   assert.deepEqual([result.days[1].guests, result.days[1].usualGuests, result.days[1].weatherText, result.days[2].weatherText], [120, 100, '14 °C, déšť', null]);
-  assert.equal(renderForecast(result)[0], 'Odhad tržby: zítra (čt 15. 10.) 120 000 Kč (víc rezervací než obvykle), 14 °C, déšť · 7 dní od dneška 770 000 Kč · říjen celkem 1 870 000 Kč (zatím 0 Kč, 13 dní bez dat odhadnuto) · listopad 3 000 000 Kč · odhad se za 7 dní lišil v průměru o 3 %');
+  assert.equal(renderForecast(result)[0], 'Odhad tržby: zítra (čt 15. 10.) 110 000 Kč (víc rezervací než obvykle), 14 °C, déšť · 7 dní od dneška 760 000 Kč · říjen celkem 1 860 000 Kč (zatím 0 Kč, 13 dní bez dat odhadnuto) · listopad 3 000 000 Kč · odhad se za 7 dní lišil v průměru o 3 %');
   // Today's plan is the forecast for today; the next morning checks the day against the forecast it logged.
   const briefing = buildBriefing({businessDate: '2026-10-13', config, bills: [], closings: [], planHistory: [{revenueCents: 1}, {revenueCents: 1}], incomplete: false, forecast: result, forecastPlanCents: 9000000});
   assert.deepEqual([briefing.plan, briefing.outlook.planCents], [{revenueCents: 9000000, days: 2}, 10000000]);

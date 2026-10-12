@@ -268,7 +268,8 @@ export class TenantObject extends DurableObject<Env> {
     const revenue = (entry: string) => { if (!cache.has(entry)) cache.set(entry, this.dayRevenue(entry)); return cache.get(entry)!; };
     const series = Array.from({length: 35}, (_, i) => addDays(day, i - 34)).map(entry => ({
       date: entry, revenueCents: revenue(entry),
-      planCents: planFrom([7, 14, 21, 28].map(back => revenue(addDays(entry, -back))).filter((value): value is number => value !== null).map(revenueCents => ({revenueCents})))?.revenueCents ?? null,
+      // The plan the morning message gave when there is one, else the weekday average.
+      planCents: this.loggedPlan(entry) ?? planFrom([7, 14, 21, 28].map(back => revenue(addDays(entry, -back))).filter((value): value is number => value !== null).map(revenueCents => ({revenueCents})))?.revenueCents ?? null,
     }));
     const balances = Object.fromEntries((report?.lines ?? []).filter(line => line.kind === 'balance').map(line => [line.key, line.amountCents]));
     const stored = this.sql.exec<{text: string}>('SELECT text FROM briefings WHERE business_date=?', day).toArray()[0];
@@ -714,7 +715,8 @@ export class TenantObject extends DurableObject<Env> {
     const bookings = Object.fromEntries(Array.from({length: 7}, (_, i) => addDays(today, i)).map(day => [day, {guests: coming.get(day) ?? 0, usualGuests: usual[weekday(day)]}]));
     const weather = this.sql.exec<{json: string}>('SELECT json FROM weather WHERE date >= ? ORDER BY date LIMIT 10', today).toArray().map(row => JSON.parse(row.json) as WeatherDay);
     // The plan each morning gave for its day against what the day made, over the 28 days up to the reported one.
-    const logged = this.sql.exec<{day: string; cents: number}>('SELECT for_date AS day, cents FROM forecast_log WHERE horizon=0 AND for_date BETWEEN ? AND ?', window.at(-1)!, date).toArray();
+    // Up to the day before the reported one: the reported day's revenue may still be incomplete.
+    const logged = this.sql.exec<{day: string; cents: number}>('SELECT for_date AS day, cents FROM forecast_log WHERE horizon=0 AND for_date BETWEEN ? AND ?', window.at(-1)!, addDays(date, -1)).toArray();
     const accuracy = forecastAccuracy(logged.map(row => ({forecastCents: row.cents, actualCents: revenue(row.day)}))
       .filter((row): row is {forecastCents: number; actualCents: number} => row.actualCents !== null));
     return forecast({today, bases, seasonal, monthActual: {cents, days, missing}, bookings, weather, accuracy});
@@ -763,7 +765,7 @@ export class TenantObject extends DurableObject<Env> {
       month: weekday(date) === 0 || addDays(date, 1).endsWith('-01') ? this.month(config, date) : null,
       lastWeekRevenueCents: this.dayRevenue(addDays(date, -7)), discountHistory: this.discountHistory(date),
       ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast: this.forecast(date),
-      forecastPlanCents: this.sql.exec<{cents: number}>('SELECT cents FROM forecast_log WHERE for_date=? AND horizon=0', date).toArray()[0]?.cents ?? null,
+      forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};
   }
@@ -799,8 +801,8 @@ export class TenantObject extends DurableObject<Env> {
     // Without a configured channel the briefing is 'stored' and readable through the admin API.
     // A 'failed' delivery is not counted as sent, so the next send hour (until the last one) tries again.
     const status = await deliver(this.env, config.recipients, text);
-    // What this message forecast is kept, so tomorrow's message compares the day with it (the first message of a day counts).
-    for (const [horizon, day] of (briefing.forecast?.days ?? []).entries()) {
+    // What a message that went out forecast is kept, so tomorrow's message compares the day with it; a failed one is not (the retry counts).
+    for (const [horizon, day] of status === 'failed' ? [] : (briefing.forecast?.days ?? []).entries()) {
       if (day.cents !== null) this.sql.exec('INSERT OR IGNORE INTO forecast_log VALUES(?,?,?,?)', day.date, horizon, day.cents, date);
     }
     this.sql.exec(`INSERT INTO briefings VALUES(?,?,?,?,?,?) ON CONFLICT(business_date) DO UPDATE SET
@@ -808,6 +810,11 @@ export class TenantObject extends DurableObject<Env> {
     date, status, briefing.incomplete ? 1 : 0, text, JSON.stringify(briefing), at.toISOString());
     this.archive(`t/${tenant}/export/${date}.json`, JSON.stringify(this.exportDay(date)));
     return {decision, businessDate: date, status, text};
+  }
+
+  /** The plan a sent morning message gave for its day (horizon 0), if any. */
+  private loggedPlan(date: string): number | null {
+    return this.sql.exec<{cents: number}>('SELECT cents FROM forecast_log WHERE for_date=? AND horizon=0', date).toArray()[0]?.cents ?? null;
   }
 
   /** The weather forecast for the venue (MET Norway, no key); a failed read keeps the last one. */

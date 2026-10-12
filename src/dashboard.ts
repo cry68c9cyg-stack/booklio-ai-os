@@ -212,7 +212,7 @@ function forecastCard(f) {
     (f.accuracy ? '<p>Odhad se za ' + f.accuracy.days + ' dní lišil od skutečnosti v průměru o <b>' + Math.round(f.accuracy.errorPermille / 10) + ' %</b>.</p>' : '<p class="muted">Přesnost odhadu se ukáže po 7 dnech provozu.</p>') +
     '<p class="muted">Průměr stejného dne v týdnu za poslední 4 týdny' +
     (seasons.length ? ', upravený podle loňska (' + esc(seasons.join(', ')) + ')' : '; loňská data na sezónnost zatím nejsou') +
-    '. Víc potvrzených hostů než obvykle zvýší odhad dne úměrně, nejvýš o polovinu. Počasí: MET Norway.</p></div>';
+    '. Výrazně víc potvrzených hostů než obvykle (aspoň o 10) zvýší odhad dne o polovinu toho rozdílu, nejvýš o 50 %. Počasí: MET Norway.</p></div>';
 }
 
 // Who sends data to OKO1 and when it last arrived; a sender silent too long is marked.

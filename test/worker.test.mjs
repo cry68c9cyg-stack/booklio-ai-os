@@ -793,39 +793,54 @@ try {
   assert.deepEqual([mondaysClosed.week.cents, mondaysClosed.nextMonth.cents], [800000, 21 * 100000 + 4 * 300000 + 5 * 0], 'no Monday revenue; November without last year');
   assert.match(forecastDay.text, /\nOdhad tržby: zítra \(čt 15\. 10\.\) 1 000 Kč · 7 dní od dneška 9 000 Kč · říjen celkem 41 000 Kč \(zatím 17 000 Kč\) · listopad 57 000 Kč$/);
 
-  // Weather (MET Norway, identified by User-Agent) and bookings in the forecast; the morning's forecast is kept and checked the next day.
+  // Weather (MET Norway, identified by User-Agent) and bookings in the forecast; the forecast of a message that went out is kept and checked the next day.
   await mf.dispose();
-  const weatherCalls = [];
-  mf = new Miniflare({...options, outboundService: async request => {
-    weatherCalls.push({url: request.url, agent: request.headers.get('user-agent')});
-    return Response.json({properties: {timeseries: [{time: '2026-10-15T10:00:00Z', data: {instant: {details: {air_temperature: 14.2}},
-      next_1_hours: {summary: {symbol_code: 'rain'}, details: {precipitation_amount: 1}}}}]}});
-  }});
-  assert.equal((await call('PUT', '/admin/t/weather-venue/config', {...config, registers: [], location: {lat: 91, lon: 14}})).status, 400);
-  assert.equal((await call('PUT', '/admin/t/weather-venue/config', {...config, registers: [], location: {lat: 50.08987654, lon: 14.42}})).status, 200);
+  const weatherCalls = [], twilioCalls = [];
+  let weatherDown = false;
+  mf = new Miniflare({...options, bindings: {...options.bindings, TWILIO_ACCOUNT_SID: 'AC-test', TWILIO_AUTH_TOKEN: 'test-only-token', TWILIO_FROM: '+420700000000'},
+    outboundService: async request => {
+      if (request.url.startsWith('https://api.twilio.com/')) { twilioCalls.push(1); return new Response('{}', {status: twilioCalls.length === 1 ? 500 : 201}); }
+      weatherCalls.push({url: request.url, agent: request.headers.get('user-agent')});
+      if (weatherDown) return new Response('', {status: 503});
+      return Response.json({properties: {timeseries: [{time: '2026-10-15T10:00:00Z', data: {instant: {details: {air_temperature: 14.2}},
+        next_1_hours: {summary: {symbol_code: 'rain'}, details: {precipitation_amount: 1}}}}]}});
+    }});
+  const weatherConfig = {...config, registers: [], recipients: ['+420600000001'], location: {lat: 50.08987654, lon: 14.42}};
+  assert.equal((await call('PUT', '/admin/t/weather-venue/config', {...weatherConfig, location: {lat: 91, lon: 14}})).status, 400);
+  assert.equal((await call('PUT', '/admin/t/weather-venue/config', weatherConfig)).status, 200);
   await call('POST', '/admin/t/weather-venue/history', {rows: Array.from({length: 28}, (_, i) => ({businessDate: addDays('2026-10-13', -i), revenueCents: 1000000}))});
   await call('POST', '/admin/t/weather-venue/pair', {installationId: 'pos-installation-1', token});
-  // Thursdays before: 4 confirmed guests each; tomorrow (Thursday 15. 10.) 10 confirmed and 3 waiting: 2,5× the usual, so at most 1,5× the revenue.
-  assert.equal((await ingest('batch-w1', [booking('w1', 1, '2026-10-08', 'diner', 4, 'confirmed', 'arrived'), booking('w2', 1, '2026-10-01', 'diner', 4, 'confirmed', 'arrived'),
-    booking('w3', 1, '2026-10-15', 'diner', 6, 'confirmed', null), booking('w4', 1, '2026-10-15', 'bar', 4, 'confirmed', null), booking('w5', 1, '2026-10-15', 'bar', 3, 'pending', null),
-    {...closing, id: 'wc-13', businessDate: '2026-10-13'}, {...closing, id: 'wc-15', businessDate: '2026-10-15'}], 'Bearer ' + token, 'weather-venue')).status, 200);
+  // Thursdays before: 20 confirmed guests each; tomorrow (Thursday 15. 10.) 50 confirmed and 3 waiting: 2,5× the usual, so at most 1,5× the revenue.
+  assert.equal((await ingest('batch-w1', [booking('w1', 1, '2026-10-08', 'diner', 20, 'confirmed', 'arrived'), booking('w2', 1, '2026-10-01', 'diner', 20, 'confirmed', 'arrived'),
+    booking('w3', 1, '2026-10-15', 'diner', 30, 'confirmed', null), booking('w4', 1, '2026-10-15', 'bar', 20, 'confirmed', null), booking('w5', 1, '2026-10-15', 'bar', 3, 'pending', null),
+    {...closing, id: 'wc-13', businessDate: '2026-10-13'}, {...closing, id: 'wc-14', businessDate: '2026-10-14'}], 'Bearer ' + token, 'weather-venue')).status, 200);
   const tickWeather = async at => (await call('POST', '/admin/t/weather-venue/tick', {at})).json();
-  const weatherMorning = await tickWeather('2026-10-14T05:00:00Z');
-  assert.equal(weatherMorning.decision, 'send');
-  assert.deepEqual(weatherCalls, [{url: 'https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=50.0899&lon=14.42', agent: 'OKO1 https://oko1.rr7whdyyhf.workers.dev'}]);
-  assert.match(weatherMorning.text, /\nDnes plán tržby 10 000 Kč\n/);
-  assert.match(weatherMorning.text, /\nOdhad tržby: zítra \(čt 15\. 10\.\) 15 000 Kč \(víc rezervací než obvykle\), 14 °C, déšť · 7 dní od dneška 75 000 Kč · /);
-  assert.equal((await tickWeather('2026-10-14T06:00:00Z')).decision, 'skip');
+  // 7:00: the message fails, so its forecast is not kept.
+  const failedMorning = await tickWeather('2026-10-14T05:00:00Z');
+  assert.equal(failedMorning.status, 'failed');
+  assert.deepEqual(weatherCalls, [{url: 'https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=50.0899&lon=14.42', agent: 'OKO1/1.0 github.com/cry68c9cyg-stack/booklio-ai-os'}]);
+  assert.match(failedMorning.text, /\nDnes plán tržby 10 000 Kč\n/);
+  // 8:00: an earlier Wednesday changed (7. 10.: 20 000 Kč); the message that goes out plans 12 500 Kč and that is kept.
+  await call('POST', '/admin/t/weather-venue/history', {rows: [{businessDate: '2026-10-07', revenueCents: 2000000}]});
+  const weatherMorning = await tickWeather('2026-10-14T06:00:00Z');
+  assert.equal(weatherMorning.status, 'delivered');
+  assert.match(weatherMorning.text, /\nDnes plán tržby 12 500 Kč\n/);
+  assert.match(weatherMorning.text, /\nOdhad tržby: zítra \(čt 15\. 10\.\) 15 000 Kč \(víc rezervací než obvykle\), 14 °C, déšť · 7 dní od dneška 78 000 Kč · /);
+  assert.equal((await tickWeather('2026-10-14T07:00:00Z')).decision, 'skip');
   assert.equal(weatherCalls.length, 1, 'no second read the same morning');
-  // The next morning: the day is checked against the plan the message gave kept in the log.
-  // A later change of the weeks before (7. 10.) moves the weekday average to 12 500 Kč, but 14. 10. keeps the plan its morning gave.
-  await call('POST', '/admin/t/weather-venue/history', {rows: [{businessDate: '2026-10-14', revenueCents: 1300000}, {businessDate: '2026-10-07', revenueCents: 2000000}]});
+  // Later changes (7. 10.: 30 000 Kč) move the weekday average to 15 000 Kč, but 14. 10. keeps the plan its message gave, also on the dashboard of 13. 10.
+  await call('POST', '/admin/t/weather-venue/history', {rows: [{businessDate: '2026-10-14', revenueCents: 1300000}, {businessDate: '2026-10-07', revenueCents: 3000000}]});
   const nextDay = await (await call('GET', '/admin/t/weather-venue/briefing?date=2026-10-14')).json();
-  assert.equal(nextDay.briefing.plan.revenueCents, 1000000);
+  assert.equal(nextDay.briefing.plan.revenueCents, 1250000);
+  assert.equal((await (await call('GET', '/admin/t/weather-venue/briefing?date=2026-10-13')).json()).briefing.outlook.planCents, 1250000);
   assert.equal(nextDay.briefing.forecast.days[0].weatherText, '14 °C, déšť', 'the weather of 15. 10. stays until the next read');
-  const nextMorning = await tickWeather('2026-10-16T05:00:00Z');
+  // The next morning MET Norway is down: the weather already read stays.
+  weatherDown = true;
+  const nextMorning = await tickWeather('2026-10-15T05:00:00Z');
   assert.equal(weatherCalls.length, 2, 'a new read the next morning');
   assert.equal(nextMorning.decision, 'send');
+  assert.match(nextMorning.text, /\nTržba: 0 Kč \(plán 12 500 Kč, −100 %\)\n/);
+  assert.equal((await (await call('GET', '/admin/t/weather-venue/briefing?date=2026-10-14')).json()).briefing.forecast.days[0].weatherText, '14 °C, déšť');
 
   // The admin script talks to a real HTTP endpoint: config, rkeeper-style CSV import, preview.
   await mf.dispose();
