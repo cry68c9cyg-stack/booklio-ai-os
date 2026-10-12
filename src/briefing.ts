@@ -1,4 +1,4 @@
-import {DEFAULT_BOTTLE_LOSS_CENTS, type Bill, type BottleCheck, type CashClosing, type Reservation, type TenantConfig, type WebTraffic} from './validate.ts';
+import {DEFAULT_BOTTLE_LOSS_CENTS, type Bill, type BottleCheck, type CashClosing, type Reservation, type ReviewSummary, type TenantConfig, type WebTraffic} from './validate.ts';
 import {weekday} from './time.ts';
 import {line, total, type DailyReport} from './daily-report.ts';
 import type {NotePoint, NotesAnalysis} from './notes.ts';
@@ -34,6 +34,8 @@ export type Briefing = {
   } | null;
   /** The website on the reported calendar day, against the same weekday a week before. `null` = the website sent nothing. */
   web: {visits: number; withAction: number; lastWeekVisits: number | null; reservationsSent: number; reviewScans: number; topOrigins: {name: string; visits: number}[]} | null;
+  /** Reviews that reached the website's admin on the reported calendar day, and how many wait there. `null` = nothing sent. */
+  reviews: {newCount: number; averageTenths: number | null; low: number; bySource: {name: string; newCount: number}[]; waiting: number; forManagement: number; failed: number} | null;
   /** Posted costs from accounting (iÚčto) against OKO1's revenue: this month so far, and the month before in its first half. */
   costs: MonthResult | null;
   costsPrevious: MonthResult | null;
@@ -79,6 +81,20 @@ export function summarizeWeb(day: WebTraffic | undefined, lastWeek: WebTraffic |
     topOrigins: [...day.origins].sort((a, b) => b.visits - a.visits || a.key.localeCompare(b.key)).filter(row => row.visits > 0).slice(0, 3).map(({name, visits}) => ({name, visits})),
   };
 }
+/** New reviews of the day: count, average stars (tenths), how many have 3 ★ or less, per source; and what waits in the admin. */
+export function summarizeReviews(day: ReviewSummary | undefined): Briefing['reviews'] {
+  if (!day) return null;
+  let rated = 0, starSum = 0, low = 0, unrated = 0;
+  for (const source of day.sources) {
+    source.stars.forEach((count, i) => { rated += count; starSum += count * (i + 1); if (i < 3) low += count; });
+    unrated += source.unrated;
+  }
+  return {
+    newCount: rated + unrated, averageTenths: rated ? Math.round(starSum / rated * 10) : null, low,
+    bySource: day.sources.map(source => ({name: source.name, newCount: source.stars.reduce((sum, count) => sum + count, 0) + source.unrated})).filter(row => row.newCount > 0),
+    waiting: day.waiting, forManagement: day.forManagement, failed: day.failed,
+  };
+}
 export type BottleLoss = {name: string; lossMl: number; lossCents: number};
 
 /**
@@ -109,6 +125,7 @@ export function buildBriefing(input: {
   reservations?: Reservation[]; reservationsToday?: Reservation[];
   web?: WebTraffic; webLastWeek?: WebTraffic;
   costs?: MonthResult | null; costsPrevious?: MonthResult | null;
+  reviews?: ReviewSummary;
 }): Briefing {
   const closed = input.bills.filter(bill => bill.status === 'closed');
   const add = <K>(map: Map<K, number>, key: K, value: number) => map.set(key, (map.get(key) ?? 0) + value);
@@ -179,6 +196,7 @@ export function buildBriefing(input: {
       : report?.notes ? {points: [], summary: null, raw: report.notes} : null,
     reservations: summarizeReservations(input.config, input.reservations ?? [], input.reservationsToday ?? []),
     web: summarizeWeb(input.web, input.webLastWeek),
+    reviews: summarizeReviews(input.reviews),
     costs: input.costs ?? null, costsPrevious: input.costsPrevious ?? null,
     incomplete: input.incomplete,
   };
@@ -226,6 +244,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderBottles(briefing));
   lines.push(...renderReservations(briefing.reservations));
   lines.push(...renderWeb(briefing.web));
+  lines.push(...renderReviews(briefing.reviews));
   lines.push(...renderCosts(briefing.costs, briefing.costsPrevious));
   lines.push(...renderNotes(briefing));
   return lines.join('\n');
@@ -302,6 +321,21 @@ export function renderWeb(web: Briefing['web']): string[] {
   line += `, ${group(web.withAction)} s rezervací, telefonem nebo navigací, odeslané rezervace ${web.reservationsSent}`;
   if (web.reviewScans) line += `, QR na recenze ${web.reviewScans}×`;
   return web.topOrigins.length ? [line, 'Odkud: ' + web.topOrigins.map(row => `${row.name} ${group(row.visits)}`).join(' · ')] : [line];
+}
+
+const reviewsWord = (count: number) => count === 1 ? 'nová' : count >= 2 && count <= 4 ? 'nové' : 'nových';
+/** Reviews in one line: new ones with their average and the weak ones, then what waits in the website's admin. Nothing when all is quiet. */
+export function renderReviews(reviews: Briefing['reviews']): string[] {
+  if (!reviews || (!reviews.newCount && !reviews.waiting && !reviews.forManagement && !reviews.failed)) return [];
+  let line = 'Recenze: ' + (reviews.newCount ? `${reviews.newCount} ${reviewsWord(reviews.newCount)}` : 'žádná nová');
+  if (reviews.averageTenths !== null) line += `, průměr ${(reviews.averageTenths / 10).toFixed(1).replace('.', ',')} ★`;
+  if (reviews.bySource.length > 1) line += ` (${reviews.bySource.map(row => `${row.name} ${row.newCount}`).join(' · ')})`;
+  else if (reviews.bySource.length === 1) line += ` (${reviews.bySource[0].name})`;
+  if (reviews.low) line += `, ${reviews.low}× 3 ★ a méně`;
+  const admin = [reviews.waiting && `čeká na odpověď ${reviews.waiting}`, reviews.forManagement && `pro vedení ${reviews.forManagement}`,
+    reviews.failed && `neodeslané odpovědi ${reviews.failed}`].filter(Boolean);
+  if (admin.length) line += `; v adminu ${admin.join(', ')}`;
+  return [line];
 }
 
 const MONTHS = ['leden', 'únor', 'březen', 'duben', 'květen', 'červen', 'červenec', 'srpen', 'září', 'říjen', 'listopad', 'prosinec'];

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, crowns, renderBriefing, renderCosts, renderReservations, renderWeb, summarizeReservations, summarizeWeb, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
@@ -200,6 +200,22 @@ test('website traffic: a short line against last week, top origins only with vis
     'Web: 1 250 návštěv (před týdnem 1 500, −17 %), 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0', 'Odkud: B 900 · A 5']);
   assert.deepEqual(renderWeb(summarizeWeb({...day, visits: 3, origins: []}, undefined)), ['Web: 3 návštěvy, 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0']);
   assert.deepEqual(renderWeb(summarizeWeb({...day, visits: 1, origins: []}, {...day, visits: 0})), ['Web: 1 návštěva (před týdnem 0), 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0']);
+});
+
+test('reviews: counts only, one line with the average and weak ones, nothing when all is quiet, weak ones in the to-do list', () => {
+  const day = {type: 'review_summary' as const, id: 'reviews-2026-10-08', version: 1, businessDate: '2026-10-08', waiting: 0, forManagement: 0, failed: 0,
+    sources: [{key: 'google', name: 'Google', stars: [1, 0, 0, 0, 3] as [number, number, number, number, number], unrated: 1}, {key: 'tripadvisor', name: 'TripAdvisor', stars: [0, 0, 0, 0, 0] as [number, number, number, number, number], unrated: 0}]};
+  const batch = (record: unknown) => ({batchId: 'batch-0001', installationId: 'booklio-web', records: [record]});
+  assert.equal(validateBatch(batch(day)).records.length, 1);
+  assert.throws(() => validateBatch(batch({...day, sources: [{...day.sources[0], stars: [1, 0, 0, 0, 0.5]}]})), InputError);
+  assert.throws(() => validateBatch(batch({...day, waiting: -1})), InputError);
+  assert.equal(summarizeReviews(undefined), null);
+  assert.deepEqual(renderReviews(summarizeReviews(day)), ['Recenze: 5 nových, průměr 4,0 ★ (Google), 1× 3 ★ a méně']);
+  assert.deepEqual(renderReviews(summarizeReviews({...day, sources: [], waiting: 2, failed: 1})), ['Recenze: žádná nová; v adminu čeká na odpověď 2, neodeslané odpovědi 1']);
+  assert.deepEqual(renderReviews(summarizeReviews({...day, sources: []})), []);
+  const config = validateConfig({name: 'Test', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9], registers: ['bar'], sections: {bar: 'Bar'}, recipients: []});
+  const briefing = buildBriefing({businessDate: '2026-10-08', config, bills: [], closings: [], planHistory: [], incomplete: false, reviews: {...day, forManagement: 2}});
+  assert.deepEqual(todoList(briefing).filter(item => item.text.includes('ecenz')).map(item => item.text), ['Slabé recenze (3 ★ a méně): 1', 'Recenze čekají na vedení: 2']);
 });
 
 test('iÚčto: chart of accounts, journal pages and costs per synthetic account', () => {

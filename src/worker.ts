@@ -12,7 +12,7 @@ import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
 import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
 import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
-import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Reservation, type TenantConfig, type WebTraffic} from './validate.ts';
+import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Reservation, type ReviewSummary, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
 import {dashboardWeb} from './web-views.ts';
 import {MCP_PATH, oauthOptions, type Venues} from './oauth.ts';
@@ -512,6 +512,7 @@ export class TenantObject extends DurableObject<Env> {
       bottleChecks: this.day<BottleCheck>('bottle_check', date), planHistory, incomplete, report: this.report(date), notes: this.notes(date),
       reservations: this.day<Reservation>('reservation', date), reservationsToday: this.day<Reservation>('reservation', addDays(date, 1)),
       web: this.day<WebTraffic>('web_traffic', date)[0], webLastWeek: this.day<WebTraffic>('web_traffic', addDays(date, -7))[0],
+      reviews: this.day<ReviewSummary>('review_summary', date)[0],
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};
   }

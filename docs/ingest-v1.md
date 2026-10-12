@@ -121,6 +121,22 @@ Doplněno 12. 10. 2026 zpětně kompatibilně. Web posílá každou hodinu souhr
 
 Ranní zpráva ukáže den proti stejnému dni před týdnem, odeslané rezervace, skeny QR a tři nejčastější zdroje; dashboard totéž jako kartu „Návštěvnost webu“.
 
+### Recenze (`review_summary`)
+
+Doplněno 12. 10. 2026 zpětně kompatibilně. Web posílá každou hodinu souhrn recenzí, které ten den dorazily do adminu webu (Google, TripAdvisor; pražský kalendářní den podle příchodu do adminu), za včerejšek a dnešek; vyšší `version` (čas odeslání v ms) den přepíše. Jen počty: žádný autor, nadpis ani text recenze.
+
+`{type: "review_summary", id, version, businessDate, sources, waiting, forManagement, failed}`
+
+| Pole | Typ | Poznámka |
+|---|---|---|
+| `id` | string | `reviews-RRRR-MM-DD` |
+| `sources` | pole ≤ 10 `{key, name, stars, unrated}` | podle zdroje (`google`, `tripadvisor`); `stars` = přesně 5 počtů nových recenzí s 1 až 5 ★, `unrated` = nové bez hvězdiček |
+| `waiting` | int ≥ 0 | recenze, které teď v adminu čekají na odpověď |
+| `forManagement` | int ≥ 0 | recenze předané vedení |
+| `failed` | int ≥ 0 | odpovědi, které se nepodařilo odeslat |
+
+Ranní zpráva ukáže nové recenze, průměr hvězdiček, počet se 3 ★ a méně a co čeká v adminu (jen když je co hlásit); slabé recenze, recenze pro vedení a neodeslané odpovědi jdou do seznamu k vyřízení; dashboard má kartu „Recenze“.
+
 ## Kdy posílat
 
 Po uzavření každého účtu nebo v intervalu 5–15 minut, a vždy hned po uzávěrce a po dokončení kontroly lahví. Neodeslané dávky drží pokladna ve své frontě a posílá je s opakováním.

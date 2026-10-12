@@ -156,6 +156,13 @@ function render(data) {
     (w.lastWeekVisits !== null ? ' · před týdnem ' + w.lastWeekVisits + (w.lastWeekVisits ? ' (' + signed(pct(w.visits, w.lastWeekVisits)) + ')' : '') : '') + '</div>' +
     '<div>s akcí <b>' + w.withAction + '</b> · odeslané rezervace <b>' + w.reservationsSent + '</b>' + (w.reviewScans ? ' · QR na recenze <b>' + w.reviewScans + '</b>' : '') + '</div>' +
     (w.topOrigins.length ? '<div class="muted">' + w.topOrigins.map(o => esc(o.name) + ' ' + o.visits).join(' · ') + '</div>' : '') + '</div>');
+  const re = b.reviews;
+  if (re) cards.push('<div class="card"><h2>Recenze</h2><div class="big">' + re.newCount + '</div><div class="muted">nových za den' +
+    (re.averageTenths !== null ? ' · průměr ' + (re.averageTenths / 10).toFixed(1).replace('.', ',') + ' ★' : '') + '</div>' +
+    (re.bySource.length ? '<div class="muted">' + re.bySource.map(s => esc(s.name) + ' ' + s.newCount).join(' · ') + '</div>' : '') +
+    (re.low ? '<div class="warn">3 ★ a méně: ' + re.low + '</div>' : '') +
+    '<div>v adminu čeká na odpověď <b>' + re.waiting + '</b>' + (re.forManagement ? ' · <span class="warn">pro vedení ' + re.forManagement + '</span>' : '') +
+    (re.failed ? ' · <span class="warn">neodeslané ' + re.failed + '</span>' : '') + '</div></div>');
   const co = b.costs, sum = rows => rows.reduce((t, r) => t + r.amountCents, 0);
   if (co) cards.push('<div class="card"><h2>Náklady a výsledek</h2><div class="big">' + kc(co.revenueCents - sum(co.rows)) + '</div><div class="muted">' +
     esc(co.month) + ' do ' + esc(czDate(co.through)) + ': tržby ' + kc(co.revenueCents) + ' − zaúčtované náklady ' + kc(sum(co.rows)) + '</div>' +
