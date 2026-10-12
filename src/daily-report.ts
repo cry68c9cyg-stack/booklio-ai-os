@@ -101,8 +101,8 @@ const REPORT_RULES: Rule[] = [
   {match: /^(odpis|promo|personal|sleva|slevy \d|mz$|ig$|cosmo)/, kind: 'discount', key: label => slug(label)},
   {match: /^slevy a odpisy celkem\b/, kind: 'total', key: 'discounts'},
 ];
-/** A bare "Celkem" is the discount total only inside the block that starts with the "Slevy a odpisy" header. */
-const DISCOUNT_HEADER = /^slevy a odpisy\b/;
+/** A bare "Celkem" is the discount total only inside the block that starts with the "Slevy" / "Slevy a odpisy" header. */
+const DISCOUNT_HEADER = /^slevy( a odpisy)?\b/;
 
 /** Rows of the "Peněžní deník" sheet, read in the column of the business day. Headers open blocks. */
 const BOOK_BLOCKS: {match: RegExp; block: 'expense' | 'payout' | 'cash_count' | 'total'}[] = [
@@ -174,9 +174,83 @@ export function dayColumn(sheet: Sheet, businessDate: string): {row: number; col
   return null;
 }
 
-/** The "Peněžní deník" workbook: the column of the business day on the first sheet that has one. */
+/** Staff paid in cash in the journal: the role alone ("DJ", "Security"), or a wage, trial shift or help. */
+const JOURNAL_PAYOUT = /^(security|tanecnice|dj|popelar|hosteska|barback|uklizec\w*)$|vyplat|zkousk|brigad|vypomoc|animator|procent/;
+
+/**
+ * The "Peněžní deník" as the managers keep it: a journal with one block per day. The block starts with the row
+ * "Počáteční stav" that carries the date, lists cash spent (positive) and cash received (negative), the cash part of
+ * the revenue per section ("Tržba …"), and ends with "Zůstatek". Beside the block is the evening cash count
+ * (Euro, Dolar, …, Trezor, Hotovost, Celkem).
+ */
+const isStartLabel = (value: CellValue | undefined) => typeof value === 'string' && /^pocatecni stav$/.test(norm(value));
+const isJournal = (sheet: Sheet) => [...sheet.cells.values()].some(cells => [...cells.values()].some(isStartLabel));
+/** Whether the workbook is a cash book kept as a journal (whatever the day). */
+export const isJournalBook = (sheets: Sheet[]) => sheets.some(isJournal);
+
+function extractJournal(sheet: Sheet, businessDate: string): ReportLine[] | null {
+  const ordered = [...sheet.cells].sort((a, b) => a[0] - b[0]);
+  const isStart = isStartLabel;
+  const startIndex = ordered.findIndex(([, cells]) => [...cells.values()].some(isStart)
+    && [...cells.values()].some(value => typeof value === 'number' && Number.isInteger(value) && value > 40000 && value < 80000 && excelDate(value) === businessDate));
+  if (startIndex < 0) return null;
+  const startCells = ordered[startIndex][1];
+  const labelColumn = [...startCells].find(([, value]) => isStart(value))![0];
+  // The amount column: the nearest numeric column right of the labels, as most labelled rows of the sheet have it
+  // (one empty opening balance must not move the whole block to the cash count beside it).
+  const votes = new Map<number, number>();
+  for (const [, cells] of ordered) {
+    if (typeof cells.get(labelColumn) !== 'string') continue;
+    const nearest = [...cells].filter(([column, value]) => column > labelColumn && typeof value === 'number').map(([column]) => column).sort((a, b) => a - b)[0];
+    if (nearest !== undefined) votes.set(nearest, (votes.get(nearest) ?? 0) + 1);
+  }
+  const amountColumn = [...votes].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]?.[0];
+  if (amountColumn === undefined) return null;
+  // A block can have an opening and a closing cash count beside it: the last value of each label wins.
+  const count = new Map<string, {label: string; amountCents: number}>();
+  const lines: ReportLine[] = [], used = new Map<string, number>();
+  const push = (kind: LineKind, key: string, label: string, amountCents: number) => {
+    const n = (used.get(`${kind}:${key}`) ?? 0) + 1;
+    used.set(`${kind}:${key}`, n);
+    lines.push({kind, key: n > 1 ? `${key}-${n}`.slice(0, 60) : key, label: label.slice(0, 100), count: null, amountCents});
+  };
+  for (const [index, [, cells]] of ordered.entries()) {
+    if (index < startIndex) continue;
+    if (index > startIndex && isStart(cells.get(labelColumn))) break;
+    const label = cells.get(labelColumn), amount = toCents(cells.get(amountColumn));
+    if (typeof label === 'string' && label.trim() && amount !== null && (amount !== 0 || index === startIndex)) {
+      const text = norm(label), key = slug(label);
+      if (index === startIndex) push('balance', 'register-start', label.trim(), amount);
+      else if (/^zustatek$/.test(text)) push('balance', 'register', label.trim(), amount);
+      // The cash part of the revenue (the card part is beside it): already in the daily report, kept only as a total.
+      else if (/^trzba\b/.test(text)) push('total', key, label.trim(), amount);
+      else if (/^(vklad|odvod|zaloh)/.test(text) || amount < 0) push('movement', key, label.trim(), amount);
+      else if (JOURNAL_PAYOUT.test(text)) push('payout', key, label.trim(), amount);
+      else push('expense', key, label.trim(), amount);
+    }
+    // The cash count: a label with its amount right next to it, right of the journal.
+    for (const [column, value] of cells) {
+      if (column <= amountColumn || typeof value !== 'string' || !value.trim()) continue;
+      const counted = toCents(cells.get(column + 1));
+      if (counted === null || counted === 0) continue;
+      count.set(slug(value), {label: value.trim(), amountCents: counted});
+    }
+  }
+  for (const [key, entry] of count) push(key === 'trezor' ? 'balance' : 'cash_count', key === 'trezor' ? 'safe' : key, entry.label, entry.amountCents);
+  // What was counted against what the journal says should be there: positive = more cash than expected.
+  const counted = lines.find(entry => entry.kind === 'cash_count' && entry.key === 'celkem'), expected = lines.find(entry => entry.kind === 'balance' && entry.key === 'register');
+  if (counted && expected && counted.amountCents) push('total', 'cash-difference', 'Rozdíl přepočtu a zůstatku', counted.amountCents - expected.amountCents);
+  return lines;
+}
+
+/** The "Peněžní deník" workbook: the day's block of the journal, or the column of the business day, on the first sheet that has one. */
 export function extractCashBook(sheets: Sheet[], businessDate: string): ReportLine[] | null {
   for (const sheet of sheets) {
+    const journal = extractJournal(sheet, businessDate);
+    if (journal) return journal;
+  }
+  // A journal without the day has no column for it either: any amount equal to the date's serial would be read as one.
+  for (const sheet of sheets.filter(sheet => !isJournal(sheet))) {
     const found = dayColumn(sheet, businessDate);
     if (found === null) continue;
     const lines: ReportLine[] = [];

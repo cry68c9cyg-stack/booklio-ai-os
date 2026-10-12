@@ -1,4 +1,4 @@
-import {crowns, type Briefing} from './briefing.ts';
+import {CASH_DIFFERENCE_CENTS, crowns, type Briefing} from './briefing.ts';
 
 export type TodoItem = {level: 'warn' | 'info'; text: string; amountCents: number | null};
 const LIMIT = 15;
@@ -11,6 +11,8 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   if (briefing.voids.afterPaymentCount) warn(`Storna po zaplacení: ${briefing.voids.afterPaymentCount}× ${crowns(briefing.voids.afterPaymentCents)}`, briefing.voids.afterPaymentCents);
   for (const row of briefing.cash.filter(row => row.differenceCents !== 0)) warn(`Rozdíl v hotovosti ${row.registerId}: ${row.differenceCents > 0 ? '+' : ''}${crowns(row.differenceCents)}`, row.differenceCents);
   if (briefing.report?.safeCents != null && briefing.report.safeCents < 0) warn(`Trezor je v deníku záporný: ${crowns(briefing.report.safeCents)}`, briefing.report.safeCents);
+  const difference = briefing.report?.cashDifferenceCents ?? null;
+  if (difference !== null && Math.abs(difference) >= CASH_DIFFERENCE_CENTS) warn(`Přepočet pokladny nesedí s deníkem: ${difference > 0 ? '+' : ''}${crowns(difference)}`, difference);
   if (briefing.bottleCheckMissing) warn('Ranní kontrola lahví chybí.');
   for (const row of briefing.bottles?.losses ?? []) warn(`Manko ${row.name}: −${row.lossMl} ml (${crowns(row.lossCents)})`, row.lossCents);
   for (const point of briefing.notes?.points ?? []) items.push({level: point.kind === 'incident' || point.kind === 'problem' ? 'warn' : 'info', text: point.text, amountCents: point.amountCents});
