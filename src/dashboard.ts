@@ -159,6 +159,11 @@ function weekCard(w) {
   rows.push('<tr><td>Rezervace (hosté)</td><td class="n">' + n.reservations + ' (' + n.guests + ')' + vs(n.guests, p.guests) + '</td><td class="n muted">' + p.reservations + ' (' + p.guests + ')</td></tr>');
   const ns = x => x.noShowGuests + ' ' + (x.guests ? '(' + Math.round(x.noShowGuests / x.guests * 100) + ' %)' : '');
   rows.push('<tr><td>Nedorazilo hostů</td><td class="n' + (n.noShowGuests ? ' warn' : '') + '">' + ns(n) + '</td><td class="n muted">' + ns(p) + '</td></tr>');
+  const lead = x => x.lead ? x.lead.sameDay + ' / ' + x.lead.upTo2 + ' / ' + x.lead.upTo7 + ' / ' + x.lead.more : '–';
+  if (n.lead && n.lead.sameDay + n.lead.upTo2 + n.lead.upTo7 + n.lead.more) rows.push('<tr><td>Rezervováno předem <span class="muted">(týž den / 1–2 dny / 3–7 dní / víc)</span></td><td class="n">' + lead(n) + '</td><td class="n muted">' + lead(p) + '</td></tr>');
+  const srcName = k => ({web: 'web', obsluha: 'obsluha', mcp: 'AI asistenti'})[k] || k;
+  const src = x => (x.sources || []).map(r => esc(srcName(r.source)) + ' ' + r.reservations + (r.noShowGuests && r.guests ? ' <span class="warn">(' + Math.round(r.noShowGuests / r.guests * 100) + ' % nedorazilo)</span>' : '')).join(', ') || '–';
+  if ((n.sources || []).length) rows.push('<tr><td>Odkud rezervace</td><td class="n">' + src(n) + '</td><td class="n muted">' + src(p) + '</td></tr>');
   if (n.cancelled || p.cancelled) rows.push('<tr><td>Zrušené rezervace</td><td class="n">' + (n.cancelled || 0) + '</td><td class="n muted">' + (p.cancelled || 0) + '</td></tr>');
   rows.push('<tr><td>Návštěvy webu</td><td class="n">' + (n.visits === null ? '–' : num(n.visits) + (p.visits !== null && p.visitDays === n.visitDays ? vs(n.visits, p.visits) : '')) + '</td><td class="n muted">' + (p.visits === null ? '–' : num(p.visits)) + '</td></tr>');
   const stars = t => t === null ? '' : ', ' + (t / 10).toFixed(1).replace('.', ',') + ' ★';
@@ -200,7 +205,8 @@ function forecastCard(f) {
   const round = c => c === null ? null : Math.round(c / 100000) * 100000;
   const days = ['ne', 'po', 'út', 'st', 'čt', 'pá', 'so'], wd = d => days[new Date(d + 'T12:00:00Z').getUTCDay()];
   const m = f.month, missing = m.elapsedDays - m.actualDays;
-  const week = (f.days || []).map(d => '<tr><td>' + wd(d.date) + ' ' + short(d.date) + '</td><td class="n">' + kc(round(d.cents)) + (d.boost > 1 ? ' <span class="muted">(+' + Math.round((d.boost - 1) * 100) + ' % rezervace)</span>' : '') +
+  const lift = d => { const e = d.eventBoost || 1; return e > d.boost ? ' <span class="muted">(+' + Math.round((e - 1) * 100) + ' % akce)</span>' : d.boost > 1 ? ' <span class="muted">(+' + Math.round((d.boost - 1) * 100) + ' % rezervace)</span>' : ''; };
+  const week = (f.days || []).map(d => '<tr><td>' + wd(d.date) + ' ' + short(d.date) + ((d.events || []).length ? '<div class="muted">' + d.events.map(esc).join(', ') + '</div>' : '') + '</td><td class="n">' + kc(round(d.cents)) + lift(d) +
     '</td><td class="n' + (d.boost > 1 ? ' warn' : '') + '">' + d.guests + (d.usualGuests !== null ? ' <span class="muted">/ ' + d.usualGuests + '</span>' : '') + '</td><td class="muted">' + esc(d.weatherText || '–') + '</td></tr>').join('');
   const rows = [];
   rows.push('<tr><td>7 dní od dneška <span class="muted">(' + short(f.week.from) + '–' + short(f.week.to) + ')</span></td><td class="n">' + kc(round(f.week.cents)) + '</td></tr>');
@@ -213,7 +219,9 @@ function forecastCard(f) {
     (f.accuracy ? '<p>Odhad se za ' + f.accuracy.days + ' dní lišil od skutečnosti v průměru o <b>' + Math.round(f.accuracy.errorPermille / 10) + ' %</b>.</p>' : '<p class="muted">Přesnost odhadu se ukáže po 7 dnech provozu.</p>') +
     '<p class="muted">Průměr stejného dne v týdnu za poslední 4 týdny' +
     (seasons.length ? ', upravený podle loňska (' + esc(seasons.join(', ')) + ')' : '; loňská data na sezónnost zatím nejsou') +
-    '. Výrazně víc potvrzených hostů než obvykle (aspoň o 10) zvýší odhad dne o polovinu toho rozdílu, nejvýš o 50 %. Počasí: MET Norway.</p></div>';
+    '. Výrazně víc potvrzených hostů než obvykle (aspoň o 10) zvýší odhad dne o polovinu toho rozdílu, nejvýš o 50 %. ' +
+    (f.eventFactor && f.eventFactor.factor > 1 ? 'Den s akcí bývá o ' + Math.round((f.eventFactor.factor - 1) * 100) + ' % silnější (' + f.eventFactor.days + ' dní s akcí za půl roku); platí větší z obou úprav. ' : 'Vliv akcí se započítá od 4 dní s akcí a tržbou. ') +
+    'Počasí: MET Norway.</p></div>';
 }
 
 // Who sends data to OKO1 and when it last arrived; a sender silent too long is marked.
@@ -249,8 +257,9 @@ function render(data) {
     (b.report.cashDifferenceCents !== null && b.report.cashDifferenceCents !== undefined ? '<div>rozdíl přepočtu <b class="' + (Math.abs(b.report.cashDifferenceCents) >= 50000 ? 'warn' : '') + '">' + (b.report.cashDifferenceCents > 0 ? '+' : '') + kc(b.report.cashDifferenceCents) + '</b></div>' : '') +
     (data.balances.bank !== undefined ? '<div>banka <b>' + kc(data.balances.bank) + '</b></div>' : '') + '<div>výdaje z kasy <b>' + kc(b.report.expensesCents) + '</b></div><div>výplaty v hotovosti <b>' + kc(b.report.payoutsCents) + '</b></div></div>');
   const rv = b.reservations, hosts = n => n + ' ' + (n === 1 ? 'host' : n >= 2 && n <= 4 ? 'hosté' : 'hostů');
+  const ev = (b.events || []).length ? '<div>dnes akce: ' + b.events.map(e => esc(e.time) + ' ' + esc(e.label) + ' <b>' + esc(e.title) + '</b>' + (e.guests ? ' (' + hosts(e.guests) + ')' : '')).join(', ') + '</div>' : '';
   const pa = b.pendingAhead ? '<div class="warn">příštích 7 dní čeká na potvrzení ' + b.pendingAhead.count + ' (' + hosts(b.pendingAhead.guests) + '), nejbližší ' + esc(czDate(b.pendingAhead.first.date)) + ' ' + esc(b.pendingAhead.first.time) + '</div>' : '';
-  if (!rv && pa) cards.push('<div class="card"><h2>Rezervace</h2>' + pa + '</div>');
+  if (!rv && (pa || ev)) cards.push('<div class="card"><h2>Rezervace</h2>' + ev + pa + '</div>');
   if (rv) cards.push('<div class="card"><h2>Rezervace</h2><div class="big">' + rv.day.confirmed + '</div><div class="muted">' + hosts(rv.day.guests) +
     (rv.day.noShows ? ' · <span class="warn">nedorazilo ' + rv.day.noShows + ' (' + hosts(rv.day.noShowGuests) + ')</span>' : '') + (rv.day.cancelled ? ' · zrušeno ' + rv.day.cancelled : '') + '</div>' +
     '<div>' + esc(czDate(shift(data.businessDate, 1))) + ': <b>' + rv.today.confirmed + '</b> (' + hosts(rv.today.guests) + ')' +
@@ -262,7 +271,7 @@ function render(data) {
       .sort((x, y) => (x.hour + 18) % 24 - (y.hour + 18) % 24).map(r => '<b>' + r.hour + '–' + (r.hour + 1) % 24 + ' h</b> ' + r.guests).join(', ') + '</div>' : '') +
     ((rv.today.groups || []).length ? '<div>skupiny: ' + rv.today.groups.map(g => esc(g.time) + ' ' + esc(g.label) + ' <b>' + g.partySize + '</b>').join(', ') + '</div>' : '') +
     (b.noShows && b.noShows.guests ? '<div class="muted">nedorazilo ' + Math.round(b.noShows.ratePermille / 10) + ' % rezervovaných hostů' + (b.noShows.usualPermille !== null ? ' (obvykle ' + Math.round(b.noShows.usualPermille / 10) + ' %)' : '') + '</div>' : '') +
-    pa + '</div>');
+    ev + pa + '</div>');
   const w = b.web, visits = n => n + ' ' + (n === 1 ? 'návštěva' : n >= 2 && n <= 4 ? 'návštěvy' : 'návštěv');
   if (w) cards.push('<div class="card"><h2>Návštěvnost webu</h2><div class="big">' + w.visits + '</div><div class="muted">' + visits(w.visits) +
     (w.lastWeekVisits !== null ? ' · před týdnem ' + w.lastWeekVisits + (w.lastWeekVisits ? ' (' + signed(pct(w.visits, w.lastWeekVisits)) + ')' : '') : '') + '</div>' +

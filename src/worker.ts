@@ -1,7 +1,7 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
-import {buildBriefing, type Briefing, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
+import {buildBriefing, type Briefing, eventFactor, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
@@ -390,12 +390,14 @@ export class TenantObject extends DurableObject<Env> {
       if (replay) return replay.payload_hash === payloadHash ? ok(JSON.parse(replay.result)) : failure('BATCH_CONFLICT', 409);
       const now = new Date().toISOString();
       let accepted = 0, stale = 0;
-      // A booking first sent with counts only takes its guest details at the same version (resent once, 12 Oct 2026).
+      // A booking first sent with counts only takes its guest details (12 Oct 2026) and the time it was made at the same version (resent once).
       for (const record of batch.records) {
         const changed = this.sql.exec(`INSERT INTO records(type, id, version, business_date, register_id, json, installation_id, received_at) VALUES(?,?,?,?,?,?,?,?)
           ON CONFLICT(type, id) DO UPDATE SET version=excluded.version, business_date=excluded.business_date, register_id=excluded.register_id,
           json=excluded.json, installation_id=excluded.installation_id, received_at=excluded.received_at WHERE excluded.version > records.version
-          OR (excluded.type = 'reservation' AND excluded.version = records.version AND instr(records.json, '"guest":') = 0 AND instr(excluded.json, '"guest":') > 0)`,
+          OR (excluded.type = 'reservation' AND excluded.version = records.version AND instr(records.json, '"guest":') = 0 AND instr(excluded.json, '"guest":') > 0)
+          OR (excluded.type = 'reservation' AND excluded.version = records.version AND instr(records.json, '"createdAt":') = 0 AND instr(excluded.json, '"createdAt":') > 0
+            AND (instr(excluded.json, '"guest":') > 0 OR instr(records.json, '"guest":') = 0))`,
         record.type, record.id, record.version, record.businessDate, 'registerId' in record ? record.registerId : '', JSON.stringify(record), batch.installationId, now).rowsWritten;
         if (changed) accepted++; else stale++;
       }
@@ -556,6 +558,21 @@ export class TenantObject extends DurableObject<Env> {
       FROM (SELECT json_extract(json, '$.status') AS status, json_extract(json, '$.partySize') AS size, json_extract(json, '$.arrival') AS arrival,
         json_extract(json, '$.source') AS source FROM records WHERE type='reservation' AND business_date BETWEEN ? AND ?)`, from, to).toArray()[0];
     for (const key of ['reservations', 'guests', 'noShows', 'noShowGuests', 'webConfirmed', 'cancelled'] as const) part[key] = booked?.[key] ?? 0;
+    // Where the confirmed bookings came from, and how long before their day they were made: only these fields are read.
+    part.sources = this.sql.exec<{source: string | null; reservations: number; guests: number | null; noShowGuests: number | null}>(`SELECT
+        json_extract(json, '$.source') AS source, count(*) AS reservations, SUM(json_extract(json, '$.partySize')) AS guests,
+        SUM(CASE WHEN json_extract(json, '$.arrival') = 'no_show' THEN json_extract(json, '$.partySize') ELSE 0 END) AS noShowGuests
+      FROM records WHERE type='reservation' AND business_date BETWEEN ? AND ? AND json_extract(json, '$.status') = 'confirmed'
+      GROUP BY source ORDER BY reservations DESC, source`, from, to).toArray()
+      .map(row => ({source: row.source ?? 'neuvedeno', reservations: row.reservations, guests: row.guests ?? 0, noShowGuests: row.noShowGuests ?? 0}));
+    const lead = {sameDay: 0, upTo2: 0, upTo7: 0, more: 0}, timeZone = this.config()?.timeZone ?? 'Europe/Prague';
+    for (const row of this.sql.exec<{day: string; created: string | null}>(`SELECT business_date AS day, json_extract(json, '$.createdAt') AS created
+      FROM records WHERE type='reservation' AND business_date BETWEEN ? AND ? AND json_extract(json, '$.status') = 'confirmed'`, from, to)) {
+      if (!row.created) continue;
+      const days = Math.round((Date.parse(row.day) - Date.parse(localTime(new Date(row.created), timeZone).date)) / 86400000);
+      if (days <= 0) lead.sameDay++; else if (days <= 2) lead.upTo2++; else if (days <= 7) lead.upTo7++; else lead.more++;
+    }
+    part.lead = lead;
     for (let date = from; date <= to; date = addDays(date, 1)) {
       const revenue = this.dayRevenue(date);
       if (revenue !== null) { part.revenueCents += revenue; part.revenueDays++; }
@@ -723,7 +740,37 @@ export class TenantObject extends DurableObject<Env> {
     const logged = this.sql.exec<{day: string; cents: number}>('SELECT for_date AS day, cents FROM forecast_log WHERE horizon=0 AND for_date BETWEEN ? AND ?', window.at(-1)!, addDays(date, -1)).toArray();
     const accuracy = forecastAccuracy(logged.map(row => ({forecastCents: row.cents, actualCents: revenue(row.day)}))
       .filter((row): row is {forecastCents: number; actualCents: number} => row.actualCents !== null));
-    return forecast({today, bases, seasonal, monthActual: {cents, days, missing}, bookings, weather, accuracy});
+    // Public events: their names on the 7 days, and how much past event days made against their weekday's average (half a year back).
+    const coming7 = this.events(today, addDays(today, 6));
+    const events: Record<string, string[]> = {};
+    for (const event of coming7) (events[event.date] ??= []).push(event.title);
+    // Each event day against up to 4 earlier same weekdays without an event (8 weeks back): a weekly event has none, so its
+    // weekday average already holds it and the factor stays unknown instead of near 1.
+    const eventDates = new Set(this.events(addDays(date, -182 - 56), date).map(event => event.date));
+    const ratios = [...eventDates].filter(day => day >= addDays(date, -182)).flatMap(day => {
+      const plain = [7, 14, 21, 28, 35, 42, 49, 56].map(back => addDays(day, -back)).filter(entry => !eventDates.has(entry))
+        .map(revenue).filter((value): value is number => value !== null).slice(0, 4);
+      const made = revenue(day), base = planFrom(plain.map(revenueCents => ({revenueCents})));
+      return made !== null && base && base.revenueCents > 0 ? [made / base.revenueCents] : [];
+    });
+    return forecast({today, bases, seasonal, monthActual: {cents, days, missing}, bookings, weather, accuracy, events, eventFactor: eventFactor(ratios)});
+  }
+
+  /** Published events of the venue over a stretch of days, earliest first (public names and times only). */
+  private events(from: string, to: string): {date: string; startsAt: string; section: string; title: string}[] {
+    return this.sql.exec<{date: string; startsAt: string; section: string; title: string}>(`SELECT business_date AS date, json_extract(json, '$.startsAt') AS startsAt,
+        json_extract(json, '$.section') AS section, json_extract(json, '$.title') AS title
+      FROM records WHERE type='event' AND business_date BETWEEN ? AND ? AND json_extract(json, '$.status') = 'published' ORDER BY startsAt, id`, from, to).toArray();
+  }
+
+  /** Today's events with the confirmed guests booked that day in their place (the whole venue for an event of the whole venue). */
+  private todayEvents(config: TenantConfig, date: string): Briefing['events'] {
+    return this.events(date, date).map(event => {
+      const guests = this.sql.exec<{guests: number | null}>(`SELECT SUM(json_extract(json, '$.partySize')) AS guests FROM records WHERE type='reservation'
+        AND business_date=? AND json_extract(json, '$.status') = 'confirmed' AND (? = 'all' OR json_extract(json, '$.section') = ?)`, date, event.section, event.section).toArray()[0]?.guests ?? 0;
+      const local = localTime(new Date(event.startsAt), config.timeZone);
+      return {time: `${local.hour}:${String(local.minute).padStart(2, '0')}`, label: event.section === 'all' ? 'celý podnik' : Object.hasOwn(config.sections, event.section) ? config.sections[event.section] : event.section, title: event.title, guests};
+    });
   }
 
   /** The 7 days up to the reported day against the 7 days before them. */
@@ -746,7 +793,7 @@ export class TenantObject extends DurableObject<Env> {
   /** Dashboard: every kind of sender and type of data with the time it last arrived, plus the last report and cost fetches. No content. */
   private sources(config: TenantConfig) {
     const at = (value: string | null) => value ? stamp(new Date(value), config.timeZone) : null;
-    const names: Record<string, string> = {bill: 'Účty z pokladny', cash_closing: 'Uzávěrky pokladen', bottle_check: 'Kontrola lahví', reservation: 'Rezervace', web_traffic: 'Návštěvnost webu', review_summary: 'Recenze'};
+    const names: Record<string, string> = {bill: 'Účty z pokladny', cash_closing: 'Uzávěrky pokladen', bottle_check: 'Kontrola lahví', reservation: 'Rezervace', web_traffic: 'Návštěvnost webu', review_summary: 'Recenze', event: 'Akce podniku'};
     const report = this.sql.exec<{at: string; found: number}>('SELECT at, found FROM report_fetches ORDER BY at DESC LIMIT 1').toArray()[0];
     const cost = this.sql.exec<{at: string; error: string | null}>('SELECT at, error FROM cost_fetches ORDER BY at DESC LIMIT 1').toArray()[0];
     return {
@@ -768,7 +815,7 @@ export class TenantObject extends DurableObject<Env> {
       week: weekday(date) === 0 ? this.week(date) : null, silent: this.silentSources(config, date, now),
       month: weekday(date) === 0 || addDays(date, 1).endsWith('-01') ? this.month(config, date) : null,
       lastWeekRevenueCents: this.dayRevenue(addDays(date, -7)), discountHistory: this.discountHistory(date),
-      ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast: this.forecast(date), pendingAhead: this.pendingAhead(config, date, now),
+      ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast: this.forecast(date), pendingAhead: this.pendingAhead(config, date, now), events: this.todayEvents(config, addDays(date, 1)),
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};

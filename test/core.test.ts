@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
@@ -377,6 +377,47 @@ test('weather from MET Norway: local days, rain without overlaps, the symbol aro
   assert.equal(weatherText({date: '2026-10-15', minC: 9, maxC: 14, rainMm: 0, symbol: null}), '14 °C');
   assert.deepEqual(weatherDays({}, 'Europe/Prague'), []);
   assert.deepEqual(weatherDays({properties: {timeseries: [{time: 'x'}, null]}}, 'Europe/Prague'), []);
+});
+
+test('events of the venue: contract, the factor from past event days, the forecast and the morning line', () => {
+  const event = {type: 'event', id: 'akce-1', version: 1, businessDate: '2026-10-16', startsAt: '2026-10-16T19:00:00Z', endsAt: '2026-10-17T02:00:00Z', section: 'club', title: 'Rock Night', status: 'published'};
+  assert.deepEqual(validateBatch({batchId: 'batch-ev01', installationId: 'web', records: [event]}).records[0], {...event, startsAt: '2026-10-16T19:00:00.000Z', endsAt: '2026-10-17T02:00:00.000Z'});
+  assert.throws(() => validateBatch({batchId: 'batch-ev02', installationId: 'web', records: [{...event, status: 'draft'}]}), InputError);
+  assert.throws(() => validateBatch({batchId: 'batch-ev03', installationId: 'web', records: [{...event, guests: ['Jan']}]}), InputError, 'nothing about guests');
+  assert.throws(() => validateBatch({batchId: 'batch-ev04', installationId: 'web', records: [{...event, title: 'x'.repeat(201)}]}), InputError);
+  const booking = {type: 'reservation', id: 'r', version: 1, businessDate: '2026-10-16', startsAt: '2026-10-16T18:00:00Z', section: 'club', partySize: 2, status: 'confirmed', arrival: null, source: 'web'};
+  assert.equal((validateBatch({batchId: 'batch-ev05', installationId: 'web', records: [{...booking, createdAt: '2026-10-10T08:00:00Z'}]}).records[0] as Reservation).createdAt, '2026-10-10T08:00:00.000Z');
+  assert.throws(() => validateBatch({batchId: 'batch-ev06', installationId: 'web', records: [{...booking, createdAt: 'včera'}]}), InputError);
+  // The factor: median of the event days against their weekday's average, at least 4 days, 1× to 2×.
+  assert.equal(eventFactor([1.5, 1.2, 1.4]), null);
+  assert.deepEqual(eventFactor([1.5, 1.2, 1.4, 3]), {factor: 1.45, days: 4});
+  assert.deepEqual(eventFactor([0.8, 0.9, 0.7, 0.95]), {factor: 1, days: 4}, 'an event never lowers the day');
+  assert.deepEqual(eventFactor([3, 4, 5, 6, 7]), {factor: 2, days: 5});
+  // The bigger of the bookings and the event counts, never both.
+  const result = forecast({today: '2026-10-14', bases: Array(7).fill(10000000), seasonal: {}, monthActual: {cents: 0, days: 0},
+    bookings: {'2026-10-15': {guests: 100, usualGuests: 50}, '2026-10-16': {guests: 130, usualGuests: 100}},
+    events: {'2026-10-15': ['Quiz'], '2026-10-16': ['Rock Night', 'DJ Set']}, eventFactor: {factor: 1.3, days: 6}});
+  assert.deepEqual(result.days.slice(0, 3).map(day => [day.cents, day.boost, day.eventBoost, day.events]),
+    [[10000000, 1, 1, []], [15000000, 1.5, 1.3, ['Quiz']], [13000000, 1.15, 1.3, ['Rock Night', 'DJ Set']]]);
+  assert.match(renderForecast(result)[0], /^Odhad tržby: zítra \(čt 15\. 10\.\) 150 000 Kč \(akce Quiz, víc rezervací než obvykle\) · /);
+  const later = forecast({today: '2026-10-15', bases: Array(7).fill(10000000), seasonal: {}, monthActual: {cents: 0, days: 0}, events: {'2026-10-16': ['Rock Night']}, eventFactor: {factor: 1.3, days: 6}});
+  assert.match(renderForecast(later)[0], /^Odhad tržby: zítra \(pá 16\. 10\.\) 130 000 Kč \(akce Rock Night, bývá o 30 % víc\) · /);
+  const unknown = forecast({today: '2026-10-15', bases: Array(7).fill(10000000), seasonal: {}, monthActual: {cents: 0, days: 0}, events: {'2026-10-16': ['Rock Night']}, eventFactor: null});
+  assert.match(renderForecast(unknown)[0], /^Odhad tržby: zítra \(pá 16\. 10\.\) 100 000 Kč \(akce Rock Night\) · /, 'without enough past event days the name only');
+  // Today's events in the morning message.
+  assert.deepEqual(renderEvents([]), []);
+  assert.deepEqual(renderEvents([{time: '21:00', label: 'Klub', title: 'Rock Night', guests: 40}, {time: '19:00', label: 'celý podnik', title: 'Halloween', guests: 0}]),
+    ['Dnes akce: 21:00 Klub – Rock Night (rezervováno 40 hostů) · 19:00 celý podnik – Halloween']);
+  const briefing = buildBriefing({businessDate: '2026-10-15', config, bills: [], closings: [], planHistory: [], incomplete: false, events: [{time: '21:00', label: 'Klub', title: 'Rock Night', guests: 2}]});
+  assert.match(renderBriefing('Test', briefing), /\nDnes akce: 21:00 Klub – Rock Night \(rezervováno 2 hosté\)(\n|$)/);
+});
+
+test('weekly bookings: how long ahead and where from', () => {
+  const part = {revenueCents: 0, revenueDays: 0, reservations: 25, guests: 100, noShows: 1, noShowGuests: 4, visits: null, visitDays: 0, webSent: 0, webConfirmed: 0, reviews: 0, rated: 0, starsTenths: null, origins: [],
+    lead: {sameDay: 5, upTo2: 10, upTo7: 8, more: 2}, sources: [{source: 'web', reservations: 15, guests: 50, noShowGuests: 4}, {source: 'obsluha', reservations: 8, guests: 40, noShowGuests: 0}, {source: 'mcp', reservations: 2, guests: 10, noShowGuests: 0}]};
+  assert.deepEqual(renderBooking(part), ['Rezervace za týden: týž den 5 · 1–2 dny předem 10 · 3–7 dní 8 · víc než týden 2 · zdroje: web 15 (nedorazilo 8 % hostů) · obsluha 8 · AI asistenti 2']);
+  assert.deepEqual(renderBooking({...part, lead: {sameDay: 0, upTo2: 0, upTo7: 0, more: 0}, sources: []}), [], 'nothing without the time of booking or sources');
+  assert.equal(renderWeek({from: '2026-10-05', to: '2026-10-11', current: part, previous: part})[1], renderBooking(part)[0]);
 });
 
 test('forecast: clearly more booked guests than usual raise a day by half the extra share (at most 1,5×), weather and how well it hit', () => {
