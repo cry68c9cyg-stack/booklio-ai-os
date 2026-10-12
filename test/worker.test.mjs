@@ -346,6 +346,17 @@ try {
   assert.deepEqual(data.todo.slice(0, 3).map(item => item.text), ['Tržba nesedí s deníkem, Bar: report 150 000 Kč, deník 100 000 Kč',
     'Tržba nesedí s deníkem, Klub: report 180 000 Kč, deník 150 000 Kč', 'Přepočet pokladny nesedí s deníkem: +29 199 Kč'],
     'the synthetic report and cash book differ in the bar and the club; the bigger amount first');
+  // "Vyřízeno": kept per day and item, only with a session, undone by the same switch.
+  assert.ok(data.todo.every(item => /^[a-f0-9]{24}$/.test(item.key) && item.done === false));
+  const first = data.todo[0];
+  assert.equal((await board('POST', '/todo', {date: '2026-10-09', key: first.key, done: true})).status, 401, 'no session, no change');
+  assert.equal((await board('POST', '/todo', {date: '2026-10-09', key: 'x', done: true}, cookieHeader)).status, 400);
+  assert.equal((await board('POST', '/todo', {date: '2026-10-09', key: first.key, done: true}, cookieHeader)).status, 200);
+  const marked = await (await board('GET', '/data?date=2026-10-09', undefined, cookieHeader)).json();
+  assert.deepEqual(marked.todo.filter(item => item.done).map(item => item.text), [first.text]);
+  assert.ok((await (await board('GET', '/data?date=2026-10-10', undefined, cookieHeader)).json()).todo.every(item => !item.done), 'another day is its own list');
+  assert.equal((await board('POST', '/todo', {date: '2026-10-09', key: first.key, done: false}, cookieHeader)).status, 200);
+  assert.ok((await (await board('GET', '/data?date=2026-10-09', undefined, cookieHeader)).json()).todo.every(item => !item.done), 'undone');
   assert.equal((await board('GET', '/data', undefined, {cookie: 'oko1_session=' + 'f'.repeat(64)})).status, 401);
   assert.equal((await mf.dispatchFetch('http://local.test/d/excel-venue/data', {headers: cookieHeader})).status, 200, 'the session works without other headers');
   assert.equal((await mf.dispatchFetch('http://local.test/d/other-venue/data', {headers: cookieHeader})).status, 401, 'a session is valid for its venue only');
