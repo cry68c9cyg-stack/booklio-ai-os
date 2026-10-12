@@ -396,7 +396,8 @@ export class TenantObject extends DurableObject<Env> {
           ON CONFLICT(type, id) DO UPDATE SET version=excluded.version, business_date=excluded.business_date, register_id=excluded.register_id,
           json=excluded.json, installation_id=excluded.installation_id, received_at=excluded.received_at WHERE excluded.version > records.version
           OR (excluded.type = 'reservation' AND excluded.version = records.version AND instr(records.json, '"guest":') = 0 AND instr(excluded.json, '"guest":') > 0)
-          OR (excluded.type = 'reservation' AND excluded.version = records.version AND instr(records.json, '"createdAt":') = 0 AND instr(excluded.json, '"createdAt":') > 0)`,
+          OR (excluded.type = 'reservation' AND excluded.version = records.version AND instr(records.json, '"createdAt":') = 0 AND instr(excluded.json, '"createdAt":') > 0
+            AND (instr(excluded.json, '"guest":') > 0 OR instr(records.json, '"guest":') = 0))`,
         record.type, record.id, record.version, record.businessDate, 'registerId' in record ? record.registerId : '', JSON.stringify(record), batch.installationId, now).rowsWritten;
         if (changed) accepted++; else stale++;
       }
@@ -743,8 +744,13 @@ export class TenantObject extends DurableObject<Env> {
     const coming7 = this.events(today, addDays(today, 6));
     const events: Record<string, string[]> = {};
     for (const event of coming7) (events[event.date] ??= []).push(event.title);
-    const ratios = [...new Set(this.events(addDays(date, -182), date).map(event => event.date))].flatMap(day => {
-      const made = revenue(day), base = planFrom([7, 14, 21, 28].map(back => revenue(addDays(day, -back))).filter((value): value is number => value !== null).map(revenueCents => ({revenueCents})));
+    // Each event day against up to 4 earlier same weekdays without an event (8 weeks back): a weekly event has none, so its
+    // weekday average already holds it and the factor stays unknown instead of near 1.
+    const eventDates = new Set(this.events(addDays(date, -182 - 56), date).map(event => event.date));
+    const ratios = [...eventDates].filter(day => day >= addDays(date, -182)).flatMap(day => {
+      const plain = [7, 14, 21, 28, 35, 42, 49, 56].map(back => addDays(day, -back)).filter(entry => !eventDates.has(entry))
+        .map(revenue).filter((value): value is number => value !== null).slice(0, 4);
+      const made = revenue(day), base = planFrom(plain.map(revenueCents => ({revenueCents})));
       return made !== null && base && base.revenueCents > 0 ? [made / base.revenueCents] : [];
     });
     return forecast({today, bases, seasonal, monthActual: {cents, days, missing}, bookings, weather, accuracy, events, eventFactor: eventFactor(ratios)});
@@ -763,7 +769,7 @@ export class TenantObject extends DurableObject<Env> {
       const guests = this.sql.exec<{guests: number | null}>(`SELECT SUM(json_extract(json, '$.partySize')) AS guests FROM records WHERE type='reservation'
         AND business_date=? AND json_extract(json, '$.status') = 'confirmed' AND (? = 'all' OR json_extract(json, '$.section') = ?)`, date, event.section, event.section).toArray()[0]?.guests ?? 0;
       const local = localTime(new Date(event.startsAt), config.timeZone);
-      return {time: `${local.hour}:${String(local.minute).padStart(2, '0')}`, label: event.section === 'all' ? 'celý podnik' : config.sections[event.section] ?? event.section, title: event.title, guests};
+      return {time: `${local.hour}:${String(local.minute).padStart(2, '0')}`, label: event.section === 'all' ? 'celý podnik' : Object.hasOwn(config.sections, event.section) ? config.sections[event.section] : event.section, title: event.title, guests};
     });
   }
 

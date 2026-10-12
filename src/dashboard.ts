@@ -220,7 +220,7 @@ function forecastCard(f) {
     '<p class="muted">Průměr stejného dne v týdnu za poslední 4 týdny' +
     (seasons.length ? ', upravený podle loňska (' + esc(seasons.join(', ')) + ')' : '; loňská data na sezónnost zatím nejsou') +
     '. Výrazně víc potvrzených hostů než obvykle (aspoň o 10) zvýší odhad dne o polovinu toho rozdílu, nejvýš o 50 %. ' +
-    (f.eventFactor ? 'Den s akcí bývá o ' + Math.round((f.eventFactor.factor - 1) * 100) + ' % silnější (' + f.eventFactor.days + ' dní s akcí za půl roku); platí větší z obou úprav. ' : 'Vliv akcí se započítá od 4 dní s akcí a tržbou. ') +
+    (f.eventFactor && f.eventFactor.factor > 1 ? 'Den s akcí bývá o ' + Math.round((f.eventFactor.factor - 1) * 100) + ' % silnější (' + f.eventFactor.days + ' dní s akcí za půl roku); platí větší z obou úprav. ' : 'Vliv akcí se započítá od 4 dní s akcí a tržbou. ') +
     'Počasí: MET Norway.</p></div>';
 }
 
