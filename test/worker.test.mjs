@@ -845,6 +845,36 @@ try {
   assert.match(nextMorning.text, /\nTržba: 0 Kč \(plán 12 500 Kč, −100 %\)\n/);
   assert.equal((await (await call('GET', '/admin/t/weather-venue/briefing?date=2026-10-14')).json()).briefing.forecast.days[0].weatherText, '14 °C, déšť');
 
+  // Events of the venue: today's events with the guests booked there, the factor from past event days in the forecast, bookings by lead time and source.
+  assert.equal((await call('PUT', '/admin/t/event-venue/config', {...config, registers: [], sections: {diner: 'Diner', bar: 'Bar', club: 'Klub'}})).status, 200);
+  const eventDays = ['2026-07-02', '2026-08-06', '2026-09-10', '2026-10-08'];
+  await call('POST', '/admin/t/event-venue/history', {rows: Array.from({length: 182}, (_, i) => addDays('2026-10-13', -i))
+    .map(day => ({businessDate: day, revenueCents: eventDays.includes(day) ? 1500000 : 1000000}))});
+  await call('POST', '/admin/t/event-venue/pair', {installationId: 'pos-installation-1', token});
+  const venueEvent = (id, businessDate, startsAt, section, title, status = 'published') => ({type: 'event', id, version: 1, businessDate, startsAt, section, title, status});
+  const made = (record, createdAt) => ({...record, createdAt});
+  assert.equal((await ingest('batch-e1', [
+    ...eventDays.map((day, i) => venueEvent(`akce-${i}`, day, `${day}T19:00:00Z`, 'club', `Koncert ${i}`)),
+    venueEvent('akce-dnes', '2026-10-14', '2026-10-14T19:00:00Z', 'club', 'Rock Night'), venueEvent('akce-zrusena', '2026-10-14', '2026-10-14T18:00:00Z', 'diner', 'Zrušená', 'cancelled'),
+    venueEvent('akce-zitra', '2026-10-15', '2026-10-15T18:00:00Z', 'all', 'Halloween'),
+    booking('e1', 1, '2026-10-14', 'club', 6, 'confirmed', null), booking('e2', 1, '2026-10-14', 'diner', 4, 'confirmed', null),
+    made(booking('e3', 1, '2026-10-10', 'club', 4, 'confirmed', 'no_show'), '2026-10-10T08:00:00Z'), made(booking('e4', 1, '2026-10-10', 'diner', 2, 'confirmed', null), '2026-10-08T22:30:00Z'),
+    {...made(booking('e5', 1, '2026-10-09', 'diner', 3, 'confirmed', null), '2026-09-20T10:00:00Z'), source: 'obsluha'}, booking('e6', 1, '2026-10-09', 'bar', 5, 'confirmed', null),
+  ], 'Bearer ' + token, 'event-venue')).status, 200);
+  // A booking first sent without the time it was made takes it at the same version, once.
+  assert.deepEqual(await (await ingest('batch-e2', [made(booking('e6', 1, '2026-10-09', 'bar', 5, 'confirmed', null), '2026-10-05T12:00:00Z')], 'Bearer ' + token, 'event-venue')).json(), {batchId: 'batch-e2', accepted: 1, stale: 0});
+  assert.deepEqual(await (await ingest('batch-e3', [made(booking('e6', 1, '2026-10-09', 'bar', 5, 'confirmed', null), '2026-10-01T12:00:00Z')], 'Bearer ' + token, 'event-venue')).json(), {batchId: 'batch-e3', accepted: 0, stale: 1});
+  const eventMorning = (await (await call('GET', '/admin/t/event-venue/briefing?date=2026-10-13')).json()).briefing;
+  assert.deepEqual(eventMorning.events, [{time: '21:00', label: 'Klub', title: 'Rock Night', guests: 6}], 'the cancelled one left out, only the club\'s guests');
+  assert.deepEqual(eventMorning.forecast.eventFactor, {factor: 1.5, days: 4}, 'four past event days made 1,5× their weekday');
+  assert.deepEqual([eventMorning.forecast.days[1].events, eventMorning.forecast.days[1].eventBoost, eventMorning.forecast.days[1].cents], [['Halloween'], 1.5, 1687500]);
+  const eventText = (await (await call('GET', '/admin/t/event-venue/briefing?date=2026-10-13')).json()).text;
+  assert.match(eventText, /\nDnes akce: 21:00 Klub – Rock Night \(rezervováno 6 hostů\)\n/);
+  assert.match(eventText, /\nOdhad tržby: zítra \(čt 15\. 10\.\) 17 000 Kč \(akce Halloween, bývá o 50 % víc\) · /);
+  const eventWeek = (await (await call('GET', '/admin/t/event-venue/briefing?date=2026-10-11')).json()).briefing.week.current;
+  assert.deepEqual([eventWeek.lead, eventWeek.sources], [{sameDay: 1, upTo2: 1, upTo7: 1, more: 1},
+    [{source: 'web', reservations: 3, guests: 11, noShowGuests: 4}, {source: 'obsluha', reservations: 1, guests: 3, noShowGuests: 0}]]);
+
   // The admin script talks to a real HTTP endpoint: config, rkeeper-style CSV import, preview.
   await mf.dispose();
   mf = new Miniflare({...options, port: 0});

@@ -71,7 +71,7 @@ Manko lahve = `expectedMl − countedMl` (přebytky se s mankem nesčítají), v
 
 Doplněno 9. 10. 2026 zpětně kompatibilně, stejně jako kontrola lahví: AI OS se musí nasadit dřív, než rezervační systém začne rezervace posílat. Zdrojem je rezervační systém (Booklio), který se páruje jako samostatná instalace se svým `installationId` a tokenem.
 
-`{type: "reservation", id, version, businessDate, startsAt, section, partySize, status, arrival?, source?, guest?}`
+`{type: "reservation", id, version, businessDate, startsAt, section, partySize, status, arrival?, source?, createdAt?, guest?}`
 
 | Pole | Typ | Poznámka |
 |---|---|---|
@@ -83,6 +83,7 @@ Doplněno 9. 10. 2026 zpětně kompatibilně, stejně jako kontrola lahví: AI O
 | `status` | `pending` \| `confirmed` \| `declined` \| `expired` \| `cancelled` | čeká, potvrzená, odmítnutá, propadlá, zrušená (hostem i obsluhou) |
 | `arrival` | `arrived` \| `no_show` \| `null` | zápis obsluhy, zda host dorazil |
 | `source` | string \| `null` | odkud rezervace přišla, např. `web`, `obsluha`, `mcp` |
+| `createdAt` | ISO čas, nepovinné | kdy rezervace vznikla (jak dlouho dopředu se rezervuje); doplněno 12. 10. 2026 zpětně kompatibilně. Rezervace poslaná dřív bez něj ho přijme jednou i se stejnou `version` |
 | `guest` | objekt, nepovinné | údaje hosta, viz níže; doplněno 12. 10. 2026 zpětně kompatibilně |
 
 Údaje hosta (`guest`, rozhodnutí MC 12. 10. 2026) jsou osobní údaje. OKO1 je drží jen ve své databázi provozovny v EU. Do archivu R2, denního exportu ani do ranní zprávy nejdou, ranní přehled dál ukazuje jen počty: potvrzené rezervace za vykazovaný den s počtem hostů a no-show, a potvrzené rezervace na právě začínající den po střediscích s počtem čekajících na potvrzení. Na rezervace přehled nečeká. Když rezervační systém rezervaci anonymizuje, pošle ji znovu s vyšší `version` a prázdnými údaji; OKO1 tím údaje přepíše.
@@ -136,6 +137,23 @@ Doplněno 12. 10. 2026 zpětně kompatibilně. Web posílá každou hodinu souhr
 | `failed` | int ≥ 0 | odpovědi, které se nepodařilo odeslat |
 
 Ranní zpráva ukáže nové recenze, průměr hvězdiček, počet se 3 ★ a méně a co čeká v adminu (jen když je co hlásit); slabé recenze, recenze pro vedení a neodeslané odpovědi jdou do seznamu k vyřízení; dashboard má kartu „Recenze“. Týdenní a měsíční souhrn počítá průměr hvězdiček za týden a měsíc a hlásí pokles proti 4 týdnům předtím.
+
+### Akce podniku (`event`)
+
+Doplněno 12. 10. 2026 zpětně kompatibilně. Web posílá veřejné akce podniku z adminu (koncerty, večírky, přenosy): kdy, kde a veřejný název. Nic o hostech. Zrušená akce přijde znovu se `status: cancelled` a vyšší `version`.
+
+`{type: "event", id, version, businessDate, startsAt, endsAt?, section, title, status}`
+
+| Pole | Typ | Poznámka |
+|---|---|---|
+| `id`, `version` | string, int ≥ 1 | `version` = čas poslední změny v ms |
+| `businessDate` | `YYYY-MM-DD` | provozní den akce (noc v klubu patří ke dni, kdy začíná) |
+| `startsAt`, `endsAt` | ISO čas, ISO čas \| `null` | začátek a konec |
+| `section` | string | středisko (`diner`, `bar`, `club`), `all` = celý podnik |
+| `title` | string ≤ 200 | veřejný název akce |
+| `status` | `published` \| `cancelled` | zveřejněná, zrušená |
+
+Ranní zpráva ukáže dnešní akce s počtem potvrzených hostů rezervovaných ten den v jejich prostoru; odhad tržby u dne s akcí použije, kolik dny s akcí za posledních 26 týdnů obvykle udělaly proti průměru svého dne v týdnu (medián, aspoň 4 dny, jen zvýšení 1–2×; s rezervacemi navíc platí větší z obou). Dashboard ukazuje akce v tabulce odhadu na 7 dní.
 
 ## Kdy posílat
 

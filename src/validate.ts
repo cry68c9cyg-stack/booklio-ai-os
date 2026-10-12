@@ -32,7 +32,17 @@ export type ReservationGuest = {
 export type Reservation = {
   type: 'reservation'; id: string; version: number; businessDate: string; startsAt: string; section: string; partySize: number;
   status: 'pending' | 'confirmed' | 'declined' | 'expired' | 'cancelled'; arrival: 'arrived' | 'no_show' | null; source: string | null;
+  /** When the booking was made (optional): how far ahead guests book. */
+  createdAt?: string;
   guest?: ReservationGuest;
+};
+/**
+ * A public event of the venue from the website (concert, party, sports night): when, where and its public name.
+ * Nothing about guests. A cancelled event stays with `status: cancelled`; the higher `version` overwrites.
+ */
+export type VenueEvent = {
+  type: 'event'; id: string; version: number; businessDate: string; startsAt: string; endsAt: string | null; section: string;
+  title: string; status: 'published' | 'cancelled';
 };
 const GUEST_FIELDS = ['code', 'name', 'contactType', 'contact', 'milkshake', 'wish', 'note', 'reason', 'language', 'origin', 'tables'];
 /** The record without guest details, for anything that leaves the venue's database (archive, export). */
@@ -61,7 +71,7 @@ export type ReviewSummary = {
   waiting: number; forManagement: number; failed: number;
 };
 export const RESERVATION_STATUSES = ['pending', 'confirmed', 'declined', 'expired', 'cancelled'] as const;
-export type IngestRecord = Bill | CashClosing | BottleCheck | Reservation | WebTraffic | ReviewSummary;
+export type IngestRecord = Bill | CashClosing | BottleCheck | Reservation | WebTraffic | ReviewSummary | VenueEvent;
 export type Batch = {batchId: string; installationId: string; records: IngestRecord[]};
 
 export type TenantConfig = {
@@ -190,14 +200,25 @@ function guest(raw: unknown): ReservationGuest {
 }
 
 function reservation(raw: Obj): Reservation {
-  const value = object(raw, ['type', 'id', 'version', 'businessDate', 'startsAt', 'section', 'partySize', 'status'], ['arrival', 'source', 'guest']);
+  const value = object(raw, ['type', 'id', 'version', 'businessDate', 'startsAt', 'section', 'partySize', 'status'], ['arrival', 'source', 'createdAt', 'guest']);
   if (!(RESERVATION_STATUSES as readonly unknown[]).includes(value.status)) fail();
   if (value.arrival != null && value.arrival !== 'arrived' && value.arrival !== 'no_show') fail();
   return {
     type: 'reservation', id: id(value.id), version: int(value.version, 1, Number.MAX_SAFE_INTEGER), businessDate: date(value.businessDate), startsAt: instant(value.startsAt),
     section: id(value.section), partySize: int(value.partySize, 1, 1000), status: value.status as Reservation['status'],
     arrival: (value.arrival ?? null) as Reservation['arrival'], source: value.source == null ? null : id(value.source),
+    ...(value.createdAt == null ? {} : {createdAt: instant(value.createdAt)}),
     ...(value.guest === undefined ? {} : {guest: guest(value.guest)}),
+  };
+}
+
+function venueEvent(raw: Obj): VenueEvent {
+  const value = object(raw, ['type', 'id', 'version', 'businessDate', 'startsAt', 'section', 'title', 'status'], ['endsAt']);
+  if (value.status !== 'published' && value.status !== 'cancelled') fail();
+  return {
+    type: 'event', id: id(value.id), version: int(value.version, 1, Number.MAX_SAFE_INTEGER), businessDate: date(value.businessDate),
+    startsAt: instant(value.startsAt), endsAt: value.endsAt == null ? null : instant(value.endsAt), section: id(value.section),
+    title: text(value.title, 200), status: value.status as VenueEvent['status'],
   };
 }
 
@@ -245,6 +266,7 @@ export function validateBatch(raw: unknown): Batch {
       if (row?.type === 'reservation') return reservation(row);
       if (row?.type === 'web_traffic') return webTraffic(row);
       if (row?.type === 'review_summary') return reviewSummary(row);
+      if (row?.type === 'event') return venueEvent(row);
       return fail();
     }),
   };

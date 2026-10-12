@@ -43,6 +43,8 @@ export type Briefing = {
   } | null;
   /** Bookings for the next 7 days (from tomorrow) still waiting for the staff to confirm them. */
   pendingAhead: {count: number; guests: number; first: {date: string; time: string}} | null;
+  /** Public events of the venue on the day that is starting (from the website): time, place, name and confirmed guests booked there that day. */
+  events: {time: string; label: string; title: string; guests: number}[];
   /** The website on the reported calendar day, against the same weekday a week before. `null` = the website sent nothing. */
   web: {visits: number; withAction: number; lastWeekVisits: number | null; reservationsSent: number; reviewScans: number; topOrigins: {name: string; visits: number}[]} | null;
   /** Reviews that reached the website's admin on the reported calendar day, and how many wait there. `null` = nothing sent. */
@@ -71,6 +73,10 @@ export type Briefing = {
 export type WeekPart = {revenueCents: number; revenueDays: number; reservations: number; guests: number; noShows: number; noShowGuests: number;
   /** Bookings for these days that were cancelled (by the guest or the staff); a week stored before this field has none. */
   cancelled?: number;
+  /** Confirmed bookings by how long before their day they were made (only those sent with `createdAt`). */
+  lead?: {sameDay: number; upTo2: number; upTo7: number; more: number};
+  /** Confirmed bookings and guests by where they came from (`web`, `obsluha`, `mcp`…), most first. */
+  sources?: {source: string; reservations: number; guests: number; noShowGuests: number}[];
   visits: number | null; visitDays: number; webSent: number; webConfirmed: number; reviews: number; rated: number; starsTenths: number | null;
   /** Website visits by where they came from, with the visits that booked, called or navigated; most visits first. */
   origins: {key: string; name: string; visits: number; withAction: number}[]};
@@ -89,7 +95,9 @@ export type Month = {
 export type DiscountHistory = {days: number; totals: Record<string, number>};
 export type UnusualDiscount = {key: string; label: string; amountCents: number; usualCents: number};
 /** One of the next 7 days: forecast (with the bookings boost), confirmed guests against the weekday's usual, weather. */
-export type ForecastDay = {date: string; cents: number | null; guests: number; usualGuests: number | null; boost: number; weather: WeatherDay | null; weatherText: string | null};
+export type ForecastDay = {date: string; cents: number | null; guests: number; usualGuests: number | null; boost: number; weather: WeatherDay | null; weatherText: string | null;
+  /** Public events of the venue that day (names) and how much an event raises the day (1 = not known or no event). */
+  events?: string[]; eventBoost?: number};
 /** Revenue forecast; a part is `null` when a weekday it needs has under two weeks of revenue. */
 export type Forecast = {
   today: string;
@@ -104,6 +112,8 @@ export type Forecast = {
   nextMonth: {month: string; cents: number | null};
   /** Last year's seasonality applied per month (1 = none); only months with enough data from last year. */
   seasonal: Record<string, number>;
+  /** How much an event day usually makes against its weekday's average (median of past event days, at least 4); `null` = not enough of them yet. */
+  eventFactor?: {factor: number; days: number} | null;
 };
 export type Week = {from: string; to: string; current: WeekPart; previous: WeekPart; reviewsUsual?: ReviewStats | null; reviewDrop?: boolean};
 export type MonthResult = {
@@ -285,15 +295,18 @@ const nextMonthOf = (month: string) => { const [year, number] = month.split('-')
  * × last year's seasonality of its month (`seasonal`, missing = 1). Sums are `null` when any day in them has no base.
  */
 export function forecast(input: {today: string; bases: (number | null)[]; seasonal: Record<string, number>; monthActual: {cents: number; days: number; missing?: string[]};
-  bookings?: Record<string, {guests: number; usualGuests: number | null}>; weather?: WeatherDay[]; accuracy?: Forecast['accuracy']}): Forecast {
+  bookings?: Record<string, {guests: number; usualGuests: number | null}>; weather?: WeatherDay[]; accuracy?: Forecast['accuracy'];
+  events?: Record<string, string[]>; eventFactor?: Forecast['eventFactor']}): Forecast {
   const boost = (date: string) => {
     const booked = input.bookings?.[date];
     if (!booked?.usualGuests || booked.usualGuests < BOOKING_MIN_GUESTS || booked.guests - booked.usualGuests < BOOKING_MIN_GUESTS) return 1;
     return Math.min(BOOKING_BOOST_MAX, Math.round((1 + (booked.guests / booked.usualGuests - 1) / 2) * 100) / 100);
   };
+  const eventBoost = (date: string) => input.events?.[date]?.length && input.eventFactor ? input.eventFactor.factor : 1;
+  // More bookings and an event both mean a fuller day: the bigger of the two counts, never both.
   const day = (date: string) => {
     const base = input.bases[weekday(date)];
-    return base === null || base === undefined ? null : Math.round(base * (input.seasonal[date.slice(0, 7)] ?? 1) * boost(date));
+    return base === null || base === undefined ? null : Math.round(base * (input.seasonal[date.slice(0, 7)] ?? 1) * Math.max(boost(date), eventBoost(date)));
   };
   const sum = (from: string, to: string) => {
     let total = 0;
@@ -308,7 +321,8 @@ export function forecast(input: {today: string; bases: (number | null)[]; season
   return {
     today: input.today,
     days: Array.from({length: 7}, (_, i) => addDays(input.today, i)).map(date => ({date, cents: day(date),
-      guests: input.bookings?.[date]?.guests ?? 0, usualGuests: input.bookings?.[date]?.usualGuests ?? null, boost: boost(date), weather: weather.get(date) ?? null, weatherText: weather.has(date) ? weatherText(weather.get(date)!) : null})),
+      guests: input.bookings?.[date]?.guests ?? 0, usualGuests: input.bookings?.[date]?.usualGuests ?? null, boost: boost(date), weather: weather.get(date) ?? null, weatherText: weather.has(date) ? weatherText(weather.get(date)!) : null,
+      events: input.events?.[date] ?? [], eventBoost: eventBoost(date)})),
     accuracy: input.accuracy ?? null,
     tomorrow: {date: addDays(input.today, 1), cents: day(addDays(input.today, 1))},
     week: {from: input.today, to: addDays(input.today, 6), cents: sum(input.today, addDays(input.today, 6))},
@@ -316,7 +330,17 @@ export function forecast(input: {today: string; bases: (number | null)[]; season
       restCents, totalCents: restCents === null ? null : input.monthActual.cents + restCents},
     nextMonth: {month: next, cents: sum(next + '-01', monthEnd(next))},
     seasonal: input.seasonal,
+    eventFactor: input.eventFactor ?? null,
   };
+}
+
+/** Event factor = median of event days' revenue against their weekday's average; at least 4 days, only raising (1–2×). */
+export const EVENT_MIN_DAYS = 4;
+export function eventFactor(ratios: number[]): Forecast['eventFactor'] {
+  if (ratios.length < EVENT_MIN_DAYS) return null;
+  const sorted = [...ratios].sort((a, b) => a - b), middle = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  return {factor: Math.round(Math.min(2, Math.max(1, median)) * 100) / 100, days: ratios.length};
 }
 
 /** Plan = average revenue of the same weekday over the previous weeks that have data (at least two). */
@@ -335,7 +359,7 @@ export function buildBriefing(input: {
   reviews?: ReviewSummary;
   week?: Week | null; silent?: {name: string; since: string}[];
   month?: Month | null; lastWeekRevenueCents?: number | null; forecast?: Forecast | null;
-  pendingAhead?: Briefing['pendingAhead'];
+  pendingAhead?: Briefing['pendingAhead']; events?: Briefing['events'];
   /** The forecast OKO1 made for this day the morning before (its "plan for today"); wins over the weekday average. */
   forecastPlanCents?: number | null;
   /** The plan the message about this day gave for the next one (kept), so an old day shows what was sent. */
@@ -425,6 +449,7 @@ export function buildBriefing(input: {
     outlook: forecastOutlook(outlook(input.reservationsToday ?? [], input.todayPlanHistory ?? [], input.todayGuestHistory ?? []), input.forecast ?? null, input.todayPlanCents ?? null),
     forecast: input.forecast ?? null,
     pendingAhead: input.pendingAhead ?? null,
+    events: input.events ?? [],
     noShows: noShowRate(input.reservations ?? [], input.noShowHistory ?? null),
     unusualDiscounts: report ? unusualDiscounts(report, input.discountHistory ?? {days: 0, totals: {}}) : [],
     silent: input.silent ?? [],
@@ -475,6 +500,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderReport(briefing));
   lines.push(...renderBottles(briefing));
   lines.push(...renderReservations(briefing.reservations, briefing.outlook));
+  lines.push(...renderEvents(briefing.events));
   if (briefing.pendingAhead) lines.push(`Na příštích 7 dní ${pendingAheadText(briefing.pendingAhead)}`);
   if (noShowAlarm(briefing.noShows)) lines.push(`⚠ No-show: ${noShowText(briefing.noShows!)}`);
   lines.push(...renderForecast(briefing.forecast));
@@ -617,9 +643,37 @@ export function renderWeek(week: Briefing['week']): string[] {
     + (now.webSent || now.webConfirmed ? ` · rezervační formulář odeslán ${now.webSent}× · potvrzené rezervace z webu na tyto dny ${now.webConfirmed}` : ''));
   if (now.reviews) parts.push(`recenze ${now.reviews}${now.starsTenths !== null ? `, průměr ${stars(now.starsTenths)}` : ''}`);
   const lines = parts.length ? [`Týden ${shortDate(week.from)}–${shortDate(week.to)}: ${parts.join(' · ')}`] : [];
+  lines.push(...renderBooking(now));
   if (now.origins.length) lines.push('Odkud na web za týden: ' + now.origins.slice(0, 5).map(row => `${row.name} ${group(row.visits)}${row.withAction ? ` (${group(row.withAction)} s akcí)` : ''}`).join(' · '));
   if (reviewDrop(week)) lines.push(`⚠ Recenze: ${reviewDropText(week)}`);
   return lines;
+}
+
+/** "Dnes akce: 21:00 Klub – Rock Night (rezervováno 40 hostů)" */
+export function renderEvents(events: Briefing['events'] | undefined): string[] {
+  if (!events?.length) return [];
+  return ['Dnes akce: ' + events.map(row => `${row.time} ${row.label} – ${row.title}${row.guests ? ` (rezervováno ${row.guests} ${guestsWord(row.guests)})` : ''}`).join(' · ')];
+}
+
+const SOURCE_NAMES: Record<string, string> = {web: 'web', obsluha: 'obsluha', mcp: 'AI asistenti'};
+/** "Rezervace za týden: týž den 5 · 1–2 dny předem 10 · … · zdroje: web 15 (nedorazilo 4 % hostů) · obsluha 8" */
+export function renderBooking(part: WeekPart): string[] {
+  const parts: string[] = [];
+  const lead = part.lead;
+  if (lead && lead.sameDay + lead.upTo2 + lead.upTo7 + lead.more > 0) parts.push(`týž den ${lead.sameDay} · 1–2 dny předem ${lead.upTo2} · 3–7 dní ${lead.upTo7} · víc než týden ${lead.more}`);
+  const sources = (part.sources ?? []).filter(row => row.reservations);
+  if (sources.length) parts.push('zdroje: ' + sources.map(row => `${SOURCE_NAMES[row.source] ?? row.source} ${row.reservations}`
+    + (row.noShowGuests && row.guests ? ` (nedorazilo ${percent(Math.round(row.noShowGuests / row.guests * 1000))} hostů)` : '')).join(' · '));
+  return parts.length ? [`Rezervace za týden: ${parts.join(' · ')}`] : [];
+}
+
+/** Why a day is higher: its events (and how much an event day usually makes more) or clearly more bookings; the bigger one is applied. */
+function bracket(day: ForecastDay | undefined): string {
+  if (!day) return '';
+  const event = day.eventBoost ?? 1, notes: string[] = [];
+  if (day.events?.length) notes.push(`akce ${day.events.join(', ')}${event > 1 && event >= day.boost ? `, bývá o ${Math.round((event - 1) * 100)} % víc` : ''}`);
+  if (day.boost > 1 && day.boost > event) notes.push('víc rezervací než obvykle');
+  return notes.length ? ` (${notes.join(', ')})` : '';
 }
 
 const thousands = (cents: number) => crowns(Math.round(cents / 100000) * 100000);
@@ -630,7 +684,7 @@ export function renderForecast(forecast: Briefing['forecast']): string[] {
   const parts: string[] = [];
   const next = forecast.days?.[1];
   if (forecast.tomorrow.cents !== null) parts.push(`zítra (${weekdayShort[weekday(forecast.tomorrow.date)]} ${shortDate(forecast.tomorrow.date)}) ${thousands(forecast.tomorrow.cents)}`
-    + (next && next.boost > 1 ? ' (víc rezervací než obvykle)' : '') + (next?.weatherText ? `, ${next.weatherText}` : ''));
+    + bracket(next) + (next?.weatherText ? `, ${next.weatherText}` : ''));
   if (forecast.week.cents !== null) parts.push(`7 dní od dneška ${thousands(forecast.week.cents)}`);
   const month = forecast.month, missing = month.elapsedDays - month.actualDays;
   if (month.totalCents !== null) parts.push(`${monthName(month.month)} celkem ${thousands(month.totalCents)}`
