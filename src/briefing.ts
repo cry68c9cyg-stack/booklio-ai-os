@@ -156,8 +156,9 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(revenue);
   if (briefing.bySection.length > 1) lines.push(briefing.bySection.map(row => `${row.label} ${crowns(row.revenueCents)}`).join(' · '));
   if (briefing.source !== 'report') lines.push(`Účty ${briefing.bills} · hosté ${briefing.guests}${briefing.averageBillCents === null ? '' : ` · průměrný účet ${crowns(briefing.averageBillCents)}`}`);
-  const paid = briefing.payments.reduce((sum, row) => sum + row.amountCents, 0);
-  if (paid > 0) lines.push('Platby: ' + briefing.payments.map(row => `${methods[row.method] ?? row.method} ${Math.round(row.amountCents / paid * 100)} %`).join(', '));
+  // Shares of what was paid in; a negative cash part (more on cards than the bill) is shown as an amount.
+  const paid = briefing.payments.filter(row => row.amountCents > 0).reduce((sum, row) => sum + row.amountCents, 0);
+  if (paid > 0) lines.push('Platby: ' + briefing.payments.map(row => `${methods[row.method] ?? row.method} ${row.amountCents < 0 ? crowns(row.amountCents) : `${Math.round(row.amountCents / paid * 100)} %`}`).join(', '));
   const control = [`slevy ${crowns(briefing.discountsCents)}`, `storna ${briefing.voids.count}× ${crowns(briefing.voids.amountCents)}`];
   if (briefing.cancelledBills) control.push(`zrušené účty ${briefing.cancelledBills}`);
   lines.push('Kontrola: ' + control.join(' · '));

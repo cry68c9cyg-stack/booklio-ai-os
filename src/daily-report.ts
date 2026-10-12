@@ -183,6 +183,8 @@ const JOURNAL_PAYOUT = /^(security|tanecnice|dj|popelar|hosteska|barback|uklizec
  * the revenue per section ("Tržba …"), and ends with "Zůstatek". Beside the block is the evening cash count
  * (Euro, Dolar, …, Trezor, Hotovost, Celkem).
  */
+/** Prefix of the revenue lines taken from the cash book: a fallback, never "the managers' report". */
+export const JOURNAL_LABEL = 'Deník: ';
 const isStartLabel = (value: CellValue | undefined) => typeof value === 'string' && /^pocatecni stav$/.test(norm(value));
 const isJournal = (sheet: Sheet) => [...sheet.cells.values()].some(cells => [...cells.values()].some(isStartLabel));
 /** Whether the workbook is a cash book kept as a journal (whatever the day). */
@@ -206,6 +208,14 @@ function extractJournal(sheet: Sheet, businessDate: string): ReportLine[] | null
   }
   const amountColumn = [...votes].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]?.[0];
   if (amountColumn === undefined) return null;
+  // Headers of the revenue columns (cards, customer cards, total): beside "Počáteční stav", or in the nearest row above
+  // that has them (the first block of a book uses the sheet's header row and leaves the total unnamed, right of "ZK").
+  const headerCells = [startCells, ...ordered.slice(0, startIndex).reverse().map(([, cells]) => cells)]
+    .find(cells => [...cells].some(([column, value]) => column > amountColumn && typeof value === 'string' && /^karty$/.test(norm(value)))) ?? startCells;
+  const header = (pattern: RegExp) => [...headerCells].find(([column, value]) => column > amountColumn && typeof value === 'string' && pattern.test(norm(value)))?.[0];
+  const cardColumn = header(/^karty$/), customerColumn = header(/^(zakaznicke karty|zk)$/);
+  const totalColumn = header(/^trzba celkem$/) ?? (customerColumn === undefined ? undefined : customerColumn + 1);
+  const sections = new Map<string, {label: string; amountCents: number}>(), payments: [string, string, number | null][] = [], filled: boolean[] = [];
   // A block can have an opening and a closing cash count beside it: the last value of each label wins.
   const count = new Map<string, {label: string; amountCents: number}>();
   const lines: ReportLine[] = [], used = new Map<string, number>();
@@ -218,12 +228,29 @@ function extractJournal(sheet: Sheet, businessDate: string): ReportLine[] | null
     if (index < startIndex) continue;
     if (index > startIndex && isStart(cells.get(labelColumn))) break;
     const label = cells.get(labelColumn), amount = toCents(cells.get(amountColumn));
-    if (typeof label === 'string' && label.trim() && amount !== null && (amount !== 0 || index === startIndex)) {
+    // Revenue rows count even when their cash part is zero: the cards and the total are beside it.
+    const revenueRow = index !== startIndex && typeof label === 'string' && /^trzba\b/.test(norm(label));
+    if (typeof label === 'string' && label.trim() && amount !== null && (amount !== 0 || index === startIndex || revenueRow)) {
       const text = norm(label), key = slug(label);
       if (index === startIndex) push('balance', 'register-start', label.trim(), amount);
       else if (/^zustatek$/.test(text)) push('balance', 'register', label.trim(), amount);
-      // The cash part of the revenue (the card part is beside it): already in the daily report, kept only as a total.
-      else if (/^trzba\b/.test(text)) push('total', key, label.trim(), amount);
+      // The cash part of the revenue (the card part is beside it): kept as a total; the section revenue is below.
+      else if (revenueRow) {
+        if (amount) push('total', key, label.trim(), amount);
+        const total = totalColumn === undefined ? null : toCents(cells.get(totalColumn));
+        if (/hotovost|celkem/.test(text)) {
+          payments.push(['cash', 'Hotovost', amount], ['card', 'Karty', cardColumn === undefined ? null : toCents(cells.get(cardColumn))],
+            ['customer_card', 'Zákaznické karty', customerColumn === undefined ? null : toCents(cells.get(customerColumn))], ['payments', 'Tržba celkem', total]);
+        } else if (total !== null) {
+          const section = /texaco|club|klub/.test(text) ? 'club' : /\bnoc\b/.test(text) ? 'bar' : /\bden\b/.test(text) ? 'diner' : null;
+          if (section && !/texaco/.test(text)) filled.push(total !== 0);
+          if (section) {
+            const previous = sections.get(section);
+            sections.set(section, {label: previous ? `${previous.label} + ${label.trim()}` : label.trim(), amountCents: (previous?.amountCents ?? 0) + total});
+          }
+          if (/texaco/.test(text) && total) push('revenue_register', 'texaco', `${JOURNAL_LABEL}${label.trim()}`, total);
+        }
+      }
       else if (/^(vklad|odvod|zaloh)/.test(text) || amount < 0) push('movement', key, label.trim(), amount);
       else if (JOURNAL_PAYOUT.test(text)) push('payout', key, label.trim(), amount);
       else push('expense', key, label.trim(), amount);
@@ -235,6 +262,15 @@ function extractJournal(sheet: Sheet, businessDate: string): ReportLine[] | null
       if (counted === null || counted === 0) continue;
       count.set(slug(value), {label: value.trim(), amountCents: counted});
     }
+  }
+  // Revenue by section from the journal (Texaco belongs to the club, as in the daily report). Labels say where it came from,
+  // so that the daily report, when there is one, takes precedence and a journal alone does not count as the day's report.
+  // Only a finished day: every section row filled in (a night still running has zeros) and the sections add up to the total.
+  const sectionSum = [...sections.values()].reduce((sum, entry) => sum + entry.amountCents, 0);
+  const summary = payments.find(([key]) => key === 'payments')?.[2] ?? null;
+  if (sections.size && filled.length && filled.every(Boolean) && summary === sectionSum) {
+    for (const [section, entry] of sections) push('revenue_section', section, `${JOURNAL_LABEL}${entry.label}`, entry.amountCents);
+    for (const [key, label, amountCents] of payments) if (amountCents) push(key === 'payments' ? 'total' : 'payment', key, `${JOURNAL_LABEL}${label}`, amountCents);
   }
   for (const [key, entry] of count) push(key === 'trezor' ? 'balance' : 'cash_count', key === 'trezor' ? 'safe' : key, entry.label, entry.amountCents);
   // What was counted against what the journal says should be there: positive = more cash than expected.

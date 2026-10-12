@@ -141,25 +141,29 @@ export const reportSheetsDated = () => ({
 
 /** Synthetic cash book as a journal: a block per day from "Počáteční stav" (with the date) to "Zůstatek", cash count beside it. */
 export const journalSheets = () => {
-  const row = (date: number | null, text: string | null, amount: number | null, side: [string, number] | null = null) =>
-    [date, null, text, amount, null, null, null, null, null, null, null, null, side?.[0] ?? null, side?.[1] ?? null];
+  const row = (date: number | null, text: string | null, amount: number | null, side: [string, number] | null = null, revenue: (string | number)[] | null = null) =>
+    [date, null, text, amount, null, null, null, revenue?.[0] ?? null, null, revenue?.[1] ?? null, revenue?.[2] ?? null, null, side?.[0] ?? null, side?.[1] ?? null];
+  const headers = ['Karty', 'Zákaznické karty', 'Tržba celkem'];
   return {
     List1: [
       [null, 'Doklad', 'Text', 'Hotovost'],
       row(46303, 'Počáteční stav', 100000),
       row(null, 'Dodavatel A', 999),
       row(null, 'Zůstatek', 99001),
-      row(46304, 'Počáteční stav', 99001),
+      row(46304, 'Počáteční stav', 99001, null, headers),
       row(null, 'Dodavatel B', 2000),
       row(null, 'Vklad JD', -50000),
       row(null, 'Prodej oleje', -1000),
       row(null, null, 0, ['Euro', 40000]),
-      row(null, 'Tržba Restaurace den', 3000, ['Trezor', 30000]),
+      row(null, 'Tržba Restaurace den', 3000, ['Trezor', 30000], [47000, 0, 50000]),
       row(null, 'Security', 6000, ['Hotovost', 100000]),
       row(null, 'DJ', 4000, ['Celkem', 170000]),
       row(null, 'DJ oprava světel', 1500),
       row(null, 'Zkouška barman', 700),
-      row(null, 'Tržba hotovost + karty celkem + ZK', 5000),
+      row(null, 'Tržba Restaurace noc', 2000, null, [98000, 0, 100000]),
+      row(null, 'Tržba Texaco bar', 0, null, [40000, 0, 40000]),
+      row(null, 'Tržba Club', 0, null, [110000, 0, 110000]),
+      row(null, 'Tržba hotovost + karty celkem + ZK', 5000, null, [295000, 0, 300000]),
       row(null, 'Zůstatek', 140801),
       row(46305, 'Počáteční stav', 140801),
       row(null, 'Dodavatel C', 300),

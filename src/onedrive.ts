@@ -2,7 +2,7 @@
  * Reads the managers' Excel files from a OneDrive folder shared with a read-only link ("anyone with the link can view").
  * No Microsoft account or app for OKO1: the share link is the only credential, and it can only read.
  */
-import {extractCashBook, extractDailyReport, isJournalBook, type DailyReport} from './daily-report.ts';
+import {extractCashBook, extractDailyReport, isJournalBook, JOURNAL_LABEL, type DailyReport} from './daily-report.ts';
 import {readXlsx} from './xlsx.ts';
 
 export type FetchedFile = {name: string; bytes: Uint8Array};
@@ -154,6 +154,10 @@ export async function reportFromFiles(files: FetchedFile[], businessDate: string
     }
   }
   if (!lines.length && !notes.length) return null;
+  // The daily report's revenue and payments win over the cash book's.
+  const reported = lines.some(entry => entry.kind === 'revenue_section' && !entry.label.startsWith(JOURNAL_LABEL));
+  if (reported) lines.splice(0, lines.length, ...lines.filter(entry => !entry.label.startsWith(JOURNAL_LABEL)));
+  else if (lines.some(entry => entry.kind === 'revenue_section')) problems.push('Denní report chybí, tržby jsou jen z peněžního deníku.');
   if (!lines.some(entry => entry.kind === 'revenue_section')) problems.push('V reportu chybí tržby po částech.');
   return {businessDate, source: 'onedrive', files: used.map(name => name.slice(0, 200)), lines, notes: notes.join('\n').slice(0, 5000) || null, warnings: problems.slice(0, 50).map(text => text.slice(0, 300))};
 }

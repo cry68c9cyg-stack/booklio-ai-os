@@ -109,11 +109,13 @@ function render(data) {
     (b.plan ? 'plán ' + kc(b.plan.revenueCents) + ' (' + signed(pct(b.revenueCents, b.plan.revenueCents)) + ')' : 'plán zatím není') +
     (sameDayLastWeek && sameDayLastWeek.revenueCents ? ' · před týdnem ' + kc(sameDayLastWeek.revenueCents) + ' (' + signed(pct(b.revenueCents, sameDayLastWeek.revenueCents)) + ')' : '') + '</div>' +
     '<div class="muted">zdroj: ' + (imported !== null ? 'import historie (jen součet)' : ({pos: 'pokladna', report: 'report manažerů', none: 'zatím žádná data'})[b.source]) + '</div></div>');
-  const paid = b.payments.reduce((s, p) => s + p.amountCents, 0);
+  const paid = b.payments.filter(p => p.amountCents > 0).reduce((s, p) => s + p.amountCents, 0);
   const names = {cash: 'hotovost', card: 'karty', customer_card: 'zákaznické karty', voucher: 'poukazy', transfer: 'převod'};
-  cards.push('<div class="card"><h2>Platby</h2>' + (paid ? b.payments.map(p => '<div>' + esc(names[p.method] ?? p.method) + ' <b>' + kc(p.amountCents) + '</b> <span class="muted">' + Math.round(p.amountCents / paid * 100) + ' %</span></div>').join('') : '<span class="muted">bez dat</span>') + '</div>');
+  cards.push('<div class="card"><h2>Platby</h2>' + (paid ? b.payments.map(p => '<div>' + esc(names[p.method] ?? p.method) + ' <b>' + kc(p.amountCents) + '</b>' + (p.amountCents > 0 ? ' <span class="muted">' + Math.round(p.amountCents / paid * 100) + ' %</span>' : '') + '</div>').join('') : '<span class="muted">bez dat</span>') + '</div>');
   cards.push('<div class="card"><h2>Slevy a storna</h2><div class="big">' + kc(b.discountsCents) + '</div><div class="muted">' + (b.revenueCents ? Math.round(b.discountsCents / b.revenueCents * 1000) / 10 + ' % tržby · ' : '') + 'storna ' + b.voids.count + '× ' + kc(b.voids.amountCents) + '</div></div>');
   if (b.report) cards.push('<div class="card"><h2>Peníze</h2><div>trezor <b class="' + (b.report.safeCents < 0 ? 'warn' : '') + '">' + (b.report.safeCents === null ? '–' : kc(b.report.safeCents)) + '</b></div>' +
+    (data.balances.register !== undefined ? '<div>kasa podle deníku <b>' + kc(data.balances.register) + '</b></div>' : '') +
+    (b.report.cashDifferenceCents !== null && b.report.cashDifferenceCents !== undefined ? '<div>rozdíl přepočtu <b class="' + (Math.abs(b.report.cashDifferenceCents) >= 50000 ? 'warn' : '') + '">' + (b.report.cashDifferenceCents > 0 ? '+' : '') + kc(b.report.cashDifferenceCents) + '</b></div>' : '') +
     (data.balances.bank !== undefined ? '<div>banka <b>' + kc(data.balances.bank) + '</b></div>' : '') + '<div>výdaje z kasy <b>' + kc(b.report.expensesCents) + '</b></div><div>výplaty v hotovosti <b>' + kc(b.report.payoutsCents) + '</b></div></div>');
   let html = '<div class="grid">' + cards.join('') + '</div>';
   html += '<div class="card"><h2>K vyřízení</h2>' + (data.todo.length ? '<ul>' + data.todo.map(t => '<li class="' + (t.level === 'warn' ? 'warn' : '') + '">' + esc(t.text) + '</li>').join('') + '</ul>' : '<span class="ok">Nic k vyřízení.</span>') + '</div>';

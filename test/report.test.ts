@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {buildBriefing, renderBriefing} from '../src/briefing.ts';
-import {extractCashBook, extractDailyReport, line, toCents, total, validateDailyReport, type DailyReport} from '../src/daily-report.ts';
+import {extractCashBook, extractDailyReport, JOURNAL_LABEL, line, toCents, total, validateDailyReport, type DailyReport} from '../src/daily-report.ts';
 import {parseAnalysis, pseudonymise, restore} from '../src/notes.ts';
 import {allowedUrl, pickFiles, reportFromFiles, shareId} from '../src/onedrive.ts';
 import {InputError, validateConfig, type TenantConfig} from '../src/validate.ts';
@@ -109,6 +109,43 @@ test('cash book as a journal: the closing count wins, no day column guessed, a l
   const lone = (await reportFromFiles([{name: 'sdileny-soubor.xlsx', bytes: await xlsx(journalSheets())}], '2026-10-09'))!;
   assert.equal(lone.notes, null);
   assert.equal(total(lone, 'payout'), 1070000);
+});
+
+test('cash book as a journal: revenue by section as a fallback, the daily report wins', async () => {
+  const lines = extractCashBook(await readXlsx(await xlsx(journalSheets())), '2026-10-09')!;
+  assert.deepEqual(lines.filter(entry => entry.kind === 'revenue_section').map(entry => [entry.key, entry.amountCents, entry.label.startsWith(JOURNAL_LABEL)]),
+    [['diner', 5000000, true], ['bar', 10000000, true], ['club', 15000000, true]], 'Texaco belongs to the club');
+  assert.equal(line({lines}, 'revenue_register', 'texaco')!.amountCents, 4000000);
+  assert.deepEqual(['cash', 'card'].map(key => line({lines}, 'payment', key)!.amountCents), [500000, 29500000]);
+  assert.equal(line({lines}, 'payment', 'customer_card'), null, 'zero is left out');
+  assert.equal(line({lines}, 'total', 'payments')!.amountCents, 30000000);
+  const alone = (await reportFromFiles([{name: 'Peněžní deník.xlsx', bytes: await xlsx(journalSheets())}], '2026-10-09'))!;
+  assert.equal(total(alone, 'revenue_section'), 30000000);
+  assert.deepEqual(alone.warnings, ['Denní report chybí, tržby jsou jen z peněžního deníku.']);
+  const both = (await reportFromFiles([
+    {name: 'Peněžní deník.xlsx', bytes: await xlsx(journalSheets())},
+    {name: 'Denní report 9.10.2026.xlsx', bytes: await xlsx(reportSheetsDated())},
+  ], '2026-10-09'))!;
+  assert.ok(!both.lines.some(entry => entry.label.startsWith(JOURNAL_LABEL)), 'no double revenue');
+  assert.equal(line(both, 'payment', 'cash')!.amountCents, 2000000, 'payments from the daily report');
+});
+
+test('cash book as a journal: an unfinished day gives no revenue; a negative cash part is shown as an amount', async () => {
+  const sheet = {List1: [
+    [46305, null, 'Počáteční stav', 1000, null, null, null, 'Karty', null, 'Zákaznické karty', 'Tržba celkem'],
+    [null, null, 'Tržba Restaurace den', 500, null, null, null, 7000, null, 0, 7500],
+    [null, null, 'Tržba Restaurace noc', 0, null, null, null, 0, null, 0, 0],
+    [null, null, 'Tržba Club', 0, null, null, null, 0, null, 0, 0],
+    [null, null, 'Tržba hotovost + karty celkem + ZK', 500, null, null, null, 7000, null, 0, 7500],
+    [null, null, 'Zůstatek', 1500],
+  ]};
+  const lines = extractCashBook(await readXlsx(await xlsx(sheet)), '2026-10-10')!;
+  assert.ok(!lines.some(entry => entry.kind === 'revenue_section' || entry.kind === 'payment'), 'a night still running is not the day\'s revenue');
+  const briefing = buildBriefing({businessDate: '2026-10-09', config, bills: [], closings: [], planHistory: [], incomplete: false, report: {
+    businessDate: '2026-10-09', source: 'admin', files: [], notes: null, warnings: [], lines: [
+      {kind: 'revenue_section', key: 'bar', label: 'Bar', count: null, amountCents: 100000},
+      {kind: 'payment', key: 'card', label: 'Karty', count: null, amountCents: 105000}, {kind: 'payment', key: 'cash', label: 'Hotovost', count: null, amountCents: -5000}]}});
+  assert.match(renderBriefing('Testovací podnik', briefing), /\nPlatby: karta 100 %, hotovost −50 Kč\n/);
 });
 
 test('OneDrive: a report with the date in its header is the report, not a cash book', async () => {

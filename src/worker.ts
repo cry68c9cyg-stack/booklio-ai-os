@@ -6,7 +6,7 @@ import {todoList} from './todo.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate} from './schedule.ts';
 import {addDays, isDate} from './time.ts';
-import {validateDailyReport, type DailyReport} from './daily-report.ts';
+import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-report.ts';
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
 import {InputError, validateBatch, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type TenantConfig} from './validate.ts';
@@ -91,8 +91,10 @@ export class TenantObject extends DurableObject<Env> {
       if (route === 'admin/report' && method === 'PUT') return ok(this.saveReport(validateDailyReport(body)));
       if (route === 'admin/report' && method === 'GET') return isDate(query.date) ? ok({report: this.report(query.date), notes: this.notes(query.date)}) : failure('INVALID_REQUEST', 400);
       if (route === 'admin/fetch' && method === 'POST') {
-        const date = (body as {date?: unknown})?.date;
+        const {date, keep} = (body ?? {}) as {date?: unknown; keep?: unknown};
         if (!isDate(date)) return failure('INVALID_REQUEST', 400);
+        // Loading history must not replace a day that already has the managers' daily report.
+        if (keep === true && this.hasReport(date)) return ok({found: true, kept: true, warnings: []});
         return ok(await this.fetchReport(tenant, date));
       }
       if (route === 'admin/config' && method === 'PUT') return this.saveConfig(tenant, body);
@@ -337,9 +339,10 @@ export class TenantObject extends DurableObject<Env> {
     return this.sql.exec<{revenue_cents: number}>('SELECT revenue_cents FROM history WHERE business_date=?', date).toArray()[0]?.revenue_cents ?? null;
   }
 
-  /** A stored report counts only when it has revenue: a cash book column alone is not the day's report. */
+  /** A stored report counts only when the managers' daily report has revenue: the cash book alone is not the day's report. */
   private hasReport(date: string): boolean {
-    return this.sql.exec("SELECT 1 FROM report_lines WHERE business_date=? AND kind='revenue_section' LIMIT 1", date).toArray().length > 0;
+    return this.sql.exec("SELECT 1 FROM report_lines WHERE business_date=? AND kind='revenue_section' AND substr(label, 1, ?) <> ? LIMIT 1",
+      date, JOURNAL_LABEL.length, JOURNAL_LABEL).toArray().length > 0;
   }
 
   /** The day is ready when the managers' report is in, or when every register has closed. */

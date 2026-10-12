@@ -6,7 +6,7 @@ Přechodný zdroj dat, než poběží Pexeso (specifikace OKO1 §4). Manažeři 
 
 - **Složka na OneDrive** sdílená odkazem „kdokoli s odkazem může zobrazit“. Odkaz je jediné oprávnění OKO1 a umí jen číst. Do Gitu nepatří: je v tajemství repozitáře `ONEDRIVE_REPORTS_LINK` a nasazení ho vloží do nastavení provozovny James Dean jako `reportsLink`. Povolené jsou jen odkazy `https://` na `1drv.ms`, `onedrive.live.com` a `*.sharepoint.com`.
 - **Kdy:** jen v hodinách ranní zprávy, tedy 7:00, 8:00 a 9:00 (pravidlo MC z 10. 10. 2026), a jen dokud report za den nemá. V 9:00 odejde zpráva vždy, případně s upozorněním „Report chybí“.
-- **Které soubory:** denní report je sešit s datem dne v názvu (např. `Denní report 9.10.2026.xlsx`, `09_10_26`). Peněžní deník je sešit, jehož název obsahuje „deník“, a OKO1 z něj bere jen blok daného dne; je-li deníků víc (např. po měsících), stáhne tři nejnovější a použije ten, který den má. Sešit s tržbami po částech je vždy denní report, i když má datum v záhlaví. „Bilance.xls“ (starý formát .xls) a „Graf.xlsx“ OKO1 nepotřebuje: totéž je v deníku a v reportu. Za hotový report se počítá jen report s tržbami po částech: samotný deník nestačí a OKO1 to zkusí znovu v další hodině. Prohledá kořen složky a nejvýš pět podsložek, od nejnovější. Soubory nad 10 MB a dočasné soubory Excelu (`~$…`) se přeskočí. Odkaz na jediný sešit se čte celý.
+- **Které soubory:** denní report je sešit s datem dne v názvu (např. `Denní report 9.10.2026.xlsx`, `09_10_26`). Peněžní deník je sešit, jehož název obsahuje „deník“, a OKO1 z něj bere jen blok daného dne; je-li deníků víc (např. po měsících), stáhne tři nejnovější a použije ten, který den má. Sešit s tržbami po částech je vždy denní report, i když má datum v záhlaví. „Bilance.xls“ (starý formát .xls) a „Graf.xlsx“ OKO1 nepotřebuje: totéž je v deníku a v reportu. Za hotový report se počítá jen denní report s tržbami po částech: samotný deník nestačí a OKO1 to zkusí znovu v další hodině. Když denní report chybí i v 9:00, vezmou se tržby po částech a platby z deníku (řádky s popiskem `Deník: …`, upozornění „Denní report chybí, tržby jsou jen z peněžního deníku“). Když denní report je, jeho tržby a platby mají přednost a řádky z deníku se zahodí. Prohledá kořen složky a nejvýš pět podsložek, od nejnovější. Soubory nad 10 MB a dočasné soubory Excelu (`~$…`) se přeskočí. Odkaz na jediný sešit se čte celý.
 - **Archiv:** stažené soubory se beze změny uloží do R2 v EU (`t/{tenant}/onedrive/{datum}/{soubor}`).
 
 **Neověřeno na skutečném odkazu.** Čtení bez přihlášení přes `api.onedrive.com` funguje u osobního OneDrive; firemní OneDrive (SharePoint, `*.sharepoint.com`) ho obvykle nepustí. Pak OKO1 uloží upozornění „sdílený odkaz nejde otevřít bez přihlášení“ a náhradní cestu zařídí Claude bez práce MC. Ověří se hned s odkazem od Matěje.
@@ -26,6 +26,7 @@ Podle popisků v řádcích. **Ověřeno na skutečných souborech za 9. 10. 202
 | `payment` | denní report | Hotovost → `cash`, Karty → `card`, Zákaznické karty → `customer_card` |
 | `discount` | denní report | Odpisy…, Promo…, Personál, Sleva N %, MŽ, IG, Cosmo…: počet a Kč |
 | `void` | denní report | Storno: počet a Kč |
+| `revenue_section`, `revenue_register`, `payment` | deník (záloha) | řádky „Tržba …“ se sloupci Karty, Zákaznické karty (ZK), Tržba celkem: den → `diner`, noc → `bar`, Club + Texaco → `club`, Texaco → `texaco`; řádek „Tržba hotovost + karty …“ → `cash`, `card`, `customer_card` a `total`/`payments`. Popisek začíná `Deník: ` |
 | `total` | oba | Celkem podle výjezdů → `payments`; „Celkem“ v bloku „Slevy“ / „Slevy a odpisy“ → `discounts`; řádky „Tržba …“ v deníku (hotovostní část tržby, jen pro kontrolu); `cash-difference` = přepočet Celkem − Zůstatek (kladné = v kase je víc) |
 | `balance` | deník | Počáteční stav → `register-start`, Zůstatek → `register`, Trezor z přepočtu → `safe` (starší rozvržení: Banka → `bank`, Trezor → `safe`, Pokladna → `register`) |
 | `movement` | deník | Vklad…, Odvod…, Záloha… a každý záporný řádek (peníze do kasy, nejsou to výdaje) |
@@ -46,6 +47,8 @@ Text řádku „Report dne“ (také „Poznámky“, „Události“) a jméno 
 ```
 
 Stejný tvar přijímá `PUT /admin/t/{tenant}/report` (oprava dne, import historie). Neznámá pole se odmítnou (400).
+
+**Historie:** starší dny se načtou z peněžního deníku na OneDrive ručním spuštěním nasazení (Actions → Nasazení OKO1 → Run workflow, pole „od“ a „do“). Excely ani jejich výtahy se do Gitu nedávají, ani šifrovaně. Pro soubory, které už máte u sebe, je `node scripts/admin.ts import <tenant> <složka> <od> <do> [--dry-run]`.
 
 ## Ranní zpráva z reportu
 

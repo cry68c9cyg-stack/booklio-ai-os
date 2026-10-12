@@ -6,6 +6,13 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      fetch_from:
+        description: 'Načíst z OneDrive dny od (YYYY-MM-DD), např. historii z peněžního deníku'
+        required: false
+      fetch_to:
+        description: 'do (YYYY-MM-DD)'
+        required: false
 
 concurrency: deploy-production
 
@@ -77,6 +84,24 @@ jobs:
             fi
             echo "$out" | jq -c '(.reportsLink |= (if . then "nastaven" else null end)) | del(.recipients)'
             rm "$RUNNER_TEMP/$tenant.json"
+          done
+      - name: Načtení dnů z OneDrive (jen ručně spuštěné nasazení s rozsahem dnů)
+        if: github.event_name == 'workflow_dispatch' && (inputs.fetch_from != '' || inputs.fetch_to != '')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AI_OS_URL: https://oko1.rr7whdyyhf.workers.dev
+          FROM: ${{ inputs.fetch_from }}
+          TO: ${{ inputs.fetch_to }}
+        run: |
+          export AI_OS_ADMIN_SECRET=$(printf '%s' oko1-admin | openssl dgst -sha256 -hmac "$CLOUDFLARE_API_TOKEN" -r | cut -d' ' -f1)
+          to=${TO:-$FROM}
+          [[ "$FROM" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && "$to" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && ! "$FROM" > "$to" ]] || { echo "::error::Rozsah dnů musí být YYYY-MM-DD a „od“ nejpozději „do“."; exit 1; }
+          (( ($(date -u -d "$to" +%s) - $(date -u -d "$FROM" +%s)) / 86400 < 62 )) || { echo "::error::Najednou nejvýš 62 dnů."; exit 1; }
+          d="$FROM"; n=0
+          while [[ ! "$d" > "$to" ]] && (( n < 62 )); do
+            # Days that already have the managers' daily report stay as they are; a failed day does not stop the others.
+            node scripts/admin.ts fetch james-dean "$d" --keep | jq -c --arg d "$d" '{den: $d, nalezeno: .found, ponechano: (.kept // false), upozorneni: .warnings}' || echo "::warning::Den $d se nenačetl."
+            d=$(date -u -d "$d + 1 day" +%F); n=$((n + 1))
           done
       - name: SMS brána (BulkGate, případně Twilio), jen když jsou tajemství vyplněná
         env:
