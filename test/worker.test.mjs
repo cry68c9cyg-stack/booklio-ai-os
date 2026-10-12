@@ -116,6 +116,11 @@ try {
   assert.equal((await ingest('batch-0003p', [{...reviewDay, text: 'Super'}])).status, 400, 'no text');
   assert.equal((await ingest('batch-0003q', [{...reviewDay, sources: [{...reviewDay.sources[0], stars: [1, 2, 3, 4]}]}])).status, 400, 'five star counts');
   assert.equal((await ingest('batch-0003r', [reviewDay])).status, 200);
+  // Who sends and when (admin): installations, last batches and types, never the records themselves.
+  const status = await (await call('GET', '/admin/t/test-venue/ingest')).json();
+  assert.deepEqual(status.installations.map(row => row.installationId), ['pos-installation-1']);
+  assert.ok(status.installations[0].lastSeenAt && status.batches.length && status.records.some(row => row.type === 'review_summary' && row.count === 1));
+  assert.ok(!JSON.stringify(status).includes('Burger'), 'no record content');
   const sent = await tick('2026-10-09T06:00:00Z'); // 8:00 local
   assert.equal(sent.decision, 'send');
   assert.equal(sent.businessDate, '2026-10-08');

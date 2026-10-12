@@ -131,6 +131,7 @@ export class TenantObject extends DurableObject<Env> {
       if (route === 'admin/logout' && method === 'POST') { const ended = this.sql.exec('DELETE FROM sessions').rowsWritten; return ok({ended}); }
       if (route === 'admin/history' && method === 'POST') return this.importHistory(body);
       if (route === 'admin/briefing' && method === 'GET') return this.preview(query.date);
+      if (route === 'admin/ingest' && method === 'GET') return ok(this.ingestStatus());
       if (route === 'admin/briefings' && method === 'GET') return ok(this.sql.exec('SELECT business_date AS businessDate, status, incomplete, text, created_at AS createdAt FROM briefings ORDER BY business_date DESC LIMIT 60').toArray());
       if (route === 'admin/tick' && method === 'POST') {
         const at = (body as {at?: unknown})?.at;
@@ -338,6 +339,16 @@ export class TenantObject extends DurableObject<Env> {
       if (!old) this.sql.exec('INSERT INTO installations(installation_id, token_hash, paired_at) VALUES(?,?,?)', installationId, hash, new Date().toISOString());
       return ok({installationId});
     });
+  }
+
+  /** Admin: who sends data and when it last arrived (installations, last batches, records per type). No record content. */
+  private ingestStatus() {
+    return {
+      installations: this.sql.exec('SELECT installation_id AS installationId, paired_at AS pairedAt, last_seen_at AS lastSeenAt FROM installations ORDER BY installation_id').toArray(),
+      batches: this.sql.exec('SELECT installation_id AS installationId, received_at AS receivedAt, result FROM batches ORDER BY received_at DESC LIMIT 10').toArray()
+        .map(row => ({...row, result: JSON.parse(row.result as string)})),
+      records: this.sql.exec('SELECT type, count(*) AS count, max(received_at) AS lastReceivedAt FROM records GROUP BY type ORDER BY type').toArray(),
+    };
   }
 
   private ingest(tenant: string, body: unknown, token: string | null): Result {
@@ -579,7 +590,7 @@ export class Registry extends DurableObject<Env> {
 const routes: Record<string, string[]> = {
   'v1/ingest': ['POST'], 'admin/config': ['GET', 'PUT'], 'admin/pair': ['POST'], 'admin/history': ['POST'],
   'admin/briefing': ['GET'], 'admin/briefings': ['GET'], 'admin/tick': ['POST'], 'admin/report': ['GET', 'PUT'], 'admin/fetch': ['POST'], 'admin/logout': ['POST'],
-  'admin/web': ['GET'],
+  'admin/web': ['GET'], 'admin/ingest': ['GET'],
 };
 
 async function readBody(request: Request, limit: number): Promise<unknown | Result> {
