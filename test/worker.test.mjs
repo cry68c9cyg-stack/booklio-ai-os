@@ -122,6 +122,11 @@ try {
   assert.deepEqual([outlookDay.outlook.usualGuests, outlookDay.noShows], [6, null], 'Thursdays 8. 10. (4 + 2 guests) and 1. 10. (5 guests)');
   const sunday = (await (await call('GET', '/admin/t/test-venue/briefing?date=2026-10-11')).json()).briefing;
   assert.deepEqual([sunday.week.current.guests, sunday.week.current.noShowGuests, sunday.week.current.webSent, sunday.week.current.webConfirmed], [19, 2, 4, 6]);
+  assert.deepEqual(sunday.week.current.origins, [{key: 'google', name: 'Google hledání', visits: 60, withAction: 6}, {key: 'instagram', name: 'Instagram', visits: 40, withAction: 5}],
+    'website origins summed over the week, most visits first, none without visits');
+  assert.deepEqual([sunday.week.current.reviews, sunday.week.current.rated, sunday.week.current.starsTenths, sunday.week.reviewsUsual.rated], [4, 4, 43, 0]);
+  const monthEnd = (await (await call('GET', '/admin/t/test-venue/briefing?date=2026-10-31')).json()).briefing;
+  assert.deepEqual(monthEnd.month.reviews, {reviews: 4, rated: 4, starsTenths: 43}, 'reviews of the month on its last day');
   // Who sends and when (admin): installations, last batches and types, never the records themselves.
   const status = await (await call('GET', '/admin/t/test-venue/ingest')).json();
   assert.deepEqual(status.installations.map(row => row.installationId), ['pos-installation-1']);

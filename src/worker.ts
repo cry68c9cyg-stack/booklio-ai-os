@@ -1,7 +1,7 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
-import {buildBriefing, planFrom, renderBriefing, type DiscountHistory, type Month, type MonthPart, type Week, type WeekPart} from './briefing.ts';
+import {buildBriefing, planFrom, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
@@ -540,8 +540,8 @@ export class TenantObject extends DurableObject<Env> {
 
   /** One stretch of days for the weekly summary: revenue, confirmed bookings, website visits, new reviews. */
   private weekPart(from: string, to: string): WeekPart {
-    const part: WeekPart = {revenueCents: 0, revenueDays: 0, reservations: 0, guests: 0, noShows: 0, noShowGuests: 0, visits: null, visitDays: 0, webSent: 0, webConfirmed: 0, reviews: 0, starsTenths: null};
-    let rated = 0, starSum = 0;
+    const part: WeekPart = {revenueCents: 0, revenueDays: 0, reservations: 0, guests: 0, noShows: 0, noShowGuests: 0, visits: null, visitDays: 0, webSent: 0, webConfirmed: 0, reviews: 0, rated: 0, starsTenths: null, origins: []};
+    const origins = new Map<string, WeekPart['origins'][number]>();
     for (let date = from; date <= to; date = addDays(date, 1)) {
       const revenue = this.dayRevenue(date);
       if (revenue !== null) { part.revenueCents += revenue; part.revenueDays++; }
@@ -552,13 +552,25 @@ export class TenantObject extends DurableObject<Env> {
       }
       const web = this.day<WebTraffic>('web_traffic', date)[0];
       if (web) { part.visits = (part.visits ?? 0) + web.visits; part.visitDays++; part.webSent += web.actions['rezervace-odeslana'] ?? 0; }
-      for (const source of this.day<ReviewSummary>('review_summary', date)[0]?.sources ?? []) {
-        source.stars.forEach((count, i) => { rated += count; starSum += count * (i + 1); });
-        part.reviews += source.stars.reduce((sum, count) => sum + count, 0) + source.unrated;
+      for (const origin of web?.origins ?? []) {
+        const row = origins.get(origin.key) ?? {key: origin.key, name: origin.name, visits: 0, withAction: 0};
+        row.visits += origin.visits; row.withAction += origin.withAction; origins.set(origin.key, row);
       }
     }
-    part.starsTenths = rated ? Math.round(starSum / rated * 10) : null;
-    return part;
+    part.origins = [...origins.values()].filter(row => row.visits > 0).sort((a, b) => b.visits - a.visits || a.key.localeCompare(b.key));
+    return {...part, ...this.reviewStats(from, to)};
+  }
+
+  /** New reviews over a stretch of days (counts by stars only). */
+  private reviewStats(from: string, to: string): ReviewStats {
+    let reviews = 0, rated = 0, starSum = 0;
+    for (let date = from; date <= to; date = addDays(date, 1)) {
+      for (const source of this.day<ReviewSummary>('review_summary', date)[0]?.sources ?? []) {
+        source.stars.forEach((count, i) => { rated += count; starSum += count * (i + 1); });
+        reviews += source.stars.reduce((sum, count) => sum + count, 0) + source.unrated;
+      }
+    }
+    return {reviews, rated, starsTenths: rated ? Math.round(starSum / rated * 10) : null};
   }
 
   /** Revenue of a stretch of days, and by section when every day with revenue has its sections (POS bills or the managers' report). */
@@ -615,7 +627,8 @@ export class TenantObject extends DurableObject<Env> {
     const payouts = this.reportSums('payout', from, date), expenses = this.reportSums('expense', from, date), discounts = this.discountSums(from, date);
     return {month: date.slice(0, 7), through: date, complete,
       current: this.monthPart(config, from, date), previous: {...this.monthPart(config, previousMonth + '-01', previousThrough), month: previousMonth, through: previousThrough},
-      payouts, payoutsCents: sum(payouts), expenses, expensesCents: sum(expenses), discounts: discounts.rows, discountsCents: discounts.totalCents};
+      payouts, payoutsCents: sum(payouts), expenses, expensesCents: sum(expenses), discounts: discounts.rows, discountsCents: discounts.totalCents,
+      reviews: this.reviewStats(from, date)};
   }
 
   /** Discounts by type on the same weekday of the 4 weeks before, counting only days whose managers' report has the discount block. */
@@ -655,7 +668,8 @@ export class TenantObject extends DurableObject<Env> {
 
   /** The 7 days up to the reported day against the 7 days before them. */
   private week(date: string): Week {
-    return {from: addDays(date, -6), to: date, current: this.weekPart(addDays(date, -6), date), previous: this.weekPart(addDays(date, -13), addDays(date, -7))};
+    return {from: addDays(date, -6), to: date, current: this.weekPart(addDays(date, -6), date), previous: this.weekPart(addDays(date, -13), addDays(date, -7)),
+      reviewsUsual: this.reviewStats(addDays(date, -34), addDays(date, -7))};
   }
 
   private senders(now: Date) {

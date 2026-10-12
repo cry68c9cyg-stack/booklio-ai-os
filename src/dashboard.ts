@@ -162,8 +162,12 @@ function weekCard(w) {
   rows.push('<tr><td>Návštěvy webu</td><td class="n">' + (n.visits === null ? '–' : num(n.visits) + (p.visits !== null && p.visitDays === n.visitDays ? vs(n.visits, p.visits) : '')) + '</td><td class="n muted">' + (p.visits === null ? '–' : num(p.visits)) + '</td></tr>');
   const stars = t => t === null ? '' : ', ' + (t / 10).toFixed(1).replace('.', ',') + ' ★';
   rows.push('<tr><td>Web: odeslané formuláře → potvrzené rezervace z webu</td><td class="n">' + n.webSent + ' → ' + n.webConfirmed + '</td><td class="n muted">' + p.webSent + ' → ' + p.webConfirmed + '</td></tr>');
-  rows.push('<tr><td>Nové recenze</td><td class="n">' + n.reviews + stars(n.starsTenths) + '</td><td class="n muted">' + p.reviews + stars(p.starsTenths) + '</td></tr>');
-  return '<div class="card"><h2>Týden ' + short(w.from) + '–' + short(w.to) + '</h2><table><tr><th></th><th class="n">7 dní</th><th class="n">7 dní předtím</th></tr>' + rows.join('') + '</table></div>';
+  const u = w.reviewsUsual, drop = !!u && n.rated >= 5 && u.rated >= 10 && n.starsTenths !== null && u.starsTenths !== null && n.starsTenths <= u.starsTenths - 3;
+  rows.push('<tr><td>Nové recenze' + (u && u.starsTenths !== null ? ' <span class="muted">(4 týdny předtím ' + stars(u.starsTenths).slice(2) + ')</span>' : '') + '</td><td class="n' + (drop ? ' warn' : '') + '">' + n.reviews + stars(n.starsTenths) + (drop ? ' · klesá' : '') + '</td><td class="n muted">' + p.reviews + stars(p.starsTenths) + '</td></tr>');
+  const before = new Map(p.origins.map(r => [r.key, r.visits]));
+  const origins = n.origins.length ? '<details><summary>Odkud na web <span class="muted">(s akcí = otevřeli rezervaci, volali nebo navigovali)</span></summary><table><tr><th></th><th class="n">7 dní</th><th class="n">7 dní předtím</th></tr>' +
+    n.origins.map(r => '<tr><td>' + esc(r.name) + '</td><td class="n">' + num(r.visits) + (r.withAction ? ' <span class="muted">(' + num(r.withAction) + ' s akcí)</span>' : '') + '</td><td class="n muted">' + (before.has(r.key) ? num(before.get(r.key)) : '–') + '</td></tr>').join('') + '</table></details>' : '';
+  return '<div class="card"><h2>Týden ' + short(w.from) + '–' + short(w.to) + '</h2><table><tr><th></th><th class="n">7 dní</th><th class="n">7 dní předtím</th></tr>' + rows.join('') + '</table>' + origins + '</div>';
 }
 
 // The month up to the shown day against the same days of the month before, and the cash the cash book paid out.
@@ -179,6 +183,7 @@ function monthCard(m) {
     (p.revenueCents && (p.revenueDays === n.revenueDays || (n.revenueDays === Number(m.through.slice(8)) && p.revenueDays === Number(p.through.slice(8)))) ? ' <span class="muted">(' + signed(pct(n.revenueCents, p.revenueCents)) + ')</span>' : '') + '</td><td class="n muted">' + kc(p.revenueDays ? p.revenueCents : null) + '</td></tr>');
   const before = new Map((p.bySection ?? []).map(r => [r.section, r.revenueCents]));
   for (const r of n.bySection ?? []) rows.push('<tr><td class="muted">' + esc(r.label) + '</td><td class="n">' + kc(r.revenueCents) + '</td><td class="n muted">' + kc(before.has(r.section) ? before.get(r.section) : null) + '</td></tr>');
+  if (m.reviews && m.reviews.reviews) rows.push('<tr><td>Nové recenze</td><td class="n">' + m.reviews.reviews + (m.reviews.starsTenths !== null ? ', ' + (m.reviews.starsTenths / 10).toFixed(1).replace('.', ',') + ' ★' : '') + '</td><td></td></tr>');
   const list = (title, total, items, limit) => total ? '<details><summary>' + esc(title) + ' <b>' + kc(total) + '</b></summary><table>' +
     items.slice(0, limit).map(r => '<tr><td>' + esc(r.label) + '</td><td class="n">' + kc(r.amountCents) + '</td></tr>').join('') + '</table></details>' : '';
   return '<div class="card"><h2>' + esc(name(m.month)[0].toUpperCase() + name(m.month).slice(1)) + (m.complete ? ' celkem' : ' do ' + esc(short(m.through))) + '</h2><table>' + rows.join('') + '</table>' +

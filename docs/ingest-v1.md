@@ -119,7 +119,7 @@ Doplněno 12. 10. 2026 zpětně kompatibilně. Web posílá každou hodinu souhr
 | `actions` | objekt `{akce: počet}`, ≤ 100 klíčů | počet návštěv s danou akcí, např. `rezervace-otevrena`, `rezervace-odeslana`, `telefon` |
 | `reviewScans` | int ≥ 0 | skeny QR kódu na stole s odkazem na hodnocení na Googlu |
 
-Ranní zpráva ukáže den proti stejnému dni před týdnem, odeslané rezervace, skeny QR a tři nejčastější zdroje; dashboard totéž jako kartu „Návštěvnost webu“.
+Ranní zpráva ukáže den proti stejnému dni před týdnem, odeslané rezervace, skeny QR a tři nejčastější zdroje; dashboard totéž jako kartu „Návštěvnost webu“. Pondělní týdenní souhrn sečte `origins` za 7 dní (návštěvy a `withAction` podle `key`).
 
 ### Recenze (`review_summary`)
 
@@ -135,7 +135,7 @@ Doplněno 12. 10. 2026 zpětně kompatibilně. Web posílá každou hodinu souhr
 | `forManagement` | int ≥ 0 | recenze předané vedení |
 | `failed` | int ≥ 0 | odpovědi, které se nepodařilo odeslat |
 
-Ranní zpráva ukáže nové recenze, průměr hvězdiček, počet se 3 ★ a méně a co čeká v adminu (jen když je co hlásit); slabé recenze, recenze pro vedení a neodeslané odpovědi jdou do seznamu k vyřízení; dashboard má kartu „Recenze“.
+Ranní zpráva ukáže nové recenze, průměr hvězdiček, počet se 3 ★ a méně a co čeká v adminu (jen když je co hlásit); slabé recenze, recenze pro vedení a neodeslané odpovědi jdou do seznamu k vyřízení; dashboard má kartu „Recenze“. Týdenní a měsíční souhrn počítá průměr hvězdiček za týden a měsíc a hlásí pokles proti 4 týdnům předtím.
 
 ## Kdy posílat
 

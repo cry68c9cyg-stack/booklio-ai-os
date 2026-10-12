@@ -60,7 +60,11 @@ export type Briefing = {
   incomplete: boolean;
 };
 export type WeekPart = {revenueCents: number; revenueDays: number; reservations: number; guests: number; noShows: number; noShowGuests: number;
-  visits: number | null; visitDays: number; webSent: number; webConfirmed: number; reviews: number; starsTenths: number | null};
+  visits: number | null; visitDays: number; webSent: number; webConfirmed: number; reviews: number; rated: number; starsTenths: number | null;
+  /** Website visits by where they came from, with the visits that booked, called or navigated; most visits first. */
+  origins: {key: string; name: string; visits: number; withAction: number}[]};
+/** New reviews over a stretch of days: all, those with stars, and their average in tenths. */
+export type ReviewStats = {reviews: number; rated: number; starsTenths: number | null};
 export type MonthPart = {revenueCents: number; revenueDays: number; bySection: {section: string; label: string; revenueCents: number}[] | null};
 /** Revenue of one month up to a day against the same days of the month before, and the cash the cash book paid out. */
 export type Month = {
@@ -68,11 +72,12 @@ export type Month = {
   payouts: {label: string; amountCents: number}[]; payoutsCents: number;
   expenses: {label: string; amountCents: number}[]; expensesCents: number;
   discounts: {label: string; amountCents: number}[]; discountsCents: number;
+  reviews?: ReviewStats;
 };
 /** Discounts by type summed over the same weekday of the previous weeks that have a managers' report (`days` of them). */
 export type DiscountHistory = {days: number; totals: Record<string, number>};
 export type UnusualDiscount = {key: string; label: string; amountCents: number; usualCents: number};
-export type Week = {from: string; to: string; current: WeekPart; previous: WeekPart};
+export type Week = {from: string; to: string; current: WeekPart; previous: WeekPart; reviewsUsual?: ReviewStats | null};
 export type MonthResult = {
   month: string; through: string; rows: {account: string; name: string; amountCents: number}[];
   revenueCents: number; revenueDays: number; error: string | null;
@@ -187,6 +192,16 @@ const notCame = (count: number) => count === 1 ? 'nedorazil' : count >= 2 && cou
 const percent = (permille: number) => `${Math.round(permille / 10)} %`;
 export const noShowText = (rate: NonNullable<Briefing['noShows']>) =>
   `nedorazilo ${rate.guests} ${guestsWord(rate.guests)} z ${rate.confirmedGuests} rezervovaných (${percent(rate.ratePermille)}${rate.usualPermille !== null ? `, obvykle ${percent(rate.usualPermille)}` : ''})`;
+
+/** The week's reviews fall behind when at least 5 have stars and their average is 0,3 ★ or more under the 4 weeks before (10 or more rated). */
+export function reviewDrop(week: Briefing['week']): boolean {
+  const usual = week?.reviewsUsual;
+  return !!week && !!usual && week.current.rated >= 5 && usual.rated >= 10 && week.current.starsTenths !== null && usual.starsTenths !== null
+    && week.current.starsTenths <= usual.starsTenths - 3;
+}
+const stars = (tenths: number) => `${(tenths / 10).toFixed(1).replace('.', ',')} ★`;
+export const reviewDropText = (week: Week) =>
+  `průměr recenzí za týden ${stars(week.current.starsTenths!)} (obvykle ${stars(week.reviewsUsual!.starsTenths!)}, hodnocených ${week.current.rated})`;
 
 /** A discount type counts as unusual when it is at least twice its usual amount and at least 1 000 Kč above it. */
 export const UNUSUAL_DISCOUNT_CENTS = 100000;
@@ -485,7 +500,10 @@ export function renderWeek(week: Briefing['week']): string[] {
   if (now.visits !== null) parts.push(`web ${group(now.visits)} ${visitsWord(now.visits)}${before.visits !== null && before.visitDays === now.visitDays ? change(now.visits, before.visits) : ''}`
     + (now.webSent || now.webConfirmed ? ` · rezervační formulář odeslán ${now.webSent}× · potvrzené rezervace z webu na tyto dny ${now.webConfirmed}` : ''));
   if (now.reviews) parts.push(`recenze ${now.reviews}${now.starsTenths !== null ? `, průměr ${(now.starsTenths / 10).toFixed(1).replace('.', ',')} ★` : ''}`);
-  return parts.length ? [`Týden ${shortDate(week.from)}–${shortDate(week.to)}: ${parts.join(' · ')}`] : [];
+  const lines = parts.length ? [`Týden ${shortDate(week.from)}–${shortDate(week.to)}: ${parts.join(' · ')}`] : [];
+  if (now.origins.length) lines.push('Odkud na web za týden: ' + now.origins.slice(0, 5).map(row => `${row.name} ${group(row.visits)}${row.withAction ? ` (${group(row.withAction)} s akcí)` : ''}`).join(' · '));
+  if (reviewDrop(week)) lines.push(`⚠ Recenze: ${reviewDropText(week)}`);
+  return lines;
 }
 
 /** "Říjen: tržba … (+4 % proti září) · Diner … · výplaty v hotovosti … · výdaje z kasy …" */
@@ -504,6 +522,7 @@ export function renderMonth(month: Briefing['month']): string[] {
   if (month.payoutsCents) parts.push(`výplaty v hotovosti ${crowns(month.payoutsCents)}${share(month.payoutsCents, now.revenueCents)}`);
   if (month.expensesCents) parts.push(`výdaje z kasy ${crowns(month.expensesCents)}`);
   if (month.discountsCents) parts.push(`slevy ${crowns(month.discountsCents)}`);
+  if (month.reviews?.reviews) parts.push(`recenze ${month.reviews.reviews}${month.reviews.starsTenths !== null ? `, průměr ${stars(month.reviews.starsTenths)}` : ''}`);
   return [`${title}${month.complete ? ' celkem' : ` do ${shortDate(month.through)}`}: ${parts.join(' · ')}`];
 }
 
