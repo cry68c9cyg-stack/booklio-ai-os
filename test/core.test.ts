@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
@@ -283,10 +283,10 @@ test('BulkGate: rows from every answer shape', async () => {
 });
 
 test('weekly summary only in the Monday message (Sunday\'s report), silent senders in the message and the to-do list', () => {
-  const part = {revenueCents: 140000000, revenueDays: 7, reservations: 30, guests: 120, noShows: 2, visits: 2100, visitDays: 7, reviews: 9, starsTenths: 46};
+  const part = {revenueCents: 140000000, revenueDays: 7, reservations: 30, guests: 120, noShows: 2, noShowGuests: 6, visits: 2100, visitDays: 7, webSent: 40, webConfirmed: 32, reviews: 9, starsTenths: 46};
   const week = {from: '2026-10-05', to: '2026-10-11', current: part, previous: {...part, revenueCents: 100000000, guests: 100, visits: null, reviews: 0, starsTenths: null}};
-  assert.deepEqual(renderWeek(week), ['Týden 5. 10.–11. 10.: tržba 1 400 000 Kč (+40 %) · rezervace 30, 120 hostů (+20 %), nedorazilo 2 · web 2 100 návštěv · recenze 9, průměr 4,6 ★']);
-  assert.deepEqual(renderWeek({...week, current: {...part, revenueDays: 5}}), ['Týden 5. 10.–11. 10.: tržba 1 400 000 Kč (5 dní s daty) · rezervace 30, 120 hostů (+20 %), nedorazilo 2 · web 2 100 návštěv · recenze 9, průměr 4,6 ★'],
+  assert.deepEqual(renderWeek(week), ['Týden 5. 10.–11. 10.: tržba 1 400 000 Kč (+40 %) · rezervace 30, 120 hostů (+20 %), nedorazilo 6 hostů (5 %) · web 2 100 návštěv · rezervační formulář odeslán 40× · potvrzené rezervace z webu na tyto dny 32 · recenze 9, průměr 4,6 ★']);
+  assert.deepEqual(renderWeek({...week, current: {...part, revenueDays: 5}}), ['Týden 5. 10.–11. 10.: tržba 1 400 000 Kč (5 dní s daty) · rezervace 30, 120 hostů (+20 %), nedorazilo 6 hostů (5 %) · web 2 100 návštěv · rezervační formulář odeslán 40× · potvrzené rezervace z webu na tyto dny 32 · recenze 9, průměr 4,6 ★'],
     'no change against a week with a different number of days');
   assert.match(renderWeek({...week, current: {...part, revenueDays: 3}, previous: {...part, revenueDays: 3, revenueCents: 100000000, visits: 1000, visitDays: 2}})[0],
     /^Týden 5\. 10\.–11\. 10\.: tržba 1 400 000 Kč \(\+40 %, 3 dny s daty\) · .* · web 2 100 návštěv · /, 'one bracket; visits compared only over as many days');
@@ -319,7 +319,7 @@ test('month line: so far against the same days before, the whole month on its la
   const part = {revenueCents: 300000000, revenueDays: 11, bySection: [{section: 'diner', label: 'Diner', revenueCents: 100000000}, {section: 'club', label: 'Klub', revenueCents: 200000000}]};
   const month = {month: '2026-10', through: '2026-10-11', complete: false, current: part, previous: {...part, revenueCents: 250000000, month: '2026-09', through: '2026-09-11'},
     payouts: [{label: 'Security', amountCents: 8800000}], payoutsCents: 8800000, expenses: [], expensesCents: 1200000, discounts: [], discountsCents: 2500000};
-  assert.deepEqual(renderMonth(month), ['Říjen do 11. 10.: tržba 3 000 000 Kč (+20 % proti 1. 9.–11. 9.) · Diner 1 000 000 Kč · Klub 2 000 000 Kč · výplaty v hotovosti 88 000 Kč · výdaje z kasy 12 000 Kč · slevy 25 000 Kč']);
+  assert.deepEqual(renderMonth(month), ['Říjen do 11. 10.: tržba 3 000 000 Kč (+20 % proti 1. 9.–11. 9.) · Diner 1 000 000 Kč · Klub 2 000 000 Kč · výplaty v hotovosti 88 000 Kč (2,9 % tržby) · výdaje z kasy 12 000 Kč · slevy 25 000 Kč']);
   assert.deepEqual(renderMonth({...month, through: '2026-10-31', complete: true, current: {...part, revenueDays: 9, bySection: null}, previous: {...month.previous, revenueDays: 0, revenueCents: 0}, payoutsCents: 0, expensesCents: 0, discountsCents: 0}),
     ['Říjen celkem: tržba 3 000 000 Kč (9 dní s daty)'], 'no change against a month without data, no sections when some days have none');
   assert.deepEqual(renderMonth({...month, through: '2026-10-31', complete: true, current: {...part, revenueDays: 31}, previous: {...month.previous, revenueDays: 30, through: '2026-09-30'}})[0].slice(0, 56),
@@ -345,4 +345,23 @@ test('unusual discounts: twice the usual amount on this weekday and 1 000 Kč ab
   const briefing = buildBriefing({businessDate: '2026-10-09', config, bills: [], closings: [], planHistory: [], incomplete: false, report, discountHistory: history});
   assert.match(renderBriefing('Testovací podnik', briefing), /\n⚠ Neobvyklé slevy: Personál 3 652 Kč \(obvykle 1 000 Kč\), IG 1 200 Kč \(obvykle 0 Kč\)/);
   assert.ok(todoList(briefing).some(item => item.text === 'Neobvyklá sleva: Personál 3 652 Kč (obvykle 1 000 Kč)'));
+});
+
+test('outlook for the starting day and no-shows against the usual share', () => {
+  const booking = (id: string, partySize: number, arrival: 'arrived' | 'no_show' | null = null, status: Reservation['status'] = 'confirmed'): Reservation =>
+    ({type: 'reservation', id, version: 1, businessDate: '2026-10-10', startsAt: '2026-10-10T18:00:00Z', section: 'diner', partySize, status, arrival, source: 'web'});
+  const today = [booking('t1', 30), booking('t2', 34), booking('t3', 5, null, 'pending')];
+  assert.deepEqual(outlook(today, [{revenueCents: 10000000}, {revenueCents: 14000000}], [50, 56]), {planCents: 12000000, guests: 64, usualGuests: 53});
+  assert.deepEqual(outlook(today, [{revenueCents: 10000000}], [50]), {planCents: null, guests: 64, usualGuests: null}, 'one week is not usual');
+  const day = [booking('d1', 40, 'arrived'), booking('d2', 8, 'no_show'), booking('d3', 4, 'no_show')];
+  const rate = noShowRate(day, {confirmedGuests: 400, noShowGuests: 20})!;
+  assert.deepEqual(rate, {guests: 12, confirmedGuests: 52, ratePermille: 231, usualPermille: 50});
+  assert.equal(noShowAlarm(rate), true);
+  assert.equal(noShowAlarm(noShowRate(day, {confirmedGuests: 400, noShowGuests: 120})), false, '23 % against usual 30 % is not unusual');
+  assert.equal(noShowAlarm(noShowRate([booking('d1', 40), booking('d2', 4, 'no_show')], null)), false, 'under 6 guests');
+  const briefing = buildBriefing({businessDate: '2026-10-09', config, bills: [], closings: [], planHistory: [], incomplete: false, reservations: day, reservationsToday: today,
+    todayPlanHistory: [{revenueCents: 10000000}, {revenueCents: 14000000}], todayGuestHistory: [50, 56], noShowHistory: {confirmedGuests: 400, noShowGuests: 20}});
+  const text = renderBriefing('Testovací podnik', briefing);
+  assert.match(text, /\nDnes rezervováno: 2 \(64 hostů\), čeká na potvrzení 1 · obvykle za celý den 53 hostů · plán tržby 120 000 Kč\n⚠ No-show: nedorazilo 12 hostů z 52 rezervovaných \(23 %, obvykle 5 %\)/);
+  assert.ok(todoList(briefing).some(item => item.text === 'No-show: nedorazilo 12 hostů z 52 rezervovaných (23 %, obvykle 5 %)'));
 });

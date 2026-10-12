@@ -540,16 +540,18 @@ export class TenantObject extends DurableObject<Env> {
 
   /** One stretch of days for the weekly summary: revenue, confirmed bookings, website visits, new reviews. */
   private weekPart(from: string, to: string): WeekPart {
-    const part: WeekPart = {revenueCents: 0, revenueDays: 0, reservations: 0, guests: 0, noShows: 0, visits: null, visitDays: 0, reviews: 0, starsTenths: null};
+    const part: WeekPart = {revenueCents: 0, revenueDays: 0, reservations: 0, guests: 0, noShows: 0, noShowGuests: 0, visits: null, visitDays: 0, webSent: 0, webConfirmed: 0, reviews: 0, starsTenths: null};
     let rated = 0, starSum = 0;
     for (let date = from; date <= to; date = addDays(date, 1)) {
       const revenue = this.dayRevenue(date);
       if (revenue !== null) { part.revenueCents += revenue; part.revenueDays++; }
       for (const row of this.day<Reservation>('reservation', date).filter(row => row.status === 'confirmed')) {
-        part.reservations++; part.guests += row.partySize; if (row.arrival === 'no_show') part.noShows++;
+        part.reservations++; part.guests += row.partySize;
+        if (row.arrival === 'no_show') { part.noShows++; part.noShowGuests += row.partySize; }
+        if (row.source === 'web') part.webConfirmed++;
       }
       const web = this.day<WebTraffic>('web_traffic', date)[0];
-      if (web) { part.visits = (part.visits ?? 0) + web.visits; part.visitDays++; }
+      if (web) { part.visits = (part.visits ?? 0) + web.visits; part.visitDays++; part.webSent += web.actions['rezervace-odeslana'] ?? 0; }
       for (const source of this.day<ReviewSummary>('review_summary', date)[0]?.sources ?? []) {
         source.stars.forEach((count, i) => { rated += count; starSum += count * (i + 1); });
         part.reviews += source.stars.reduce((sum, count) => sum + count, 0) + source.unrated;
@@ -630,6 +632,27 @@ export class TenantObject extends DurableObject<Env> {
     return history;
   }
 
+  /** The starting day's weekday over the 4 weeks before: revenue for the plan, confirmed guests on days that had bookings. */
+  private outlookHistory(today: string) {
+    const back = [7, 14, 21, 28].map(days => addDays(today, -days));
+    return {
+      todayPlanHistory: back.map(day => this.dayRevenue(day)).filter((value): value is number => value !== null).map(revenueCents => ({revenueCents})),
+      // Sums in SQL: nothing of the guests is read for a count.
+      todayGuestHistory: back.map(day => this.sql.exec<{rows: number; guests: number | null}>(`SELECT count(*) AS rows,
+          SUM(CASE WHEN json_extract(json, '$.status') = 'confirmed' THEN json_extract(json, '$.partySize') ELSE 0 END) AS guests
+        FROM records WHERE type='reservation' AND business_date=?`, day).toArray()[0]).filter(row => row && row.rows > 0).map(row => row.guests ?? 0),
+    };
+  }
+
+  /** Confirmed and no-show guests over the 28 days before the reported day (one query, no guest details read). */
+  private noShowHistory(date: string) {
+    const row = this.sql.exec<{confirmed: number | null; noShow: number | null}>(`SELECT
+        SUM(json_extract(json, '$.partySize')) AS confirmed,
+        SUM(CASE WHEN json_extract(json, '$.arrival') = 'no_show' THEN json_extract(json, '$.partySize') ELSE 0 END) AS noShow
+      FROM records WHERE type='reservation' AND business_date BETWEEN ? AND ? AND json_extract(json, '$.status') = 'confirmed'`, addDays(date, -28), addDays(date, -1)).toArray()[0];
+    return {confirmedGuests: row?.confirmed ?? 0, noShowGuests: row?.noShow ?? 0};
+  }
+
   /** The 7 days up to the reported day against the 7 days before them. */
   private week(date: string): Week {
     return {from: addDays(date, -6), to: date, current: this.weekPart(addDays(date, -6), date), previous: this.weekPart(addDays(date, -13), addDays(date, -7))};
@@ -670,6 +693,7 @@ export class TenantObject extends DurableObject<Env> {
       week: weekday(date) === 0 ? this.week(date) : null, silent: this.silentSources(config, date, now),
       month: weekday(date) === 0 || addDays(date, 1).endsWith('-01') ? this.month(config, date) : null,
       lastWeekRevenueCents: this.dayRevenue(addDays(date, -7)), discountHistory: this.discountHistory(date),
+      ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};
   }

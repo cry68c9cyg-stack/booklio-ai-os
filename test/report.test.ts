@@ -234,7 +234,7 @@ test('briefing from the managers\' report: revenue, payments, discounts, cash, n
   assert.match(text, /^Testovací podnik · pátek 9\. 10\. 2026\nTržba: 390 000 Kč \(plán 370 000 Kč, \+5 %\)\nDiner 60 000 Kč · Bar 150 000 Kč · Klub 180 000 Kč\nPlatby: karta 97 %, hotovost 3 %\n/);
   assert.doesNotMatch(text, /Účty 0/);
   assert.match(text, /\nSlevy a odpisy: Personál 15× 3 600 Kč, Sleva 20 % 4× 1 201 Kč, Odpisy Club 2× 900 Kč\n/);
-  assert.match(text, /\nVýdaje z kasy 1 300 Kč · výplaty v hotovosti 13 000 Kč\n⚠ Trezor je v deníku záporný: −20 000 Kč\n/);
+  assert.match(text, /\nVýdaje z kasy 1 300 Kč · výplaty v hotovosti 13 000 Kč \(3,3 % tržby\)\n⚠ Trezor je v deníku záporný: −20 000 Kč\n/);
   assert.match(text, /\nReport dne: DJ: Zdeněk \/ Host Novák rozbil sklenici/);
   const analysed = renderBriefing('Testovací podnik', buildBriefing({...base, notes: {summary: 'Rozbitá sklenice, došel led.', points: [
     {kind: 'task', text: 'Objednat led', amountCents: null}, {kind: 'incident', text: 'Host rozbil sklenici', amountCents: null},
