@@ -307,9 +307,11 @@ test('weekly summary: where the website visits came from, and a warning when the
   const week = {from: '2026-10-05', to: '2026-10-11', current: part, previous: {...part, visits: null, reviews: 0, rated: 0, starsTenths: null, origins: []},
     reviewsUsual: {reviews: 40, rated: 38, starsTenths: 44}};
   const lines = renderWeek(week);
-  assert.equal(lines[1], 'Odkud na web za týden: Google 500 (40 s akcí) · Instagram 1 200 · QR kód na stole 30 (3 s akcí)', 'in the order the website sent, no zero actions');
-  assert.equal(lines[2], '⚠ Recenze: průměr recenzí za týden 3,8 ★ (obvykle 4,4 ★, hodnocených 6)');
+  assert.equal(lines[1], 'Odkud na web za týden: Google 500 (40 s akcí) · Instagram 1 200 · QR kód na stole 30 (3 s akcí)', 'in the order given (the worker sorts by visits), no zero actions');
+  assert.equal(lines[2], '⚠ Recenze: průměr recenzí za týden 3,8 ★ z 6 hodnocených (4 týdny předtím 4,4 ★)');
   assert.ok(reviewDrop(week));
+  const six = ['a', 'b', 'c', 'd', 'e', 'f'].map((key, i) => ({key, name: key.toUpperCase(), visits: 60 - i, withAction: 0}));
+  assert.equal(renderWeek({...week, current: {...part, origins: six}})[1], 'Odkud na web za týden: A 60 · B 59 · C 58 · D 57 · E 56', 'top 5 only');
   assert.ok(!reviewDrop({...week, current: {...part, starsTenths: 42}}), '0,2 ★ under is not a drop');
   assert.ok(reviewDrop({...week, current: {...part, starsTenths: 41}}), '0,3 ★ under is');
   assert.ok(!reviewDrop({...week, current: {...part, rated: 4}}), 'too few rated this week');
@@ -318,7 +320,7 @@ test('weekly summary: where the website visits came from, and a warning when the
   assert.ok(!reviewDrop(null));
   assert.equal(renderWeek({...week, reviewsUsual: undefined}).length, 2);
   const sunday = buildBriefing({businessDate: '2026-10-11', config, bills: [], closings: [], planHistory: [], incomplete: false, week});
-  assert.ok(todoList(sunday).some(item => item.level === 'warn' && item.text === 'Recenze klesají: průměr recenzí za týden 3,8 ★ (obvykle 4,4 ★, hodnocených 6)'));
+  assert.ok(todoList(sunday).some(item => item.level === 'warn' && item.text === 'Recenze klesají: průměr recenzí za týden 3,8 ★ z 6 hodnocených (4 týdny předtím 4,4 ★)'));
   const saturday = buildBriefing({businessDate: '2026-10-10', config, bills: [], closings: [], planHistory: [], incomplete: false, week});
   assert.ok(!todoList(saturday).some(item => item.text.startsWith('Recenze klesají')), 'only from the Sunday summary');
 });

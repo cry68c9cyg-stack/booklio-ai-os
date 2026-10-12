@@ -162,8 +162,8 @@ function weekCard(w) {
   rows.push('<tr><td>Návštěvy webu</td><td class="n">' + (n.visits === null ? '–' : num(n.visits) + (p.visits !== null && p.visitDays === n.visitDays ? vs(n.visits, p.visits) : '')) + '</td><td class="n muted">' + (p.visits === null ? '–' : num(p.visits)) + '</td></tr>');
   const stars = t => t === null ? '' : ', ' + (t / 10).toFixed(1).replace('.', ',') + ' ★';
   rows.push('<tr><td>Web: odeslané formuláře → potvrzené rezervace z webu</td><td class="n">' + n.webSent + ' → ' + n.webConfirmed + '</td><td class="n muted">' + p.webSent + ' → ' + p.webConfirmed + '</td></tr>');
-  const u = w.reviewsUsual, drop = !!u && n.rated >= 5 && u.rated >= 10 && n.starsTenths !== null && u.starsTenths !== null && n.starsTenths <= u.starsTenths - 3;
-  rows.push('<tr><td>Nové recenze' + (u && u.starsTenths !== null ? ' <span class="muted">(4 týdny předtím ' + stars(u.starsTenths).slice(2) + ')</span>' : '') + '</td><td class="n' + (drop ? ' warn' : '') + '">' + n.reviews + stars(n.starsTenths) + (drop ? ' · klesá' : '') + '</td><td class="n muted">' + p.reviews + stars(p.starsTenths) + '</td></tr>');
+  const u = w.reviewsUsual, drop = !!w.reviewDrop;
+  rows.push('<tr><td>Nové recenze' + (u && u.rated >= 10 ? ' <span class="muted">(4 týdny předtím ' + stars(u.starsTenths).slice(2) + ' z ' + u.rated + ')</span>' : '') + '</td><td class="n' + (drop ? ' warn' : '') + '">' + n.reviews + stars(n.starsTenths) + (drop ? ' · klesá' : '') + '</td><td class="n muted">' + p.reviews + stars(p.starsTenths) + '</td></tr>');
   const before = new Map(p.origins.map(r => [r.key, r.visits]));
   const origins = n.origins.length ? '<details><summary>Odkud na web <span class="muted">(s akcí = otevřeli rezervaci, volali nebo navigovali)</span></summary><table><tr><th></th><th class="n">7 dní</th><th class="n">7 dní předtím</th></tr>' +
     n.origins.map(r => '<tr><td>' + esc(r.name) + '</td><td class="n">' + num(r.visits) + (r.withAction ? ' <span class="muted">(' + num(r.withAction) + ' s akcí)</span>' : '') + '</td><td class="n muted">' + (before.has(r.key) ? num(before.get(r.key)) : '–') + '</td></tr>').join('') + '</table></details>' : '';

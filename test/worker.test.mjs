@@ -116,6 +116,10 @@ try {
   assert.equal((await ingest('batch-0003p', [{...reviewDay, text: 'Super'}])).status, 400, 'no text');
   assert.equal((await ingest('batch-0003q', [{...reviewDay, sources: [{...reviewDay.sources[0], stars: [1, 2, 3, 4]}]}])).status, 400, 'five star counts');
   assert.equal((await ingest('batch-0003r', [reviewDay])).status, 200);
+  // Review averages: this week from 5. 10., the 4 weeks before from 7. 9. to 4. 10.; 6. 9. counts in neither.
+  const reviewsOn = (businessDate, stars) => ({...reviewDay, id: `reviews-${businessDate}`, businessDate, sources: [{key: 'google', name: 'Google', stars, unrated: 0}]});
+  assert.equal((await ingest('batch-0003t', [reviewsOn('2026-09-06', [5, 0, 0, 0, 0]), reviewsOn('2026-09-07', [0, 0, 0, 0, 5]), reviewsOn('2026-09-30', [0, 0, 0, 0, 5]),
+    reviewsOn('2026-10-04', [0, 0, 0, 0, 5]), reviewsOn('2026-10-05', [2, 0, 0, 0, 0])])).status, 200);
   // Outlook, no-shows and the web funnel come from SQL sums over the stored bookings and traffic.
   await ingest('batch-0003s', [booking('r10', 1, '2026-10-01', 'diner', 5, 'confirmed', null)]);
   const outlookDay = (await (await call('GET', '/admin/t/test-venue/briefing?date=2026-10-14')).json()).briefing;
@@ -124,13 +128,13 @@ try {
   assert.deepEqual([sunday.week.current.guests, sunday.week.current.noShowGuests, sunday.week.current.webSent, sunday.week.current.webConfirmed], [19, 2, 4, 6]);
   assert.deepEqual(sunday.week.current.origins, [{key: 'google', name: 'Google hledání', visits: 60, withAction: 6}, {key: 'instagram', name: 'Instagram', visits: 40, withAction: 5}],
     'website origins summed over the week, most visits first, none without visits');
-  assert.deepEqual([sunday.week.current.reviews, sunday.week.current.rated, sunday.week.current.starsTenths, sunday.week.reviewsUsual.rated], [4, 4, 43, 0]);
+  assert.deepEqual([sunday.week.current.reviews, sunday.week.current.rated, sunday.week.current.starsTenths, sunday.week.reviewsUsual.rated, sunday.week.reviewsUsual.starsTenths, sunday.week.reviewDrop], [6, 6, 32, 15, 50, true]);
   const monthEnd = (await (await call('GET', '/admin/t/test-venue/briefing?date=2026-10-31')).json()).briefing;
-  assert.deepEqual(monthEnd.month.reviews, {reviews: 4, rated: 4, starsTenths: 43}, 'reviews of the month on its last day');
+  assert.deepEqual(monthEnd.month.reviews, {reviews: 11, rated: 11, starsTenths: 40}, 'reviews of October on its last day, none from September');
   // Who sends and when (admin): installations, last batches and types, never the records themselves.
   const status = await (await call('GET', '/admin/t/test-venue/ingest')).json();
   assert.deepEqual(status.installations.map(row => row.installationId), ['pos-installation-1']);
-  assert.ok(status.installations[0].lastSeenAt && status.batches.length && status.records.some(row => row.type === 'review_summary' && row.count === 1));
+  assert.ok(status.installations[0].lastSeenAt && status.batches.length && status.records.some(row => row.type === 'review_summary' && row.count === 6));
   assert.ok(!JSON.stringify(status).includes('Burger'), 'no record content');
   const sent = await tick('2026-10-09T06:00:00Z'); // 8:00 local
   assert.equal(sent.decision, 'send');

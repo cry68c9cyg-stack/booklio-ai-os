@@ -1,7 +1,7 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
-import {buildBriefing, planFrom, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
+import {buildBriefing, planFrom, reviewDrop, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
@@ -668,8 +668,9 @@ export class TenantObject extends DurableObject<Env> {
 
   /** The 7 days up to the reported day against the 7 days before them. */
   private week(date: string): Week {
-    return {from: addDays(date, -6), to: date, current: this.weekPart(addDays(date, -6), date), previous: this.weekPart(addDays(date, -13), addDays(date, -7)),
+    const week: Week = {from: addDays(date, -6), to: date, current: this.weekPart(addDays(date, -6), date), previous: this.weekPart(addDays(date, -13), addDays(date, -7)),
       reviewsUsual: this.reviewStats(addDays(date, -34), addDays(date, -7))};
+    return {...week, reviewDrop: reviewDrop(week)};
   }
 
   private senders(now: Date) {

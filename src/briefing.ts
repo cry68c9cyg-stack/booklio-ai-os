@@ -77,7 +77,7 @@ export type Month = {
 /** Discounts by type summed over the same weekday of the previous weeks that have a managers' report (`days` of them). */
 export type DiscountHistory = {days: number; totals: Record<string, number>};
 export type UnusualDiscount = {key: string; label: string; amountCents: number; usualCents: number};
-export type Week = {from: string; to: string; current: WeekPart; previous: WeekPart; reviewsUsual?: ReviewStats | null};
+export type Week = {from: string; to: string; current: WeekPart; previous: WeekPart; reviewsUsual?: ReviewStats | null; reviewDrop?: boolean};
 export type MonthResult = {
   month: string; through: string; rows: {account: string; name: string; amountCents: number}[];
   revenueCents: number; revenueDays: number; error: string | null;
@@ -201,7 +201,7 @@ export function reviewDrop(week: Briefing['week']): boolean {
 }
 const stars = (tenths: number) => `${(tenths / 10).toFixed(1).replace('.', ',')} ★`;
 export const reviewDropText = (week: Week) =>
-  `průměr recenzí za týden ${stars(week.current.starsTenths!)} (obvykle ${stars(week.reviewsUsual!.starsTenths!)}, hodnocených ${week.current.rated})`;
+  `průměr recenzí za týden ${stars(week.current.starsTenths!)} z ${week.current.rated} hodnocených (4 týdny předtím ${stars(week.reviewsUsual!.starsTenths!)})`;
 
 /** A discount type counts as unusual when it is at least twice its usual amount and at least 1 000 Kč above it. */
 export const UNUSUAL_DISCOUNT_CENTS = 100000;
@@ -499,7 +499,7 @@ export function renderWeek(week: Briefing['week']): string[] {
   if (now.reservations || before.reservations) parts.push(`rezervace ${now.reservations}, ${now.guests} ${guestsWord(now.guests)}${change(now.guests, before.guests)}${now.noShowGuests ? `, ${notCame(now.noShowGuests)} ${now.noShowGuests} ${guestsWord(now.noShowGuests)} (${percent(Math.round(now.noShowGuests / now.guests * 1000))})` : ''}`);
   if (now.visits !== null) parts.push(`web ${group(now.visits)} ${visitsWord(now.visits)}${before.visits !== null && before.visitDays === now.visitDays ? change(now.visits, before.visits) : ''}`
     + (now.webSent || now.webConfirmed ? ` · rezervační formulář odeslán ${now.webSent}× · potvrzené rezervace z webu na tyto dny ${now.webConfirmed}` : ''));
-  if (now.reviews) parts.push(`recenze ${now.reviews}${now.starsTenths !== null ? `, průměr ${(now.starsTenths / 10).toFixed(1).replace('.', ',')} ★` : ''}`);
+  if (now.reviews) parts.push(`recenze ${now.reviews}${now.starsTenths !== null ? `, průměr ${stars(now.starsTenths)}` : ''}`);
   const lines = parts.length ? [`Týden ${shortDate(week.from)}–${shortDate(week.to)}: ${parts.join(' · ')}`] : [];
   if (now.origins.length) lines.push('Odkud na web za týden: ' + now.origins.slice(0, 5).map(row => `${row.name} ${group(row.visits)}${row.withAction ? ` (${group(row.withAction)} s akcí)` : ''}`).join(' · '));
   if (reviewDrop(week)) lines.push(`⚠ Recenze: ${reviewDropText(week)}`);
