@@ -42,6 +42,12 @@ export type Briefing = {
   reviews: {newCount: number; averageTenths: number | null; low: number; bySource: {name: string; newCount: number}[]; waiting: number; forManagement: number; failed: number} | null;
   /** The 7 days up to the reported day against the 7 before: sums only. `null` = not asked for. */
   week: Week | null;
+  /** The month so far (in the Monday message and on the dashboard), or the whole month on its last day. `null` = not asked for. */
+  month: Month | null;
+  /** Revenue of the same weekday a week before. `null` = no data for that day. */
+  lastWeekRevenueCents: number | null;
+  /** Discount types (staff, promo, write-offs…) far above their usual amount on this weekday. */
+  unusualDiscounts: UnusualDiscount[];
   /** Sources that sent data before but have been silent too long (e.g. the website's hourly push). */
   silent: {name: string; since: string}[];
   /** Posted costs from accounting (iÚčto) against OKO1's revenue: this month so far, and the month before in its first half. */
@@ -50,6 +56,17 @@ export type Briefing = {
   incomplete: boolean;
 };
 export type WeekPart = {revenueCents: number; revenueDays: number; reservations: number; guests: number; noShows: number; visits: number | null; visitDays: number; reviews: number; starsTenths: number | null};
+export type MonthPart = {revenueCents: number; revenueDays: number; bySection: {section: string; label: string; revenueCents: number}[] | null};
+/** Revenue of one month up to a day against the same days of the month before, and the cash the cash book paid out. */
+export type Month = {
+  month: string; through: string; complete: boolean; current: MonthPart; previous: MonthPart & {month: string; through: string};
+  payouts: {label: string; amountCents: number}[]; payoutsCents: number;
+  expenses: {label: string; amountCents: number}[]; expensesCents: number;
+  discounts: {label: string; amountCents: number}[]; discountsCents: number;
+};
+/** Discounts by type summed over the same weekday of the previous weeks that have a managers' report (`days` of them). */
+export type DiscountHistory = {days: number; totals: Record<string, number>};
+export type UnusualDiscount = {key: string; label: string; amountCents: number; usualCents: number};
 export type Week = {from: string; to: string; current: WeekPart; previous: WeekPart};
 export type MonthResult = {
   month: string; through: string; rows: {account: string; name: string; amountCents: number}[];
@@ -139,6 +156,25 @@ export function bottleLosses(check: BottleCheck, minLossCents: number) {
   };
 }
 
+/** A discount type counts as unusual when it is at least twice its usual amount and at least 1 000 Kč above it. */
+export const UNUSUAL_DISCOUNT_CENTS = 100000;
+/**
+ * Discount types of the day (staff, promo, write-offs…) far above their usual amount: the average of the same weekday
+ * over the previous weeks that have a report (at least two). A type missing on such a day counts as zero.
+ */
+export function unusualDiscounts(report: DailyReport, history: DiscountHistory): UnusualDiscount[] {
+  const days = history.days;
+  if (days < 2) return [];
+  const today = new Map<string, {label: string; amountCents: number}>();
+  for (const entry of report.lines.filter(entry => entry.kind === 'discount' && entry.amountCents > 0)) {
+    const row = today.get(entry.key) ?? {label: entry.label, amountCents: 0};
+    row.amountCents += entry.amountCents; today.set(entry.key, row);
+  }
+  return [...today].map(([key, row]) => ({key, ...row, usualCents: Math.round((history.totals[key] ?? 0) / days)}))
+    .filter(row => row.amountCents >= 2 * row.usualCents && row.amountCents - row.usualCents >= UNUSUAL_DISCOUNT_CENTS)
+    .sort((a, b) => (b.amountCents - b.usualCents) - (a.amountCents - a.usualCents) || a.key.localeCompare(b.key));
+}
+
 /** Plan = average revenue of the same weekday over the previous weeks that have data (at least two). */
 export function planFrom(history: {revenueCents: number}[]): Briefing['plan'] {
   if (history.length < 2) return null;
@@ -154,6 +190,8 @@ export function buildBriefing(input: {
   costs?: MonthResult | null; costsPrevious?: MonthResult | null;
   reviews?: ReviewSummary;
   week?: Week | null; silent?: {name: string; since: string}[];
+  month?: Month | null; lastWeekRevenueCents?: number | null;
+  discountHistory?: DiscountHistory;
 }): Briefing {
   const closed = input.bills.filter(bill => bill.status === 'closed');
   const add = <K>(map: Map<K, number>, key: K, value: number) => map.set(key, (map.get(key) ?? 0) + value);
@@ -229,6 +267,9 @@ export function buildBriefing(input: {
     reviews: summarizeReviews(input.reviews),
     costs: input.costs ?? null, costsPrevious: input.costsPrevious ?? null,
     week: input.week ?? null,
+    month: input.month ?? null,
+    lastWeekRevenueCents: input.lastWeekRevenueCents ?? null,
+    unusualDiscounts: report ? unusualDiscounts(report, input.discountHistory ?? {days: 0, totals: {}}) : [],
     silent: input.silent ?? [],
     incomplete: input.incomplete,
   };
@@ -259,6 +300,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
     const delta = briefing.plan.revenueCents ? Math.round((briefing.revenueCents / briefing.plan.revenueCents - 1) * 100) : 0;
     revenue += ` (plán ${crowns(briefing.plan.revenueCents)}, ${delta >= 0 ? '+' : '−'}${Math.abs(delta)} %)`;
   }
+  if (briefing.lastWeekRevenueCents && briefing.revenueCents && !briefing.incomplete) revenue += ` · před týdnem ${crowns(briefing.lastWeekRevenueCents)}${change(briefing.revenueCents, briefing.lastWeekRevenueCents)}`;
   lines.push(revenue);
   if (briefing.bySection.length > 1) lines.push(briefing.bySection.map(row => `${row.label} ${crowns(row.revenueCents)}`).join(' · '));
   if (briefing.source !== 'report') lines.push(`Účty ${briefing.bills} · hosté ${briefing.guests}${briefing.averageBillCents === null ? '' : ` · průměrný účet ${crowns(briefing.averageBillCents)}`}`);
@@ -282,6 +324,8 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderNotes(briefing));
   // The week in a few numbers once a week, in the message about Sunday (Monday morning).
   if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week));
+  // The month so far once a week, and the whole month in the message about its last day (the 1st in the morning).
+  lines.push(...renderMonth(briefing.month));
   return lines.join('\n');
 }
 
@@ -303,7 +347,7 @@ export function renderBottles(briefing: Pick<Briefing, 'bottles' | 'bottleCheckM
 export const CASH_DIFFERENCE_CENTS = 50000;
 const count = (value: number | null) => value === null ? '' : `${value}× `;
 /** Cash the POS does not see yet: expenses and payouts from the cash book, the safe, where discounts went. */
-export function renderReport(briefing: Pick<Briefing, 'report'>): string[] {
+export function renderReport(briefing: Pick<Briefing, 'report' | 'unusualDiscounts'>): string[] {
   const report = briefing.report;
   if (!report) return [];
   const lines: string[] = [];
@@ -315,10 +359,12 @@ export function renderReport(briefing: Pick<Briefing, 'report'>): string[] {
     lines.push(`⚠ Přepočet pokladny nesedí se zůstatkem v deníku: ${report.cashDifferenceCents < 0 ? 'chybí' : 'přebývá'} ${crowns(Math.abs(report.cashDifferenceCents))}`);
   if (report.journalMismatches.length) lines.push('⚠ Tržba v reportu nesedí s deníkem: ' + report.journalMismatches.map(mismatch).join(', '));
   if (report.paymentMismatches.length) lines.push('⚠ Platby v reportu nesedí s deníkem: ' + report.paymentMismatches.map(mismatch).join(', '));
+  if (briefing.unusualDiscounts.length) lines.push('⚠ Neobvyklé slevy: ' + briefing.unusualDiscounts.map(unusual).join(', '));
   return lines;
 }
 
 /** "Diner: report 45 200 Kč, deník 44 900 Kč" */
+export const unusual = (row: UnusualDiscount) => `${row.label} ${crowns(row.amountCents)} (obvykle ${crowns(row.usualCents)})`;
 export const mismatch = (row: NonNullable<Briefing['report']>['journalMismatches'][number]) => `${row.label}: report ${crowns(row.reportCents)}, deník ${crowns(row.journalCents)}`;
 
 const NOTE_LINES = 3;
@@ -397,6 +443,25 @@ export function renderWeek(week: Briefing['week']): string[] {
   if (now.visits !== null) parts.push(`web ${group(now.visits)} ${visitsWord(now.visits)}${before.visits !== null && before.visitDays === now.visitDays ? change(now.visits, before.visits) : ''}`);
   if (now.reviews) parts.push(`recenze ${now.reviews}${now.starsTenths !== null ? `, průměr ${(now.starsTenths / 10).toFixed(1).replace('.', ',')} ★` : ''}`);
   return parts.length ? [`Týden ${shortDate(week.from)}–${shortDate(week.to)}: ${parts.join(' · ')}`] : [];
+}
+
+/** "Říjen: tržba … (+4 % proti září) · Diner … · výplaty v hotovosti … · výdaje z kasy …" */
+export function renderMonth(month: Briefing['month']): string[] {
+  if (!month || !month.current.revenueDays) return [];
+  const {current: now, previous: before} = month;
+  const name = monthName(month.month), title = name[0].toUpperCase() + name.slice(1);
+  // A change only between stretches with the same coverage: as many days with data, or every day of each.
+  const full = (part: MonthPart, through: string) => part.revenueDays === Number(through.slice(8));
+  const comparable = before.revenueCents > 0 && (before.revenueDays === now.revenueDays || (full(now, month.through) && full(before, before.through)));
+  const against = month.complete ? monthName(before.month) : `${shortDate(before.month + '-01')}–${shortDate(before.through)}`;
+  const notes = [comparable ? `${change(now.revenueCents, before.revenueCents).slice(2, -1)} proti ${against}` : '',
+    now.revenueDays < Number(month.through.slice(8)) ? `${daysWord(now.revenueDays)} s daty` : ''].filter(Boolean);
+  const parts = [`tržba ${crowns(now.revenueCents)}${notes.length ? ` (${notes.join(', ')})` : ''}`];
+  if (now.bySection && now.bySection.length > 1) parts.push(now.bySection.map(row => `${row.label} ${crowns(row.revenueCents)}`).join(' · '));
+  if (month.payoutsCents) parts.push(`výplaty v hotovosti ${crowns(month.payoutsCents)}`);
+  if (month.expensesCents) parts.push(`výdaje z kasy ${crowns(month.expensesCents)}`);
+  if (month.discountsCents) parts.push(`slevy ${crowns(month.discountsCents)}`);
+  return [`${title}${month.complete ? ' celkem' : ` do ${shortDate(month.through)}`}: ${parts.join(' · ')}`];
 }
 
 const MONTHS = ['leden', 'únor', 'březen', 'duben', 'květen', 'červen', 'červenec', 'srpen', 'září', 'říjen', 'listopad', 'prosinec'];

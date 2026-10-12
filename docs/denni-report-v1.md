@@ -52,7 +52,7 @@ Stejný tvar přijímá `PUT /admin/t/{tenant}/report` (oprava dne, import histo
 
 ## Ranní zpráva z reportu
 
-Dokud nejsou účty z pokladny, je zdrojem tržby report: tržba a plán, části, podíl plateb, slevy celkem a tři největší položky slev, výdaje z kasy a výplaty v hotovosti, záporný trezor se ⚠, rozdíl přepočtu pokladny proti zůstatku v deníku se ⚠ od 500 Kč (drobné rozdíly v mincích se neukazují) a body z „Report dne“. Jakmile přijdou účty z pokladny, mají přednost.
+Dokud nejsou účty z pokladny, je zdrojem tržby report: tržba a plán, části, podíl plateb, slevy celkem a tři největší položky slev, výdaje z kasy a výplaty v hotovosti, záporný trezor se ⚠, rozdíl přepočtu pokladny proti zůstatku v deníku se ⚠ od 500 Kč (drobné rozdíly v mincích se neukazují) a body z „Report dne“. Druh slevy aspoň dvojnásobný proti obvyklé výši (průměr stejného dne v týdnu za 4 týdny s reportem) a aspoň o 1 000 Kč vyšší jde do zprávy jako „⚠ Neobvyklé slevy“. Výplaty, výdaje z kasy a slevy se za měsíc sčítají podle řádků reportu (pondělní zpráva, poslední den měsíce, dashboard). Jakmile přijdou účty z pokladny, mají přednost.
 
 ## „Report dne“
 

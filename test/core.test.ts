@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
@@ -313,4 +313,36 @@ test('silent senders: the newest installation of each kind counts, the web after
   assert.deepEqual(sendersFrom(rows.slice(0, 1), now).map(row => [row.name, row.silent]), [['Web', true]]);
   assert.deepEqual(sendersFrom([{installation_id: 'pos-installation-1', last_seen_at: '2026-10-12T06:00:00Z'}], now).map(row => row.silent), [false]);
   assert.deepEqual(sendersFrom([], now), []);
+});
+
+test('month line: so far against the same days before, the whole month on its last day; revenue against a week before', () => {
+  const part = {revenueCents: 300000000, revenueDays: 11, bySection: [{section: 'diner', label: 'Diner', revenueCents: 100000000}, {section: 'club', label: 'Klub', revenueCents: 200000000}]};
+  const month = {month: '2026-10', through: '2026-10-11', complete: false, current: part, previous: {...part, revenueCents: 250000000, month: '2026-09', through: '2026-09-11'},
+    payouts: [{label: 'Security', amountCents: 8800000}], payoutsCents: 8800000, expenses: [], expensesCents: 1200000, discounts: [], discountsCents: 2500000};
+  assert.deepEqual(renderMonth(month), ['Říjen do 11. 10.: tržba 3 000 000 Kč (+20 % proti 1. 9.–11. 9.) · Diner 1 000 000 Kč · Klub 2 000 000 Kč · výplaty v hotovosti 88 000 Kč · výdaje z kasy 12 000 Kč · slevy 25 000 Kč']);
+  assert.deepEqual(renderMonth({...month, through: '2026-10-31', complete: true, current: {...part, revenueDays: 9, bySection: null}, previous: {...month.previous, revenueDays: 0, revenueCents: 0}, payoutsCents: 0, expensesCents: 0, discountsCents: 0}),
+    ['Říjen celkem: tržba 3 000 000 Kč (9 dní s daty)'], 'no change against a month without data, no sections when some days have none');
+  assert.deepEqual(renderMonth({...month, through: '2026-10-31', complete: true, current: {...part, revenueDays: 31}, previous: {...month.previous, revenueDays: 30, through: '2026-09-30'}})[0].slice(0, 56),
+    'Říjen celkem: tržba 3 000 000 Kč (+20 % proti září) · Di', 'a whole month against the whole month before, 31 days against 30');
+  assert.deepEqual(renderMonth(null), []);
+  const briefing = buildBriefing({businessDate: '2026-10-10', config, bills: [], closings: [], planHistory: [], incomplete: false, month, lastWeekRevenueCents: 50000, report: {
+    businessDate: '2026-10-10', source: 'admin', files: [], notes: null, warnings: [], lines: [{kind: 'revenue_section', key: 'bar', label: 'Bar', count: null, amountCents: 60000}]}});
+  const text = renderBriefing('Testovací podnik', briefing);
+  assert.match(text, /\nTržba: 600 Kč · před týdnem 500 Kč \(\+20 %\)\n/);
+  assert.match(text, /\nŘíjen do 11\. 10\.: tržba 3 000 000 Kč/);
+});
+
+test('unusual discounts: twice the usual amount on this weekday and 1 000 Kč above it, only with two weeks to compare', () => {
+  const report = {businessDate: '2026-10-09', source: 'admin' as const, files: [], notes: null, warnings: [], lines: [
+    {kind: 'discount' as const, key: 'personal', label: 'Personál', count: 15, amountCents: 365200},
+    {kind: 'discount' as const, key: 'promo-club', label: 'Promo Club', count: 1, amountCents: 268900},
+    {kind: 'discount' as const, key: 'odpis-club', label: 'Odpis Club', count: 1, amountCents: 53100},
+    {kind: 'discount' as const, key: 'ig', label: 'IG', count: 1, amountCents: 120000}]};
+  const history = {days: 3, totals: {personal: 300000, 'promo-club': 750000, 'odpis-club': 0}};
+  assert.deepEqual(unusualDiscounts(report, history).map(row => [row.label, row.amountCents, row.usualCents]), [['Personál', 365200, 100000], ['IG', 120000, 0]],
+    'promo is usual, a write-off of 531 Kč is under 1 000 Kč, a new type counts against zero');
+  assert.deepEqual(unusualDiscounts(report, {days: 1, totals: {}}), []);
+  const briefing = buildBriefing({businessDate: '2026-10-09', config, bills: [], closings: [], planHistory: [], incomplete: false, report, discountHistory: history});
+  assert.match(renderBriefing('Testovací podnik', briefing), /\n⚠ Neobvyklé slevy: Personál 3 652 Kč \(obvykle 1 000 Kč\), IG 1 200 Kč \(obvykle 0 Kč\)/);
+  assert.ok(todoList(briefing).some(item => item.text === 'Neobvyklá sleva: Personál 3 652 Kč (obvykle 1 000 Kč)'));
 });

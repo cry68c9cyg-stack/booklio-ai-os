@@ -351,6 +351,11 @@ try {
   assert.deepEqual([data.week.from, data.week.to, data.week.current.revenueCents, data.week.current.revenueDays], ['2026-10-03', '2026-10-09', 39000000, 1]);
   assert.ok(Array.isArray(data.sources.senders) && Array.isArray(data.sources.types));
   assert.equal(data.sources.report.found, true);
+  // The month so far: one day of the synthetic report, its sections, and the cash book's payouts and expenses.
+  assert.deepEqual([data.month.month, data.month.through, data.month.complete, data.month.current.revenueCents, data.month.current.revenueDays], ['2026-10', '2026-10-09', false, 39000000, 1]);
+  assert.equal(data.month.current.bySection.reduce((sum, row) => sum + row.revenueCents, 0), 39000000);
+  assert.deepEqual([data.month.payoutsCents, data.month.expensesCents], [data.briefing.report.payoutsCents, data.briefing.report.expensesCents]);
+  assert.deepEqual([data.month.previous.month, data.month.previous.through, data.month.previous.revenueDays], ['2026-09', '2026-09-09', 0]);
   // "Vyřízeno": kept per day and item, only with a session, undone by the same switch.
   assert.ok(data.todo.every(item => /^[a-f0-9]{24}$/.test(item.key) && item.done === false));
   const first = data.todo[0];
