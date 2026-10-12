@@ -71,7 +71,7 @@ Manko lahve = `expectedMl − countedMl` (přebytky se s mankem nesčítají), v
 
 Doplněno 9. 10. 2026 zpětně kompatibilně, stejně jako kontrola lahví: AI OS se musí nasadit dřív, než rezervační systém začne rezervace posílat. Zdrojem je rezervační systém (Booklio), který se páruje jako samostatná instalace se svým `installationId` a tokenem.
 
-`{type: "reservation", id, version, businessDate, startsAt, section, partySize, status, arrival?, source?}`
+`{type: "reservation", id, version, businessDate, startsAt, section, partySize, status, arrival?, source?, guest?}`
 
 | Pole | Typ | Poznámka |
 |---|---|---|
@@ -83,8 +83,24 @@ Doplněno 9. 10. 2026 zpětně kompatibilně, stejně jako kontrola lahví: AI O
 | `status` | `pending` \| `confirmed` \| `declined` \| `expired` \| `cancelled` | čeká, potvrzená, odmítnutá, propadlá, zrušená (hostem i obsluhou) |
 | `arrival` | `arrived` \| `no_show` \| `null` | zápis obsluhy, zda host dorazil |
 | `source` | string \| `null` | odkud rezervace přišla, např. `web`, `obsluha`, `mcp` |
+| `guest` | objekt, nepovinné | údaje hosta, viz níže; doplněno 12. 10. 2026 zpětně kompatibilně |
 
-Jména, kontakty ani poznámky hostů se neposílají; AI OS potřebuje jen počty. Ranní přehled ukáže dva řádky: potvrzené rezervace za vykazovaný den s počtem hostů a no-show, a potvrzené rezervace na právě začínající den po střediscích s počtem čekajících na potvrzení. Na rezervace přehled nečeká.
+Údaje hosta (`guest`, rozhodnutí MC 12. 10. 2026) jsou osobní údaje. OKO1 je drží jen ve své databázi provozovny v EU. Do archivu R2, denního exportu ani do ranní zprávy nejdou, ranní přehled dál ukazuje jen počty: potvrzené rezervace za vykazovaný den s počtem hostů a no-show, a potvrzené rezervace na právě začínající den po střediscích s počtem čekajících na potvrzení. Na rezervace přehled nečeká. Když rezervační systém rezervaci anonymizuje, pošle ji znovu s vyšší `version` a prázdnými údaji; OKO1 tím údaje přepíše.
+
+`guest = {code?, name?, contactType?, contact?, milkshake?, wish?, note?, reason?, language?, origin?, tables?}`
+
+| Pole | Typ | Poznámka |
+|---|---|---|
+| `code` | string ≤ 40 \| `null` | kód rezervace, který vidí host |
+| `name` | string ≤ 200 \| `null` | jméno hosta |
+| `contactType`, `contact` | `phone` \| `email` \| `null`, string ≤ 200 \| `null` | kontakt hosta |
+| `milkshake`, `wish` | string \| `null` | volby a přání hosta z rezervace |
+| `note`, `reason` | string ≤ 2000 \| `null` | poznámka obsluhy, důvod odmítnutí nebo zrušení |
+| `language` | string ≤ 10 \| `null` | jazyk zpráv hostovi |
+| `origin` | string ≤ 100 \| `null` | odkud host na web přišel (např. `qr`, `profil`) |
+| `tables` | pole id stolů | přidělené stoly, např. `p3`, `kA` |
+
+Prázdný řetězec znamená totéž co `null`. Neznámé pole v `guest` dávku odmítne.
 
 ## Kdy posílat
 

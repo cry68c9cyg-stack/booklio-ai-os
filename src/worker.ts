@@ -9,7 +9,7 @@ import {addDays, isDate} from './time.ts';
 import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-report.ts';
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
-import {InputError, validateBatch, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Reservation, type TenantConfig} from './validate.ts';
+import {InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Reservation, type TenantConfig} from './validate.ts';
 
 type Env = DeliveryEnv & {
   TENANTS: DurableObjectNamespace<TenantObject>; REGISTRY: DurableObjectNamespace<Registry>; ADMIN_SECRET: string; DATA_JURISDICTION?: string;
@@ -240,17 +240,20 @@ export class TenantObject extends DurableObject<Env> {
       if (replay) return replay.payload_hash === payloadHash ? ok(JSON.parse(replay.result)) : failure('BATCH_CONFLICT', 409);
       const now = new Date().toISOString();
       let accepted = 0, stale = 0;
+      // A booking first sent with counts only takes its guest details at the same version (resent once, 12 Oct 2026).
       for (const record of batch.records) {
         const changed = this.sql.exec(`INSERT INTO records(type, id, version, business_date, register_id, json, installation_id, received_at) VALUES(?,?,?,?,?,?,?,?)
           ON CONFLICT(type, id) DO UPDATE SET version=excluded.version, business_date=excluded.business_date, register_id=excluded.register_id,
-          json=excluded.json, installation_id=excluded.installation_id, received_at=excluded.received_at WHERE excluded.version > records.version`,
+          json=excluded.json, installation_id=excluded.installation_id, received_at=excluded.received_at WHERE excluded.version > records.version
+          OR (excluded.type = 'reservation' AND excluded.version = records.version AND instr(records.json, '"guest":') = 0 AND instr(excluded.json, '"guest":') > 0)`,
         record.type, record.id, record.version, record.businessDate, 'registerId' in record ? record.registerId : '', JSON.stringify(record), batch.installationId, now).rowsWritten;
         if (changed) accepted++; else stale++;
       }
       const result = {batchId: batch.batchId, accepted, stale};
       this.sql.exec('INSERT INTO batches VALUES(?,?,?,?,?)', batch.batchId, batch.installationId, payloadHash, JSON.stringify(result), now);
       this.sql.exec('UPDATE installations SET last_seen_at=? WHERE installation_id=?', now, batch.installationId);
-      this.archive(`t/${tenant}/ingest/${now.slice(0, 10)}/${batch.batchId}.json`, JSON.stringify(batch));
+      // Guest details stay only in this database: the archive keeps the batch without them.
+      this.archive(`t/${tenant}/ingest/${now.slice(0, 10)}/${batch.batchId}.json`, JSON.stringify({...batch, records: batch.records.map(withoutGuest)}));
       return ok(result);
     });
   }
@@ -401,7 +404,7 @@ export class TenantObject extends DurableObject<Env> {
   private exportDay(date: string) {
     return {
       businessDate: date, exportedAt: new Date().toISOString(),
-      records: this.sql.exec<{json: string}>('SELECT json FROM records WHERE business_date=? ORDER BY type, id', date).toArray().map(row => JSON.parse(row.json)),
+      records: this.sql.exec<{json: string}>('SELECT json FROM records WHERE business_date=? ORDER BY type, id', date).toArray().map(row => withoutGuest(JSON.parse(row.json))),
       report: this.report(date), notes: this.notes(date),
       briefing: this.sql.exec('SELECT status, incomplete, text, created_at AS createdAt FROM briefings WHERE business_date=?', date).toArray()[0] ?? null,
     };
