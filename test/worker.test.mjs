@@ -8,7 +8,7 @@ import {Miniflare} from 'miniflare';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {writeFile} from 'node:fs/promises';
-import {bookSheets, reportSheets, xlsx} from './xlsx-fixture.ts';
+import {journalSheets, reportSheets, xlsx} from './xlsx-fixture.ts';
 
 const dir = await mkdtemp(join(tmpdir(), 'ai-os-worker-'));
 const admin = 'local-test-only-admin-secret-32-characters';
@@ -162,7 +162,7 @@ try {
   // Managers' Excel on OneDrive: fetched only at 7, 8 and 9, archived, stored as the day's report; "Report dne" goes to Claude without names.
   await mf.dispose();
   const outbound = [];
-  const files = {'https://test.files.1drv.com/report.xlsx': await xlsx(reportSheets()), 'https://test.files.1drv.com/book.xlsx': await xlsx(bookSheets())};
+  const files = {'https://test.files.1drv.com/report.xlsx': await xlsx(reportSheets()), 'https://test.files.1drv.com/book.xlsx': await xlsx(journalSheets())};
   mf = new Miniflare({...options,
     bindings: {...options.bindings, ANTHROPIC_API_KEY: 'test-only-anthropic'},
     outboundService: async request => {
@@ -188,13 +188,13 @@ try {
   const tickExcel = async at => (await call('POST', '/admin/t/excel-venue/tick', {at})).json();
   assert.equal((await tickExcel('2026-10-10T04:00:00Z')).decision, 'wait'); // 6:00 local: nothing is fetched
   assert.equal(outbound.length, 0);
-  // 7:00: only the cash book is there, which is not the day's report: wait and look again at 8:00.
+  // 7:00: only the cash book is there (with revenue), which is not the day's report: wait and look again at 8:00.
   assert.equal((await tickExcel('2026-10-10T05:00:00Z')).decision, 'wait');
   const excelSent = await tickExcel('2026-10-10T06:00:00Z'); // 8:00 local
   assert.equal(excelSent.decision, 'send');
   assert.equal(excelSent.businessDate, '2026-10-09');
   assert.match(excelSent.text, /Tržba: 390 000 Kč\nDiner 60 000 Kč · Bar 150 000 Kč · Klub 180 000 Kč\n/);
-  assert.match(excelSent.text, /⚠ Trezor je v deníku záporný: −20 000 Kč/);
+  assert.match(excelSent.text, /⚠ Přepočet pokladny nesedí se zůstatkem v deníku: přebývá 29 199 Kč/);
   assert.match(excelSent.text, /\nReport dne:\n⚠ Host Novák rozbil sklenici\n• Objednat led$/);
   const claude = outbound.find(entry => entry.url.startsWith('https://api.anthropic.com/'));
   assert.equal(claude.key, 'test-only-anthropic');
@@ -220,6 +220,9 @@ try {
   assert.equal((await (await call('GET', '/admin/t/excel-venue/briefing?date=2026-10-11')).json()).briefing.revenueCents, 100000);
   assert.equal((await call('GET', '/admin/t/excel-venue/report?date=11.10.2026')).status, 400);
   assert.deepEqual(await (await call('POST', '/admin/t/test-venue/fetch', {date: '2026-10-09'})).json(), {found: false, warnings: ['OneDrive: odkaz na složku není nastavený.']});
+  const fetchesBefore = outbound.length;
+  assert.deepEqual(await (await call('POST', '/admin/t/excel-venue/fetch', {date: '2026-10-09', keep: true})).json(), {found: true, kept: true, warnings: []}, 'history loading keeps a day with the daily report');
+  assert.equal(outbound.length, fetchesBefore);
 
   // Dashboard: page with a strict CSP, login by SMS code to the owner, session cookie, day data, logout.
   await mf.dispose();
@@ -256,8 +259,8 @@ try {
   assert.equal(data.briefing.revenueCents, 39000000);
   assert.equal(data.days.length, 35);
   assert.equal(data.days.at(-1).date, '2026-10-09');
-  assert.equal(data.balances.bank, 31000000);
-  assert.equal(data.todo[0].text, 'Trezor je v deníku záporný: −20 000 Kč');
+  assert.deepEqual([data.balances.register, data.balances.safe], [14080100, 3000000]);
+  assert.equal(data.todo[0].text, 'Přepočet pokladny nesedí s deníkem: +29 199 Kč');
   assert.equal((await board('GET', '/data', undefined, {cookie: 'oko1_session=' + 'f'.repeat(64)})).status, 401);
   assert.equal((await mf.dispatchFetch('http://local.test/d/excel-venue/data', {headers: cookieHeader})).status, 200, 'the session works without other headers');
   assert.equal((await mf.dispatchFetch('http://local.test/d/other-venue/data', {headers: cookieHeader})).status, 401, 'a session is valid for its venue only');

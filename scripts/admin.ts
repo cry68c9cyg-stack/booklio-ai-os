@@ -1,8 +1,12 @@
 // Správa provozovny v AI OS z příkazové řádky. Spuštění: node scripts/admin.ts <příkaz> ...
 // Adresa služby a správní tajemství se berou z proměnných prostředí, nikdy z argumentů:
 //   AI_OS_URL=https://...  AI_OS_ADMIN_SECRET=...  node scripts/admin.ts ...
-import {readFile} from 'node:fs/promises';
+import {readdir, readFile} from 'node:fs/promises';
+import {basename, join} from 'node:path';
 import {CsvError, parseHistoryCsv} from '../src/history-csv.ts';
+import {JOURNAL_LABEL} from '../src/daily-report.ts';
+import {pickFiles, reportFromFiles} from '../src/onedrive.ts';
+import {isDate} from '../src/time.ts';
 
 const usage = `Použití:
   node scripts/admin.ts config <tenant> <konfigurace.json>   uloží nastavení provozovny
@@ -12,7 +16,8 @@ const usage = `Použití:
   node scripts/admin.ts preview <tenant> <YYYY-MM-DD>         ukáže ranní přehled za den
   node scripts/admin.ts briefings <tenant>                    vypíše uložené a odeslané přehledy
   node scripts/admin.ts report <tenant> <YYYY-MM-DD>          ukáže uložený denní report manažerů a rozbor „Report dne“
-  node scripts/admin.ts fetch <tenant> <YYYY-MM-DD>           načte denní report z OneDrive hned (mimo ranní okno)`;
+  node scripts/admin.ts fetch <tenant> <YYYY-MM-DD> [--keep]  načte denní report z OneDrive hned (mimo ranní okno); --keep nepřepíše den, který denní report už má
+  node scripts/admin.ts import <tenant> <složka> <od> <do> [--dry-run] [--force]   nahraje dny z excelů manažerů ve složce (deník a denní reporty); den s uloženým denním reportem přeskočí, pokud není --force`;
 
 function fail(message: string): never {
   console.error(message);
@@ -82,8 +87,32 @@ switch (command) {
     console.log(JSON.stringify(await call('GET', 'report', undefined, `?date=${encodeURIComponent(arg ?? '')}`), null, 2));
     break;
   case 'fetch':
-    console.log(JSON.stringify(await call('POST', 'fetch', {date: arg}), null, 2));
+    if (flag !== undefined && flag !== '--keep') fail(usage);
+    console.log(JSON.stringify(await call('POST', 'fetch', {date: arg, keep: flag === '--keep'}), null, 2));
     break;
+  case 'import': {
+    // The same reading as the morning fetch from OneDrive, day by day, for files that are already at hand.
+    const [from, to] = [flag, process.argv[6]];
+    const options: string[] = process.argv.slice(7);
+    if (!arg || !isDate(from) || !isDate(to) || from > to || options.some(option => option !== '--dry-run' && option !== '--force')) fail(usage);
+    const dryRun = options.includes('--dry-run'), force = options.includes('--force');
+    const names = (await readdir(arg)).filter(name => /\.xlsx$/i.test(name) && !name.startsWith('~$'));
+    const files = await Promise.all(names.map(async name => ({name, bytes: new Uint8Array(await readFile(join(arg, name)))})));
+    for (let day = new Date(`${from}T12:00:00Z`); day.toISOString().slice(0, 10) <= to; day.setUTCDate(day.getUTCDate() + 1)) {
+      const date = day.toISOString().slice(0, 10), picked = pickFiles(names, date);
+      const report = await reportFromFiles(files.filter(file => file.name === picked.report || picked.books.includes(file.name)), date);
+      if (!report) { console.log(`${date}: nic`); continue; }
+      const revenue = report.lines.filter(line => line.kind === 'revenue_section').reduce((sum, line) => sum + line.amountCents, 0);
+      console.log(`${date}: ${report.files.map(name => basename(name)).join(', ')} · tržba ${Math.round(revenue / 100).toLocaleString('cs-CZ')} Kč · řádků ${report.lines.length}${report.warnings.length ? ` · ${report.warnings.join(' ')}` : ''}`);
+      // A past day without its daily report is history, not a missing report.
+      const warnings = report.warnings.filter(text => !text.startsWith('Denní report chybí'));
+      if (dryRun) continue;
+      const stored = await call('GET', 'report', undefined, `?date=${date}`) as {report: {lines: {kind: string; label: string}[]} | null};
+      if (!force && stored.report?.lines.some(line => line.kind === 'revenue_section' && !line.label.startsWith(JOURNAL_LABEL))) { console.log(`${date}: denní report už je uložený, přeskočeno`); continue; }
+      await call('PUT', 'report', {...report, source: 'admin', warnings});
+    }
+    break;
+  }
   default:
     fail(usage);
 }
