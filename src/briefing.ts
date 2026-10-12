@@ -1,5 +1,5 @@
 import {DEFAULT_BOTTLE_LOSS_CENTS, type Bill, type BottleCheck, type CashClosing, type Reservation, type ReviewSummary, type TenantConfig, type WebTraffic} from './validate.ts';
-import {addDays, weekday} from './time.ts';
+import {addDays, localTime, weekday} from './time.ts';
 import {line, total, type DailyReport} from './daily-report.ts';
 import type {NotePoint, NotesAnalysis} from './notes.ts';
 import {weatherText, type WeatherDay} from './weather.ts';
@@ -35,8 +35,14 @@ export type Briefing = {
   /** Bookings of the reported day and of the day that is starting. `null` = the reservation system sent nothing for either day. */
   reservations: {
     day: {confirmed: number; guests: number; arrived: number; noShows: number; noShowGuests: number; cancelled: number};
-    today: {confirmed: number; guests: number; pending: number; bySection: {section: string; label: string; confirmed: number; guests: number}[]};
+    today: {confirmed: number; guests: number; pending: number; bySection: {section: string; label: string; confirmed: number; guests: number}[];
+      /** Confirmed guests by the local hour they come (only hours with guests), for the staff plan. */
+      byHour: {hour: number; guests: number}[];
+      /** Confirmed bookings of `GROUP_MIN_GUESTS` and more: when, where, how many (no names). */
+      groups: {time: string; label: string; partySize: number}[]};
   } | null;
+  /** Bookings for the next 7 days (from tomorrow) still waiting for the staff to confirm them. */
+  pendingAhead: {count: number; guests: number; first: {date: string; time: string}} | null;
   /** The website on the reported calendar day, against the same weekday a week before. `null` = the website sent nothing. */
   web: {visits: number; withAction: number; lastWeekVisits: number | null; reservationsSent: number; reviewScans: number; topOrigins: {name: string; visits: number}[]} | null;
   /** Reviews that reached the website's admin on the reported calendar day, and how many wait there. `null` = nothing sent. */
@@ -63,6 +69,8 @@ export type Briefing = {
   incomplete: boolean;
 };
 export type WeekPart = {revenueCents: number; revenueDays: number; reservations: number; guests: number; noShows: number; noShowGuests: number;
+  /** Bookings for these days that were cancelled (by the guest or the staff); a week stored before this field has none. */
+  cancelled?: number;
   visits: number | null; visitDays: number; webSent: number; webConfirmed: number; reviews: number; rated: number; starsTenths: number | null;
   /** Website visits by where they came from, with the visits that booked, called or navigated; most visits first. */
   origins: {key: string; name: string; visits: number; withAction: number}[]};
@@ -122,6 +130,8 @@ function journalMismatches(report: DailyReport, names: Record<string, string>, r
 }
 
 /** Counts bookings: the reported day (who came, who did not) and today's outlook (confirmed and still waiting). */
+/** A booking of this many guests or more is a group worth knowing in the morning. */
+export const GROUP_MIN_GUESTS = 8;
 export function summarizeReservations(config: TenantConfig, day: Reservation[], today: Reservation[]): Briefing['reservations'] {
   if (!day.length && !today.length) return null;
   const confirmedDay = day.filter(row => row.status === 'confirmed');
@@ -134,6 +144,10 @@ export function summarizeReservations(config: TenantConfig, day: Reservation[], 
   }
   const order = Object.keys(config.sections);
   const guests = (rows: Reservation[]) => rows.reduce((sum, row) => sum + row.partySize, 0);
+  const local = (row: Reservation) => localTime(new Date(row.startsAt), config.timeZone);
+  const hours = new Map<number, number>();
+  for (const row of confirmedToday) hours.set(local(row).hour, (hours.get(local(row).hour) ?? 0) + row.partySize);
+  const clock = (row: Reservation) => { const time = local(row); return `${time.hour}:${String(time.minute).padStart(2, '0')}`; };
   return {
     day: {
       confirmed: confirmedDay.length, guests: guests(confirmedDay), arrived: confirmedDay.filter(row => row.arrival === 'arrived').length,
@@ -143,6 +157,11 @@ export function summarizeReservations(config: TenantConfig, day: Reservation[], 
       confirmed: confirmedToday.length, guests: guests(confirmedToday), pending: today.filter(row => row.status === 'pending').length,
       bySection: [...sections].map(([section, row]) => ({section, label: config.sections[section] ?? section, ...row}))
         .sort((a, b) => (order.indexOf(a.section) + 1 || 99) - (order.indexOf(b.section) + 1 || 99) || a.section.localeCompare(b.section)),
+      // Club hours after midnight (0–5) belong to the night before: they sort after the evening.
+      byHour: [...hours].map(([hour, count]) => ({hour, guests: count})).sort((a, b) => (a.hour + 18) % 24 - (b.hour + 18) % 24),
+      groups: confirmedToday.filter(row => row.partySize >= GROUP_MIN_GUESTS)
+        .sort((a, b) => a.startsAt.localeCompare(b.startsAt) || b.partySize - a.partySize)
+        .map(row => ({time: clock(row), label: config.sections[row.section] ?? row.section, partySize: row.partySize})),
     },
   };
 }
@@ -316,6 +335,7 @@ export function buildBriefing(input: {
   reviews?: ReviewSummary;
   week?: Week | null; silent?: {name: string; since: string}[];
   month?: Month | null; lastWeekRevenueCents?: number | null; forecast?: Forecast | null;
+  pendingAhead?: Briefing['pendingAhead'];
   /** The forecast OKO1 made for this day the morning before (its "plan for today"); wins over the weekday average. */
   forecastPlanCents?: number | null;
   /** The plan the message about this day gave for the next one (kept), so an old day shows what was sent. */
@@ -404,6 +424,7 @@ export function buildBriefing(input: {
     lastWeekRevenueCents: input.lastWeekRevenueCents ?? null,
     outlook: forecastOutlook(outlook(input.reservationsToday ?? [], input.todayPlanHistory ?? [], input.todayGuestHistory ?? []), input.forecast ?? null, input.todayPlanCents ?? null),
     forecast: input.forecast ?? null,
+    pendingAhead: input.pendingAhead ?? null,
     noShows: noShowRate(input.reservations ?? [], input.noShowHistory ?? null),
     unusualDiscounts: report ? unusualDiscounts(report, input.discountHistory ?? {days: 0, totals: {}}) : [],
     silent: input.silent ?? [],
@@ -454,6 +475,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderReport(briefing));
   lines.push(...renderBottles(briefing));
   lines.push(...renderReservations(briefing.reservations, briefing.outlook));
+  if (briefing.pendingAhead) lines.push(`Na příštích 7 dní ${pendingAheadText(briefing.pendingAhead)}`);
   if (noShowAlarm(briefing.noShows)) lines.push(`⚠ No-show: ${noShowText(briefing.noShows!)}`);
   lines.push(...renderForecast(briefing.forecast));
   lines.push(...renderWeb(briefing.web));
@@ -519,6 +541,9 @@ export function renderNotes(briefing: Pick<Briefing, 'notes'>): string[] {
     ...(notes.points.length > NOTE_LINES ? [`… a další ${notes.points.length - NOTE_LINES}`] : [])];
 }
 
+/** "Na příštích 7 dní čeká na potvrzení 5 rezervací (12 hostů), nejbližší čt 15. 10. 18:00" */
+export const pendingAheadText = (pending: NonNullable<Briefing['pendingAhead']>) =>
+  `čeká na potvrzení ${pending.count} ${pending.count === 1 ? 'rezervace' : pending.count <= 4 ? 'rezervace' : 'rezervací'} (${pending.guests} ${guestsWord(pending.guests)}), nejbližší ${weekdayShort[weekday(pending.first.date)]} ${shortDate(pending.first.date)} ${pending.first.time}`;
 const guestsWord = (count: number) => count === 1 ? 'host' : count >= 2 && count <= 4 ? 'hosté' : 'hostů';
 /** Two short lines: how the reported day's bookings turned out, and what is booked for the day that is starting. */
 export function renderReservations(reservations: Briefing['reservations'], outlook: Briefing['outlook'] | null = null): string[] {
@@ -533,7 +558,13 @@ export function renderReservations(reservations: Briefing['reservations'], outlo
   // The usual count is the final one of those days, this morning's count still grows: no change in per cent.
   if (outlook?.usualGuests) next += ` · obvykle za celý den ${outlook.usualGuests} ${guestsWord(outlook.usualGuests)}`;
   if (outlook?.planCents) next += ` · plán tržby ${crowns(outlook.planCents)}`;
-  return [past, next];
+  const lines = [past, next];
+  // The busiest hours for the staff plan: the two with the most booked guests, in time order.
+  const peaks = [...today.byHour ?? []].sort((a, b) => b.guests - a.guests || a.hour - b.hour).slice(0, 2)
+    .sort((a, b) => (a.hour + 18) % 24 - (b.hour + 18) % 24);
+  if (peaks.length) lines.push('Nejvíc rezervovaných hostů: ' + peaks.map(row => `${row.hour}–${(row.hour + 1) % 24} h ${row.guests}`).join(', '));
+  if (today.groups?.length) lines.push(`Skupiny od ${GROUP_MIN_GUESTS} osob: ` + today.groups.map(row => `${row.time} ${row.label} ${row.partySize}`).join(', '));
+  return lines;
 }
 
 const visitsWord = (count: number) => count === 1 ? 'návštěva' : count >= 2 && count <= 4 ? 'návštěvy' : 'návštěv';
@@ -580,7 +611,8 @@ export function renderWeek(week: Briefing['week']): string[] {
     const notes = [same ? change(now.revenueCents, before.revenueCents).slice(2, -1) : '', now.revenueDays < 7 ? `${daysWord(now.revenueDays)} s daty` : ''].filter(Boolean);
     parts.push(`tržba ${crowns(now.revenueCents)}${notes.length ? ` (${notes.join(', ')})` : ''}`);
   }
-  if (now.reservations || before.reservations) parts.push(`rezervace ${now.reservations}, ${now.guests} ${guestsWord(now.guests)}${change(now.guests, before.guests)}${now.noShowGuests ? `, ${notCame(now.noShowGuests)} ${now.noShowGuests} ${guestsWord(now.noShowGuests)} (${percent(Math.round(now.noShowGuests / now.guests * 1000))})` : ''}`);
+  if (now.reservations || before.reservations) parts.push(`rezervace ${now.reservations}, ${now.guests} ${guestsWord(now.guests)}${change(now.guests, before.guests)}${now.noShowGuests ? `, ${notCame(now.noShowGuests)} ${now.noShowGuests} ${guestsWord(now.noShowGuests)} (${percent(Math.round(now.noShowGuests / now.guests * 1000))})` : ''}`
+    + (now.cancelled ? `, zrušeno ${now.cancelled} (${percent(Math.round(now.cancelled / (now.cancelled + now.reservations) * 1000))} rezervací)` : ''));
   if (now.visits !== null) parts.push(`web ${group(now.visits)} ${visitsWord(now.visits)}${before.visits !== null && before.visitDays === now.visitDays ? change(now.visits, before.visits) : ''}`
     + (now.webSent || now.webConfirmed ? ` · rezervační formulář odeslán ${now.webSent}× · potvrzené rezervace z webu na tyto dny ${now.webConfirmed}` : ''));
   if (now.reviews) parts.push(`recenze ${now.reviews}${now.starsTenths !== null ? `, průměr ${stars(now.starsTenths)}` : ''}`);

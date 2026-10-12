@@ -159,6 +159,7 @@ function weekCard(w) {
   rows.push('<tr><td>Rezervace (hosté)</td><td class="n">' + n.reservations + ' (' + n.guests + ')' + vs(n.guests, p.guests) + '</td><td class="n muted">' + p.reservations + ' (' + p.guests + ')</td></tr>');
   const ns = x => x.noShowGuests + ' ' + (x.guests ? '(' + Math.round(x.noShowGuests / x.guests * 100) + ' %)' : '');
   rows.push('<tr><td>Nedorazilo hostů</td><td class="n' + (n.noShowGuests ? ' warn' : '') + '">' + ns(n) + '</td><td class="n muted">' + ns(p) + '</td></tr>');
+  if (n.cancelled || p.cancelled) rows.push('<tr><td>Zrušené rezervace</td><td class="n">' + (n.cancelled || 0) + '</td><td class="n muted">' + (p.cancelled || 0) + '</td></tr>');
   rows.push('<tr><td>Návštěvy webu</td><td class="n">' + (n.visits === null ? '–' : num(n.visits) + (p.visits !== null && p.visitDays === n.visitDays ? vs(n.visits, p.visits) : '')) + '</td><td class="n muted">' + (p.visits === null ? '–' : num(p.visits)) + '</td></tr>');
   const stars = t => t === null ? '' : ', ' + (t / 10).toFixed(1).replace('.', ',') + ' ★';
   rows.push('<tr><td>Web: odeslané formuláře → potvrzené rezervace z webu</td><td class="n">' + n.webSent + ' → ' + n.webConfirmed + '</td><td class="n muted">' + p.webSent + ' → ' + p.webConfirmed + '</td></tr>');
@@ -255,7 +256,11 @@ function render(data) {
     (rv.today.pending ? ' · <span class="warn">čeká ' + rv.today.pending + '</span>' : '') + '</div>' +
     (b.outlook && (b.outlook.usualGuests || b.outlook.planCents) ? '<div class="muted">' + [b.outlook.usualGuests ? 'obvykle za celý den ' + hosts(b.outlook.usualGuests) : '',
       b.outlook.planCents ? 'plán tržby ' + kc(b.outlook.planCents) : ''].filter(Boolean).join(' · ') + '</div>' : '') +
-    (b.noShows && b.noShows.guests ? '<div class="muted">nedorazilo ' + Math.round(b.noShows.ratePermille / 10) + ' % rezervovaných hostů' + (b.noShows.usualPermille !== null ? ' (obvykle ' + Math.round(b.noShows.usualPermille / 10) + ' %)' : '') + '</div>' : '') + '</div>');
+    ((rv.today.byHour || []).length ? '<div>nejvíc hostů: ' + rv.today.byHour.slice().sort((x, y) => y.guests - x.guests || x.hour - y.hour).slice(0, 2)
+      .sort((x, y) => (x.hour + 18) % 24 - (y.hour + 18) % 24).map(r => '<b>' + r.hour + '–' + (r.hour + 1) % 24 + ' h</b> ' + r.guests).join(', ') + '</div>' : '') +
+    ((rv.today.groups || []).length ? '<div>skupiny: ' + rv.today.groups.map(g => esc(g.time) + ' ' + esc(g.label) + ' <b>' + g.partySize + '</b>').join(', ') + '</div>' : '') +
+    (b.noShows && b.noShows.guests ? '<div class="muted">nedorazilo ' + Math.round(b.noShows.ratePermille / 10) + ' % rezervovaných hostů' + (b.noShows.usualPermille !== null ? ' (obvykle ' + Math.round(b.noShows.usualPermille / 10) + ' %)' : '') + '</div>' : '') +
+    (b.pendingAhead ? '<div class="warn">příštích 7 dní čeká na potvrzení ' + b.pendingAhead.count + ' (' + hosts(b.pendingAhead.guests) + '), nejbližší ' + esc(czDate(b.pendingAhead.first.date)) + ' ' + esc(b.pendingAhead.first.time) + '</div>' : '') + '</div>');
   const w = b.web, visits = n => n + ' ' + (n === 1 ? 'návštěva' : n >= 2 && n <= 4 ? 'návštěvy' : 'návštěv');
   if (w) cards.push('<div class="card"><h2>Návštěvnost webu</h2><div class="big">' + w.visits + '</div><div class="muted">' + visits(w.visits) +
     (w.lastWeekVisits !== null ? ' · před týdnem ' + w.lastWeekVisits + (w.lastWeekVisits ? ' (' + signed(pct(w.visits, w.lastWeekVisits)) + ')' : '') : '') + '</div>' +

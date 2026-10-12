@@ -171,10 +171,23 @@ test('reservations: the reported day counts confirmed bookings and no-shows, tod
   assert.deepEqual(renderReservations(summary), [
     'Rezervace: 2 (5 hostů), nedorazilo 1 (1 host), zrušeno 1',
     'Dnes rezervováno: 2 (8 hostů) · Diner 1 · Klub 1, čeká na potvrzení 1',
+    'Nejvíc rezervovaných hostů: 20–21 h 8',
   ]);
+  // The busiest two hours in time order (the club after midnight last), groups of 8 and more with time, place and size.
+  const at = (id: string, startsAt: string, section: string, partySize: number): Reservation => ({...booking(id, '2026-10-09', section, partySize, 'confirmed'), startsAt});
+  const busy = summarizeReservations(config, [], [at('p1', '2026-10-09T16:00:00Z', 'diner', 12), at('p2', '2026-10-09T17:30:00Z', 'diner', 4),
+    at('p3', '2026-10-09T22:15:00Z', 'club', 9), at('p4', '2026-10-09T23:00:00Z', 'club', 20), at('p5', '2026-10-09T17:45:00Z', 'diner', 3)]);
+  assert.deepEqual(busy?.today.byHour, [{hour: 18, guests: 12}, {hour: 19, guests: 7}, {hour: 0, guests: 9}, {hour: 1, guests: 20}]);
+  assert.deepEqual(renderReservations(busy).slice(2), ['Nejvíc rezervovaných hostů: 18–19 h 12, 1–2 h 20', 'Skupiny od 8 osob: 18:00 Diner 12, 0:15 Klub 9, 1:00 Klub 20']);
   const briefing = buildBriefing({businessDate: '2026-10-08', config, bills: [], closings: [], planHistory: [], incomplete: false,
     reservations: [], reservationsToday: [booking('h', '2026-10-09', 'diner', 2, 'pending'), booking('i', '2026-10-09', 'diner', 3, 'pending')]});
   assert.ok(todoList(briefing).some(item => item.level === 'warn' && item.text === 'Rezervace na dnešek čekající na potvrzení: 2'));
+  // Bookings for the next 7 days still waiting: one line in the message and a to-do item; nothing when none wait.
+  const ahead = buildBriefing({businessDate: '2026-10-08', config, bills: [], closings: [], planHistory: [], incomplete: false,
+    pendingAhead: {count: 5, guests: 12, first: {date: '2026-10-15', time: '18:00'}}});
+  assert.match(renderBriefing('Test', ahead), /\nNa příštích 7 dní čeká na potvrzení 5 rezervací \(12 hostů\), nejbližší čt 15\. 10\. 18:00(\n|$)/);
+  assert.ok(todoList(ahead).some(item => item.level === 'warn' && item.text === 'Na příštích 7 dní čeká na potvrzení 5 rezervací (12 hostů), nejbližší čt 15. 10. 18:00'));
+  assert.ok(!renderBriefing('Test', briefing).includes('Na příštích 7 dní'));
   assert.throws(() => validateBatch({batchId: 'batch-0001', installationId: 'booklio', records: [{...booking('x', '2026-10-09', 'diner', 2, 'confirmed'), status: 'seated'}]}), InputError);
 });
 
@@ -291,6 +304,7 @@ test('weekly summary only in the Monday message (Sunday\'s report), silent sende
     'no change against a week with a different number of days');
   assert.match(renderWeek({...week, current: {...part, revenueDays: 3}, previous: {...part, revenueDays: 3, revenueCents: 100000000, visits: 1000, visitDays: 2}})[0],
     /^Týden 5\. 10\.–11\. 10\.: tržba 1 400 000 Kč \(\+40 %, 3 dny s daty\) · .* · web 2 100 návštěv · /, 'one bracket; visits compared only over as many days');
+  assert.match(renderWeek({...week, current: {...part, cancelled: 10}})[0], /· rezervace 30, 120 hostů \(\+20 %\), nedorazilo 6 hostů \(5 %\), zrušeno 10 \(25 % rezervací\) · /);
   assert.deepEqual(renderWeek(null), []);
   const silent = [{name: 'Web', since: '12. 10. 18:01'}];
   const sunday = buildBriefing({businessDate: '2026-10-11', config, bills: [], closings: [], planHistory: [], incomplete: false, week, silent});
@@ -447,6 +461,6 @@ test('outlook for the starting day and no-shows against the usual share', () => 
   const briefing = buildBriefing({businessDate: '2026-10-09', config, bills: [], closings: [], planHistory: [], incomplete: false, reservations: day, reservationsToday: today,
     todayPlanHistory: [{revenueCents: 10000000}, {revenueCents: 14000000}], todayGuestHistory: [50, 56], noShowHistory: {confirmedGuests: 400, noShowGuests: 20}});
   const text = renderBriefing('Testovací podnik', briefing);
-  assert.match(text, /\nDnes rezervováno: 2 \(64 hostů\), čeká na potvrzení 1 · obvykle za celý den 53 hostů · plán tržby 120 000 Kč\n⚠ No-show: nedorazilo 12 hostů z 52 rezervovaných \(23 %, obvykle 5 %\)/);
+  assert.match(text, /\nDnes rezervováno: 2 \(64 hostů\), čeká na potvrzení 1 · obvykle za celý den 53 hostů · plán tržby 120 000 Kč\nNejvíc rezervovaných hostů: 20–21 h 64\nSkupiny od 8 osob: 20:00 Diner 34, 20:00 Diner 30\n⚠ No-show: nedorazilo 12 hostů z 52 rezervovaných \(23 %, obvykle 5 %\)/);
   assert.ok(todoList(briefing).some(item => item.text === 'No-show: nedorazilo 12 hostů z 52 rezervovaných (23 %, obvykle 5 %)'));
 });
