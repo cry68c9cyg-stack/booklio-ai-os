@@ -266,15 +266,48 @@ try {
   assert.equal(page.status, 200);
   const csp = page.headers.get('content-security-policy'), nonce = csp.match(/'nonce-([a-f0-9]+)'/)[1];
   assert.match(csp, /default-src 'none'/);
-  assert.ok((await page.text()).includes(`<script nonce="${nonce}">`));
+  const pageText = await page.text();
+  assert.ok(pageText.includes(`<script nonce="${nonce}">`));
+  assert.match(pageText, /<input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" minlength="6" pattern="\[0-9\]\{6\}"/);
   assert.equal((await board('GET', '/data')).status, 401);
   assert.equal((await mf.dispatchFetch('http://local.test/d/excel-venue/login', {method: 'POST', body: 'x'})).status, 415);
-  // Only the owner's number gets a code; any other number and any unknown venue get the same answer and nothing is sent.
-  assert.deepEqual(await (await board('POST', '/login', {phone: '+420 600 000 999'})).json(), {sent: true});
-  assert.deepEqual(await (await mf.dispatchFetch('http://local.test/d/no-such-venue/login', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({phone: '+420600000003'})})).json(), {sent: true});
+  // Only the owner's number gets a code. Any other number and any unknown venue get the same answers (the code lives
+  // 10 minutes, a second request within 60 s is 429 with the seconds to wait) and nothing is sent.
+  const about = (value, target) => value === null || value === undefined ? value : Math.abs(Number(value) - target) <= 3 ? `~${target}` : value;
+  const loginAnswer = async response => {
+    const body = await response.json();
+    return {status: response.status, retry: about(response.headers.get('retry-after'), 60), ...body,
+      expiresAt: typeof body.expiresAt, expiresIn: about(body.expiresIn, 600), retryAfter: about(body.retryAfter, 60)};
+  };
+  const unknownVenue = phone => mf.dispatchFetch('http://local.test/d/no-such-venue/login', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({phone})});
+  const twice = async send => [await loginAnswer(await send()), await loginAnswer(await send())];
+  const stranger = await twice(() => board('POST', '/login', {phone: '+420 600 000 999'}));
+  const nowhere = await twice(() => unknownVenue('+420600000003'));
   assert.equal(codes.length, 0);
-  assert.equal((await board('POST', '/login', {phone: '600 000 003'})).status, 200);
-  assert.equal(codes.length, 1);
+  const owner = await twice(() => board('POST', '/login', {phone: '600 000 003'}));
+  assert.equal(codes.length, 1, 'the second request within 60 s sends nothing');
+  assert.deepEqual(owner, [
+    {status: 200, retry: null, sent: true, expiresAt: 'string', expiresIn: '~600', retryAfter: '~60'},
+    {status: 429, retry: '~60', error: 'TOO_SOON', expiresAt: 'undefined', expiresIn: '~600', retryAfter: '~60'},
+  ]);
+  assert.deepEqual(stranger, owner, 'a number without access cannot be told apart');
+  assert.deepEqual(nowhere, owner, 'an unknown venue cannot be told apart');
+  // The page counts the server's seconds down: the code's validity and the resend button.
+  let fakeNow = 1e12;
+  class FakeDate extends Date { static now() { return fakeNow; } }
+  const loginElements = {}, intervals = [];
+  const loginElement = id => loginElements[id] ??= {hidden: false, value: '', textContent: '', innerHTML: '', disabled: false, focus() {}};
+  vm.runInNewContext(pageText.match(/<script nonce="[a-f0-9]+">([\s\S]*?)<\/script>/)[1], {document: {getElementById: loginElement}, location: {reload() {}}, console,
+    Date: FakeDate, setInterval: fn => intervals.push(fn), clearInterval() {},
+    fetch: async url => url.endsWith('/login') ? {ok: true, status: 200, json: async () => ({sent: true, expiresIn: 600, retryAfter: 60})} : {ok: false, status: 401, json: async () => ({})}});
+  await loginElements.phoneForm.onsubmit({preventDefault() {}});
+  const loginShown = () => [loginElements.codeLeft.textContent, loginElements.send.disabled, loginElements.send.textContent];
+  assert.deepEqual(loginShown(), ['Kód platí ještě 10:00', true, 'Poslat znovu za 1:00']);
+  assert.equal(loginElements.loginMsg.textContent, 'Pokud má číslo přístup, kód je na cestě.');
+  fakeNow += 18000; intervals[0]();
+  assert.deepEqual(loginShown(), ['Kód platí ještě 9:42', true, 'Poslat znovu za 0:42']);
+  fakeNow += 600000; intervals[0]();
+  assert.deepEqual(loginShown(), ['Kód vypršel, pošli nový', false, 'Poslat kód znovu']);
   const code = codes[0].match(/kód pro přihlášení (\d{6})/)[1];
   const wrong = code === '000000' ? '111111' : '000000';
   assert.equal((await board('POST', '/verify', {code: wrong})).status, 401);
@@ -293,14 +326,42 @@ try {
   assert.equal((await board('GET', '/data', undefined, {cookie: 'oko1_session=' + 'f'.repeat(64)})).status, 401);
   assert.equal((await mf.dispatchFetch('http://local.test/d/excel-venue/data', {headers: cookieHeader})).status, 200, 'the session works without other headers');
   assert.equal((await mf.dispatchFetch('http://local.test/d/other-venue/data', {headers: cookieHeader})).status, 401, 'a session is valid for its venue only');
-  // Parallel requests cannot pass the limit of five codes an hour (one is used already).
-  const burst = await Promise.all(Array.from({length: 10}, () => board('POST', '/login', {phone: '+420600000003'})));
-  assert.equal(burst.filter(r => r.status === 200).length, 4);
-  assert.equal(codes.length, 5);
-  // Guessing: after ten wrong codes in an hour (two above) the login closes, even for the right code.
-  const fresh = codes[4].match(/(\d{6})/)[1];
-  for (let i = 0; i < 8; i++) assert.equal((await board('POST', '/verify', {code: String(i).repeat(6) === fresh ? '999999' : String(i).repeat(6)})).status, 401);
-  assert.equal((await board('POST', '/verify', {code: fresh})).status, 429);
+  // Later codes: the Durable Object takes the time as a parameter (only tests pass it, the routes never do), so the
+  // minutes and hours pass without waiting. 60 s later a new code goes out and the earlier one stops working.
+  const tenants = await mf.getDurableObjectNamespace('TENANTS');
+  const excelObject = tenants.get(tenants.idFromName('excel-venue'));
+  const send = async (phone, offset) => JSON.parse(JSON.stringify(await excelObject.sendLoginCode(phone, '', t0 + offset)));
+  const lastCode = () => codes.at(-1).match(/(\d{6})/)[1];
+  const t0 = Date.now();
+  assert.equal((await send('+420600000003', 61000)).status, 200);
+  const older = lastCode();
+  assert.equal((await send('+420600000003', 122000)).status, 200);
+  assert.equal((await board('POST', '/verify', {code: older})).status, 401, 'a new code ends the earlier one');
+  // Parallel requests cannot pass the 60 seconds: one code out of ten.
+  const burst = await Promise.all(Array.from({length: 10}, () => send('+420600000003', 183000)));
+  assert.deepEqual(burst.map(answer => answer.status).sort(), [200, ...Array(9).fill(429)]);
+  assert.equal(codes.length, 4);
+  // Five codes an hour and ten a day stay; the answer says when the next one can go. A number without access gets the same.
+  for (const offset of [61000, 122000, 183000]) assert.equal((await send('+420600000999', offset)).status, 200);
+  const ownerAt = {};
+  for (const offset of [244000, 305000, 7200000, 7261000, 7322000, 7383000, 7444000, 7505000]) {
+    const ownerAnswer = ownerAt[offset] = await send('+420600000003', offset), strangerAnswer = await send('+420600000999', offset);
+    assert.equal(ownerAnswer.status, strangerAnswer.status, `same status at ${offset}`);
+    assert.equal(ownerAnswer.body.error, strangerAnswer.body.error);
+    assert.ok(Math.abs((ownerAnswer.body.retryAfter ?? 0) - (strangerAnswer.body.retryAfter ?? 0)) <= 5);
+  }
+  const hourFull = ownerAt[305000].body, dayFull = ownerAt[7505000].body;
+  assert.equal(hourFull.error, 'TOO_MANY');
+  assert.ok(hourFull.retryAfter > 3200 && hourFull.retryAfter <= 3600 - 305, 'the hour frees up an hour after its first code');
+  assert.equal(dayFull.error, 'TOO_MANY');
+  assert.ok(dayFull.retryAfter > 86400 - 7505 - 10 && dayFull.retryAfter <= 86400 - 7505, 'the day frees up a day after its first code');
+  assert.equal(codes.length, 10, 'ten codes a day at most');
+  // Guessing: after ten wrong codes in an hour (three above) the login closes, even for the right code, and says how long.
+  const fresh = lastCode();
+  for (let i = 0; i < 7; i++) assert.equal((await board('POST', '/verify', {code: String(i).repeat(6) === fresh ? '999999' : String(i).repeat(6)})).status, 401);
+  const closed = await board('POST', '/verify', {code: fresh});
+  assert.equal(closed.status, 429);
+  assert.ok((await closed.json()).retryAfter > 3500 && Number(closed.headers.get('retry-after')) > 3500);
   assert.equal((await board('POST', '/logout', {}, cookieHeader)).status, 200);
   assert.equal((await board('GET', '/data', undefined, cookieHeader)).status, 401);
   // Admin can end every session; a change of the allowed phones ends them too.
@@ -415,14 +476,49 @@ try {
   assert.equal(consent.headers.get('referrer-policy'), 'same-origin');
   assert.equal((await formPost({krok: 'kod', provozovna: 'james-dean', telefon: '600000009'}, 'null', 'cross-site')).status, 403);
   assert.equal((await formPost({krok: 'kod', provozovna: 'james-dean', telefon: '600000009'}, 'null')).status, 403);
-  assert.match(await (await formPost({krok: 'kod', provozovna: 'no-such-venue', telefon: '600000009'}, 'null', 'same-origin')).text(), /Kód z SMS/);
+  const pageOf = async response => ({status: response.status, csp: response.headers.get('content-security-policy'), html: await response.text()});
+  const unknownFirst = await pageOf(await formPost({krok: 'kod', provozovna: 'no-such-venue', telefon: '600000009'}, 'null', 'same-origin'));
+  assert.match(unknownFirst.html, /Kód z SMS/);
   assert.equal(texts.length, 0);
-  // Another number or an unknown venue gets the same page and nothing is sent.
-  assert.match(await (await formPost({krok: 'kod', provozovna: 'no-such-venue', telefon: '600000009'})).text(), /Kód z SMS/);
-  assert.match(await (await formPost({krok: 'kod', provozovna: 'james-dean', telefon: '600000123'})).text(), /Kód z SMS/);
+  // Another number or an unknown venue gets the same pages (the countdown, 429 within 60 s) and nothing is sent.
+  const unknownAgain = await pageOf(await formPost({krok: 'kod', provozovna: 'no-such-venue', telefon: '600000009'}));
+  const strangerFirst = await pageOf(await formPost({krok: 'kod', provozovna: 'james-dean', telefon: '600000123'}));
+  const strangerAgain = await pageOf(await formPost({krok: 'kod', provozovna: 'james-dean', telefon: '600000123'}));
   assert.equal(texts.length, 0);
-  assert.equal((await formPost({krok: 'kod', provozovna: 'james-dean', telefon: '600 000 009'})).status, 200);
+  const ownerFirst = await pageOf(await formPost({krok: 'kod', provozovna: 'james-dean', telefon: '600 000 009'}));
+  assert.equal(ownerFirst.status, 200);
   assert.equal(texts.length, 1);
+  const ownerAgain = await pageOf(await formPost({krok: 'kod', provozovna: 'james-dean', telefon: '600 000 009'}));
+  assert.equal(ownerAgain.status, 429);
+  assert.equal(texts.length, 1, 'a second code within 60 s is not sent');
+  // The code step: a field iPhone and iPad fill from Messages, a countdown script allowed only by its nonce, data from the server.
+  const scriptNonce = ownerFirst.html.match(/<script nonce="([a-f0-9]{32})">/)[1];
+  assert.match(ownerFirst.csp, new RegExp(`^default-src 'none'; script-src 'nonce-${scriptNonce}'; style-src 'nonce-${scriptNonce}'; base-uri 'none'; frame-ancestors 'none'$`));
+  assert.match(ownerFirst.html, /<input id="kod" name="kod" inputmode="numeric" autocomplete="one-time-code" maxlength="6" minlength="6" pattern="\[0-9\]\{6\}"/);
+  assert.match(ownerFirst.html, /data-expires-in="600" data-retry-after="60"><span data-left>Platí 10 minut\.<\/span>/);
+  assert.match(ownerFirst.html, /<button class="secondary" data-again>Poslat kód znovu<\/button>/);
+  assert.match(ownerAgain.html, /data-expires-in="(59\d|600)" data-retry-after="(5\d|60)"/);
+  assert.match(ownerAgain.html, /<noscript><p class="muted">Nový kód půjde poslat za \d+ s\.<\/p><\/noscript>/);
+  assert.match(ownerAgain.html, /<p class="warn" role="alert"><\/p>/, 'too soon shows only the countdown');
+  const same = page => ({status: page.status, html: page.html.replace(/nonce="[a-f0-9]{32}"/g, 'nonce')
+    .replace(/data-(expires-in|retry-after)="(\d+)"/g, (_, name, n) => `data-${name}="${Math.abs(n - (name === 'expires-in' ? 600 : 60)) <= 3 ? '~' : n}"`)
+    .replace(/name="(provozovna|telefon)" value="[^"]*"/g, 'name="$1"').replace(/za \d+ s\./g, 'za ~ s.')});
+  assert.deepEqual(same(strangerFirst), same(ownerFirst), 'a number without access cannot be told apart');
+  assert.deepEqual(same(unknownFirst), same(ownerFirst), 'an unknown venue cannot be told apart');
+  assert.deepEqual(same(strangerAgain), same(ownerAgain));
+  assert.deepEqual(same(unknownAgain), same(ownerAgain));
+  // The countdown counts the server's seconds down: "Kód platí ještě 9:42", "Poslat znovu za 0:42", then expired and unlocked.
+  let pageNow = 1e12;
+  class PageDate extends Date { static now() { return pageNow; } }
+  const left = {textContent: ''}, again = {textContent: 'Poslat kód znovu', disabled: false}, pageTimers = [];
+  const box = {dataset: {expiresIn: '600', retryAfter: '60'}, querySelector: () => left};
+  vm.runInNewContext(ownerFirst.html.match(/<script nonce="[a-f0-9]+">([\s\S]*?)<\/script>/)[1], {
+    document: {querySelector: selector => selector === '[data-countdown]' ? box : again}, Date: PageDate, setInterval: fn => pageTimers.push(fn), clearInterval() {}});
+  assert.deepEqual([left.textContent, again.disabled, again.textContent], ['Kód platí ještě 10:00', true, 'Poslat znovu za 1:00']);
+  pageNow += 18000; pageTimers[0]();
+  assert.deepEqual([left.textContent, again.textContent], ['Kód platí ještě 9:42', 'Poslat znovu za 0:42']);
+  pageNow += 600000; pageTimers[0]();
+  assert.deepEqual([left.textContent, again.disabled, again.textContent], ['Kód vypršel, pošli nový', false, 'Poslat kód znovu']);
   const mcpCode = texts[0].match(/(\d{6})/)[1];
   assert.equal((await formPost({krok: 'overit', provozovna: 'james-dean', kod: mcpCode === '000000' ? '111111' : '000000'})).status, 401);
   assert.equal((await formPost({krok: 'overit', provozovna: 'no-such-venue', kod: mcpCode})).status, 401);
@@ -483,7 +579,10 @@ try {
   // The dashboard card reads the web live; the page escapes every value.
   const jdBoard = (method, path, body, headers = {}) => mf.dispatchFetch('http://local.test/d/james-dean' + path, {method, headers: {'content-type': 'application/json', ...headers}, body: body === undefined ? undefined : JSON.stringify(body)});
   assert.equal((await jdBoard('GET', '/web')).status, 401);
-  await jdBoard('POST', '/login', {phone: '+420600000009'});
+  // The owner has just asked for a code to connect Claude, so the next one goes 60 s later (the Durable Object's clock parameter).
+  const jdTenants = await mf.getDurableObjectNamespace('TENANTS');
+  const jdSent = JSON.parse(JSON.stringify(await jdTenants.get(jdTenants.idFromName('james-dean')).sendLoginCode('+420600000009', '', Date.now() + 61000)));
+  assert.equal(jdSent.status, 200);
   const boardCode = texts.at(-1).match(/(\d{6})/)[1];
   const jdCookie = {cookie: (await jdBoard('POST', '/verify', {code: boardCode})).headers.get('set-cookie').split(';')[0]};
   const card = (await (await jdBoard('GET', '/web', undefined, jdCookie)).json()).card;
