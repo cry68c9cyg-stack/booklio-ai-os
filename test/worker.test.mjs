@@ -121,11 +121,11 @@ try {
   assert.equal((await ingest('batch-0003t', [reviewsOn('2026-09-06', [5, 0, 0, 0, 0]), reviewsOn('2026-09-07', [0, 0, 0, 0, 5]), reviewsOn('2026-09-30', [0, 0, 0, 0, 5]),
     reviewsOn('2026-10-04', [0, 0, 0, 0, 5]), reviewsOn('2026-10-05', [2, 0, 0, 0, 0])])).status, 200);
   // Outlook, no-shows and the web funnel come from SQL sums over the stored bookings and traffic.
-  await ingest('batch-0003s', [booking('r10', 1, '2026-10-01', 'diner', 5, 'confirmed', null)]);
+  await ingest('batch-0003s', [booking('r10', 1, '2026-10-01', 'diner', 5, 'confirmed', null), booking('r11', 1, '2026-10-10', 'bar', 3, 'cancelled', null)]);
   const outlookDay = (await (await call('GET', '/admin/t/test-venue/briefing?date=2026-10-14')).json()).briefing;
   assert.deepEqual([outlookDay.outlook.usualGuests, outlookDay.noShows], [6, null], 'Thursdays 8. 10. (4 + 2 guests) and 1. 10. (5 guests)');
   const sunday = (await (await call('GET', '/admin/t/test-venue/briefing?date=2026-10-11')).json()).briefing;
-  assert.deepEqual([sunday.week.current.guests, sunday.week.current.noShowGuests, sunday.week.current.webSent, sunday.week.current.webConfirmed], [19, 2, 4, 6]);
+  assert.deepEqual([sunday.week.current.guests, sunday.week.current.noShowGuests, sunday.week.current.webSent, sunday.week.current.webConfirmed, sunday.week.current.cancelled], [19, 2, 4, 6, 1]);
   assert.deepEqual(sunday.week.current.origins, [{key: 'google', name: 'Google hledání', visits: 60, withAction: 6}, {key: 'instagram', name: 'Instagram', visits: 40, withAction: 5}],
     'website origins summed over the week, most visits first, none without visits');
   assert.deepEqual([sunday.week.current.reviews, sunday.week.current.rated, sunday.week.current.starsTenths, sunday.week.reviewsUsual.rated, sunday.week.reviewsUsual.starsTenths, sunday.week.reviewDrop], [6, 6, 32, 15, 50, true]);
@@ -813,19 +813,22 @@ try {
   // Thursdays before: 20 confirmed guests each; tomorrow (Thursday 15. 10.) 50 confirmed and 3 waiting: 2,5× the usual, so at most 1,5× the revenue.
   assert.equal((await ingest('batch-w1', [booking('w1', 1, '2026-10-08', 'diner', 20, 'confirmed', 'arrived'), booking('w2', 1, '2026-10-01', 'diner', 20, 'confirmed', 'arrived'),
     booking('w3', 1, '2026-10-15', 'diner', 30, 'confirmed', null), booking('w4', 1, '2026-10-15', 'bar', 20, 'confirmed', null), booking('w5', 1, '2026-10-15', 'bar', 3, 'pending', null),
+    booking('w6', 1, '2026-10-17', 'club', 4, 'pending', null), booking('w8', 1, '2026-10-14', 'diner', 2, 'pending', null), // today's own count, not in the 7 days booking('w7', 1, '2026-10-22', 'club', 6, 'pending', null),
     {...closing, id: 'wc-13', businessDate: '2026-10-13'}, {...closing, id: 'wc-14', businessDate: '2026-10-14'}], 'Bearer ' + token, 'weather-venue')).status, 200);
   const tickWeather = async at => (await call('POST', '/admin/t/weather-venue/tick', {at})).json();
   // 7:00: the message fails, so its forecast is not kept.
   const failedMorning = await tickWeather('2026-10-14T05:00:00Z');
   assert.equal(failedMorning.status, 'failed');
   assert.deepEqual(weatherCalls, [{url: 'https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=50.0899&lon=14.42', agent: 'OKO1/1.0 github.com/cry68c9cyg-stack/booklio-ai-os'}]);
-  assert.match(failedMorning.text, /\nDnes plán tržby 10 000 Kč\n/);
+  assert.match(failedMorning.text, / · plán tržby 10 000 Kč\n/);
   // 8:00: an earlier Wednesday changed (7. 10.: 20 000 Kč); the message that goes out plans 12 500 Kč and that is kept.
   await call('POST', '/admin/t/weather-venue/history', {rows: [{businessDate: '2026-10-07', revenueCents: 2000000}]});
   const weatherMorning = await tickWeather('2026-10-14T06:00:00Z');
   assert.equal(weatherMorning.status, 'delivered');
-  assert.match(weatherMorning.text, /\nDnes plán tržby 12 500 Kč\n/);
+  assert.match(weatherMorning.text, / · plán tržby 12 500 Kč\n/);
   assert.match(weatherMorning.text, /\nOdhad tržby: zítra \(čt 15\. 10\.\) 15 000 Kč \(víc rezervací než obvykle\), 14 °C, déšť · 7 dní od dneška 78 000 Kč · /);
+  // Waiting bookings for the next 7 days (15.–21. 10.): counted and summed, the first one with its local time; 22. 10. is outside.
+  assert.match(weatherMorning.text, /\nNa příštích 7 dní čeká na potvrzení 2 rezervace \(7 hostů\), nejbližší čt 15\. 10\. 20:00\n/);
   assert.equal((await tickWeather('2026-10-14T07:00:00Z')).decision, 'skip');
   assert.equal(weatherCalls.length, 1, 'no second read the same morning');
   // Later changes (7. 10.: 30 000 Kč) move the weekday average to 15 000 Kč, but 14. 10. keeps the plan its message gave, also on the dashboard of 13. 10.
