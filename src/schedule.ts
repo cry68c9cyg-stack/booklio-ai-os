@@ -25,3 +25,19 @@ export function reportDate(at: Date, timeZone: string, cutoffHour: number): stri
 export function localHour(at: Date, timeZone: string): number {
   return localTime(at, timeZone).hour;
 }
+
+/**
+ * Each kind of sender (the website, a POS) with the newest moment any of its installations sent data; re-pairing leaves
+ * the old installation behind, so only the newest counts. The website pushes every hour (silent after 3 h),
+ * a POS at least once a business day (silent after 26 h). Installations that never sent anything are left out.
+ */
+export function sendersFrom(rows: {installation_id: string; last_seen_at: string | null}[], now: Date): {name: string; at: Date; silent: boolean}[] {
+  const newest = new Map<string, Date>();
+  for (const row of rows) {
+    if (!row.last_seen_at) continue;
+    const name = row.installation_id.startsWith('booklio-web') ? 'Web' : 'Pokladna', at = new Date(row.last_seen_at);
+    if (!newest.has(name) || newest.get(name)! < at) newest.set(name, at);
+  }
+  return [...newest].sort(([a], [b]) => a.localeCompare(b, 'cs'))
+    .map(([name, at]) => ({name, at, silent: now.getTime() - at.getTime() > (name === 'Web' ? 3 : 26) * 3_600_000}));
+}

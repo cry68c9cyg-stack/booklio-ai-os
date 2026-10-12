@@ -6,7 +6,7 @@ import {InputError} from './validate.ts';
 import {excelDate, type CellValue, type Sheet} from './xlsx.ts';
 import {isDate} from './time.ts';
 
-export const LINE_KINDS = ['revenue_section', 'revenue_register', 'payment', 'discount', 'void', 'expense', 'payout', 'movement', 'cash_count', 'balance', 'total', 'journal_revenue', 'unmapped'] as const;
+export const LINE_KINDS = ['revenue_section', 'revenue_register', 'payment', 'discount', 'void', 'expense', 'payout', 'movement', 'cash_count', 'balance', 'total', 'journal_revenue', 'journal_payment', 'unmapped'] as const;
 export type LineKind = typeof LINE_KINDS[number];
 export type ReportLine = {kind: LineKind; key: string; label: string; count: number | null; amountCents: number};
 export type DailyReport = {

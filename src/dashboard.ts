@@ -148,6 +148,32 @@ $('content').onclick = async e => {
   if (!r || !r.ok) $('todo').insertAdjacentHTML('beforeend', '<p class="warn">Nepodařilo se uložit, zkus to znovu.</p>');
 };
 
+// The 7 days up to the shown day against the 7 before (revenue, confirmed bookings, website, new reviews).
+function weekCard(w) {
+  if (!w) return '';
+  const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.';
+  const vs = (a, b) => b ? ' <span class="muted">(' + signed(pct(a, b)) + ')</span>' : '';
+  const n = w.current, p = w.previous, rows = [], num = v => String(v).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ' ');
+  const dayWord = d => d + ' ' + (d === 1 ? 'den' : d >= 2 && d <= 4 ? 'dny' : 'dní');
+  rows.push('<tr><td>Tržba' + (n.revenueDays < 7 ? ' <span class="muted">(' + dayWord(n.revenueDays) + ' s daty)</span>' : '') + '</td><td class="n">' + kc(n.revenueDays ? n.revenueCents : null) + (p.revenueDays === n.revenueDays ? vs(n.revenueCents, p.revenueCents) : '') + '</td><td class="n muted">' + kc(p.revenueDays ? p.revenueCents : null) + '</td></tr>');
+  rows.push('<tr><td>Rezervace (hosté)</td><td class="n">' + n.reservations + ' (' + n.guests + ')' + vs(n.guests, p.guests) + '</td><td class="n muted">' + p.reservations + ' (' + p.guests + ')</td></tr>');
+  rows.push('<tr><td>Nedorazilo</td><td class="n' + (n.noShows ? ' warn' : '') + '">' + n.noShows + '</td><td class="n muted">' + p.noShows + '</td></tr>');
+  rows.push('<tr><td>Návštěvy webu</td><td class="n">' + (n.visits === null ? '–' : num(n.visits) + (p.visits !== null && p.visitDays === n.visitDays ? vs(n.visits, p.visits) : '')) + '</td><td class="n muted">' + (p.visits === null ? '–' : num(p.visits)) + '</td></tr>');
+  const stars = t => t === null ? '' : ', ' + (t / 10).toFixed(1).replace('.', ',') + ' ★';
+  rows.push('<tr><td>Nové recenze</td><td class="n">' + n.reviews + stars(n.starsTenths) + '</td><td class="n muted">' + p.reviews + stars(p.starsTenths) + '</td></tr>');
+  return '<div class="card"><h2>Týden ' + short(w.from) + '–' + short(w.to) + '</h2><table><tr><th></th><th class="n">7 dní</th><th class="n">7 dní předtím</th></tr>' + rows.join('') + '</table></div>';
+}
+
+// Who sends data to OKO1 and when it last arrived; a sender silent too long is marked.
+function sourcesCard(s) {
+  if (!s) return '';
+  const rows = s.senders.map(x => '<tr><td>' + esc(x.name) + '</td><td class="n' + (x.silent ? ' warn' : '') + '">' + (x.lastSeen ? esc(x.lastSeen) : 'zatím nic') + (x.silent ? ' · neposílá' : '') + '</td></tr>')
+    .concat(s.types.map(x => '<tr><td class="muted">' + esc(x.name) + '</td><td class="n muted">' + esc(x.lastReceived) + '</td></tr>'));
+  if (s.report) rows.push('<tr><td>Report manažerů (OneDrive)</td><td class="n">' + esc(s.report.at) + (s.report.found ? '' : ' · <span class="warn">nenalezen</span>') + '</td></tr>');
+  if (s.costs) rows.push('<tr><td>Náklady (iÚčto)</td><td class="n">' + esc(s.costs.at) + (s.costs.ok ? '' : ' · <span class="warn">chyba</span>') + '</td></tr>');
+  return '<div class="card"><h2>Zdroje dat</h2>' + (rows.length ? '<table>' + rows.join('') + '</table>' : '<span class="muted">zatím žádný zdroj neposlal data</span>') + '</div>';
+}
+
 function render(data) {
   todoDate = data.businessDate;
   const b = data.briefing, r = data.report;
@@ -197,10 +223,11 @@ function render(data) {
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card" id="todo">' + todoCard(data.todo) + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
+  html += weekCard(data.week) + sourcesCard(data.sources);
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
   if (r) {
-    const kinds = {discount: 'Slevy a odpisy', expense: 'Výdaje z kasy', payout: 'Výplaty v hotovosti', movement: 'Vklady, odvody, karty', cash_count: 'Přepočet hotovosti', balance: 'Stavy', revenue_register: 'Pokladny klubu', journal_revenue: 'Tržby podle deníku', total: 'Součty', unmapped: 'Nerozpoznané řádky'};
+    const kinds = {discount: 'Slevy a odpisy', expense: 'Výdaje z kasy', payout: 'Výplaty v hotovosti', movement: 'Vklady, odvody, karty', cash_count: 'Přepočet hotovosti', balance: 'Stavy', revenue_register: 'Pokladny klubu', journal_revenue: 'Tržby podle deníku', journal_payment: 'Platby podle deníku', total: 'Součty', unmapped: 'Nerozpoznané řádky'};
     html += '<div class="card"><h2>Report manažerů</h2><div class="muted">' + esc(r.files.join(', ') || 'zadáno ručně') + '</div>';
     for (const [kind, label] of Object.entries(kinds)) {
       const rows = r.lines.filter(l => l.kind === kind);
