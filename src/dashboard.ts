@@ -224,7 +224,6 @@ function forecastCard(f) {
     'Počasí: MET Norway.</p></div>';
 }
 
-// Who sends data to OKO1 and when it last arrived; a sender silent too long is marked.
 // The menu from the website: items per part and category with base prices, and its changes over 30 days.
 function menuCard(m) {
   if (!m) return '';
@@ -232,7 +231,7 @@ function menuCard(m) {
   const changeText = c => c.kind === 'added' ? 'nová položka za ' + esc(c.newText) : c.kind === 'removed' ? 'zrušeno (bylo ' + esc(c.oldText) + ')' : esc(c.oldText) + ' → ' + esc(c.newText);
   const range = c => c.minCents === c.maxCents ? kc(c.minCents) : kc(c.minCents) + ' – ' + kc(c.maxCents);
   let h = '<div class="card"><h2>Jídelní a nápojový lístek</h2><div class="muted">' + m.items + (m.items === 1 ? ' položka' : m.items >= 2 && m.items <= 4 ? ' položky' : ' položek') + ' · ' + m.parts.map(p => esc(p.name.toLowerCase()) + ' ' + p.items).join(', ') + ' · z webu, naposledy ' + esc(m.received) + '</div>';
-  h += '<h3>Změny za 30 dní</h3>' + (m.changes.length ? '<ul>' + m.changes.map(c => '<li>' + esc(short(c.date)) + ' <b>' + esc(c.name) + '</b>: ' + changeText(c) + '</li>').join('') + '</ul>' : '<span class="muted">beze změn</span>');
+  h += '<h3>Změny za 30 dní</h3>' + (m.changes.length ? '<ul>' + m.changes.map(c => '<li>' + esc(short(c.date)) + ' <b>' + esc(c.name) + '</b>: ' + changeText(c) + '</li>').join('') + '</ul>' + (m.changesTotal > m.changes.length ? '<div class="muted">… a další ' + (m.changesTotal - m.changes.length) + '</div>' : '') : '<span class="muted">beze změn</span>');
   for (const p of m.parts) {
     h += '<details><summary>' + esc(p.name) + ' (' + p.items + ')</summary><div class="scroll"><table><tr><th>Kategorie</th><th class="n">Položek</th><th class="n">Cena od – do</th><th class="n">Průměr</th></tr>' +
       p.categories.map(c => '<tr><td>' + esc(c.name) + '</td><td class="n">' + c.items + '</td><td class="n">' + range(c) + '</td><td class="n">' + kc(c.avgCents) + '</td></tr>').join('') + '</table></div></details>';
@@ -240,6 +239,7 @@ function menuCard(m) {
   return h + '</div>';
 }
 
+// Who sends data to OKO1 and when it last arrived; a sender silent too long is marked.
 function sourcesCard(s) {
   if (!s) return '';
   const rows = s.senders.map(x => '<tr><td>' + esc(x.name) + '</td><td class="n' + (x.silent ? ' warn' : '') + '">' + (x.lastSeen ? esc(x.lastSeen) : 'zatím nic') + (x.silent ? ' · neposílá' : '') + '</td></tr>')

@@ -184,7 +184,7 @@ Položka `items[]`: `{id, part, category, name, pricesCents, group?, description
 | `pricesCents` | 1–5 × int ≥ 0 | ceny s DPH v haléřích, jak je lístek uvádí, základní první (burger „225 / 255 Kč“ = `[22500, 25500]`) |
 | `tip` | bool | tip šéfkuchaře / doporučení |
 
-Změnou ceny se rozumí jiná kterákoli z cen položky; OKO1 zapíše starou a novou základní cenu i oba texty („225 / 255 Kč“ → „225 / 265 Kč“). První lístek je výchozí stav, změny se počítají až od dalšího. Dashboard má kartu „Jídelní a nápojový lístek“ (položky po kategoriích s cenami od–do a průměrem, změny za 30 dní), MCP server nástroj `listek` (celý lístek a změny za rok).
+Změnou ceny se rozumí jiná kterákoli z cen položky; OKO1 zapíše starou a novou základní cenu i oba texty („225 / 255 Kč“ → „225 / 265 Kč“). První lístek je výchozí stav, změny se počítají až od dalšího. Přejmenování položky, její kategorie nebo objemu je nové `id`, tedy zrušená a nová položka, ne změna ceny. Ceny jsou s DPH; sazbu DPH (jídlo a alkohol mají různou) lístek nenese, pro výdělek po položkách ji OKO1 vezme z produktu pokladny (Pexeso). Dashboard má kartu „Jídelní a nápojový lístek“ (položky po kategoriích s cenami od–do a průměrem, změny za 30 dní), MCP server nástroj `listek` (celý lístek a změny za rok).
 
 ## Kdy posílat
 

@@ -500,11 +500,13 @@ export class TenantObject extends DurableObject<Env> {
     return row ? JSON.parse(row.json) as Menu : null;
   }
 
-  /** Changes of the menu since a day (inclusive), newest first. */
-  private menuChangesSince(date: string, limit: number) {
-    return this.sql.exec<{at: string; business_date: string; item_id: string; name: string; kind: string; old_cents: number | null; new_cents: number | null; old_text: string | null; new_text: string | null}>(
-      'SELECT * FROM menu_changes WHERE business_date >= ? ORDER BY at DESC, rowid DESC LIMIT ?', date, limit).toArray()
+  /** Changes of the menu between two days (inclusive), newest first, and how many there are in all. */
+  private menuChangesBetween(from: string, to: string, limit: number) {
+    const total = this.sql.exec<{count: number}>('SELECT count(*) AS count FROM menu_changes WHERE business_date BETWEEN ? AND ?', from, to).toArray()[0].count;
+    const rows = this.sql.exec<{business_date: string; item_id: string; name: string; kind: string; old_cents: number | null; new_cents: number | null; old_text: string | null; new_text: string | null}>(
+      'SELECT * FROM menu_changes WHERE business_date BETWEEN ? AND ? ORDER BY at DESC, rowid DESC LIMIT ?', from, to, limit).toArray()
       .map(row => ({date: row.business_date, itemId: row.item_id, name: row.name, kind: row.kind, oldCents: row.old_cents, newCents: row.new_cents, oldText: row.old_text, newText: row.new_text}));
+    return {total, rows};
   }
 
   /** Dashboard: the menu by part and category, when it last arrived, and its changes over the 30 days up to the shown day and the day starting after it. */
@@ -512,15 +514,18 @@ export class TenantObject extends DurableObject<Env> {
     const menu = this.menu();
     if (!menu) return null;
     const received = this.sql.exec<{at: string}>("SELECT max(received_at) AS at FROM records WHERE type='menu'").toArray()[0].at;
-    return {...menuOverview(menu), received: stamp(new Date(received), config.timeZone), changes: this.menuChangesSince(addDays(day, -29), 30).filter(change => change.date <= addDays(day, 1))};
+    const changes = this.menuChangesBetween(addDays(day, -29), addDays(day, 1), 30);
+    return {...menuOverview(menu), received: stamp(new Date(received), config.timeZone), changes: changes.rows, changesTotal: changes.total};
   }
 
   /** MCP: the whole current menu with every item and price, and its changes over the last year. */
   posMenu() {
-    const menu = this.menu();
-    if (!menu) return null;
-    const year = addDays(new Date().toISOString().slice(0, 10), -365);
-    return {menu, changes: this.menuChangesSince(year, 2000)};
+    const config = this.config(), menu = this.menu();
+    if (!config || !menu) return null;
+    // Changes are dated by the Prague calendar day the menu was sent (docs/ingest-v1.md), not by the business day.
+    const today = localTime(new Date(), config.timeZone).date;
+    const changes = this.menuChangesBetween(addDays(today, -365), today, 2000);
+    return {menu, changes: changes.rows, changesTotal: changes.total};
   }
 
   private day<T>(type: string, date: string): T[] {

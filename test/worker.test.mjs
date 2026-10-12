@@ -684,7 +684,7 @@ try {
   const boardData = await (await jdBoard('GET', '/data', undefined, jdCookie)).json();
   const shown = await renderCard({'/d/james-dean/data': boardData, '/d/james-dean/web': {card}});
   // The menu card: items per part and category, and the changes, escaped.
-  assert.deepEqual([boardData.menu.items, boardData.menu.parts.map(part => [part.part, part.items]), boardData.menu.changes.length], [4, [['food', 3], ['drinks', 1]], 4]);
+  assert.deepEqual([boardData.menu.items, boardData.menu.parts.map(part => [part.part, part.items]), boardData.menu.changes.length, boardData.menu.changesTotal], [4, [['food', 3], ['drinks', 1]], 4, 4]);
   assert.deepEqual(boardData.menu.parts[0].categories[0], {name: 'Burgery', items: 2, minCents: 22500, maxCents: 25900, avgCents: 24200});
   const content = await renderCard({'/d/james-dean/data': boardData, '/d/james-dean/web': {card}}, 'content');
   assert.ok(content.includes('Jídelní a nápojový lístek') && content.includes('4 položky · jídlo 3, nápoje 1') && content.includes('245 Kč → 259 Kč') && content.includes('225 Kč – 259 Kč'));
