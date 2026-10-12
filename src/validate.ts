@@ -54,7 +54,15 @@ export type TenantConfig = {
   reportsLink: string | null;
   /** Phones that may log into the dashboard (the owner). Not set = only the first of `recipients`. */
   dashboardPhones: string[] | null;
+  /**
+   * The venue's website that OKO1 reads live when it needs it, guest names and contacts included, and never stores
+   * (docs/web-v1.md, approved by MC on 12. 10. 2026). Only the origin; the read token is the Worker secret
+   * WEB_TOKEN_<TENANT>, never part of the config.
+   */
+  web: {url: string} | null;
 };
+/** Websites OKO1 may read (docs/web-v1.md). Nothing else is ever fetched with a web token. */
+export const WEB_HOSTS: readonly string[] = ['jamesdean.cz'];
 /** Loss threshold when a check arrives but the venue has no `bottleCheck` setting. */
 export const DEFAULT_BOTTLE_LOSS_CENTS = 10000;
 export type HistoryRow = {businessDate: string; revenueCents: number; bills: number | null; guests: number | null};
@@ -202,8 +210,19 @@ function shareLink(value: unknown): string {
   return url.toString();
 }
 
+/** Only the bare HTTPS origin of an allowed website: no path, query, port or credentials. */
+function website(raw: unknown): {url: string} {
+  const value = object(raw, ['url']);
+  if (typeof value.url !== 'string' || value.url.length > 200) fail();
+  let url: URL;
+  try { url = new URL((value.url as string).trim()); } catch { return fail(); }
+  if (url.protocol !== 'https:' || !WEB_HOSTS.includes(url.hostname) || url.port || url.username || url.password
+    || url.pathname !== '/' || url.search || url.hash) fail();
+  return {url: url.origin};
+}
+
 export function validateConfig(raw: unknown): TenantConfig {
-  const value = object(raw, ['name', 'timeZone', 'businessDayCutoffHour', 'sendHours', 'registers', 'sections', 'recipients'], ['bottleCheck', 'reportsLink', 'dashboardPhones']);
+  const value = object(raw, ['name', 'timeZone', 'businessDayCutoffHour', 'sendHours', 'registers', 'sections', 'recipients'], ['bottleCheck', 'reportsLink', 'dashboardPhones', 'web']);
   const timeZone = text(value.timeZone, 60);
   try { new Intl.DateTimeFormat('en', {timeZone}); } catch { fail(); }
   const sendHours = list(value.sendHours, 6, hour => int(hour, 0, 23));
@@ -218,6 +237,7 @@ export function validateConfig(raw: unknown): TenantConfig {
     dashboardPhones: value.dashboardPhones == null ? null : list(value.dashboardPhones, 3, phone),
     bottleCheck: value.bottleCheck == null ? null : {minLossCents: int(object(value.bottleCheck, ['minLossCents']).minLossCents, 0, 1e7)},
     reportsLink: value.reportsLink == null || value.reportsLink === '' ? null : shareLink(value.reportsLink),
+    web: value.web == null ? null : website(value.web),
   };
 }
 

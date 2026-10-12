@@ -102,6 +102,8 @@ Doplněno 9. 10. 2026 zpětně kompatibilně, stejně jako kontrola lahví: AI O
 
 Prázdný řetězec znamená totéž co `null`. Neznámé pole v `guest` dávku odmítne.
 
+> Poznámka (12. 10. 2026): OKO1 navíc čte všechna data webu James Dean živě pro MCP server a dashboard vedení a ta si neukládá ([docs/web-v1.md](web-v1.md)). Uložené údaje hostů jsou jen ty, které web pošle tímto kontraktem v poli `guest` (rozhodnutí MC 12. 10. 2026: živě i uložené).
+
 ## Kdy posílat
 
 Po uzavření každého účtu nebo v intervalu 5–15 minut, a vždy hned po uzávěrce a po dokončení kontroly lahví. Neodeslané dávky drží pokladna ve své frontě a posílá je s opakováním.

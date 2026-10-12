@@ -32,6 +32,7 @@ svg{width:100%;height:auto;display:block}
 pre{white-space:pre-wrap;font:13px/1.4 ui-monospace,monospace;margin:0}
 details summary{cursor:pointer;color:var(--muted)}
 #login{max-width:360px;margin:15vh auto}.pre{white-space:pre-line}
+h3{font-size:14px;margin:12px 0 6px}.scroll{overflow-x:auto}
 </style>
 </head>
 <body>
@@ -123,7 +124,7 @@ function render(data) {
     '<div>' + esc(czDate(shift(data.businessDate, 1))) + ': <b>' + rv.today.confirmed + '</b> (' + hosts(rv.today.guests) + ')' +
     (rv.today.bySection.length > 1 ? ' <span class="muted">' + rv.today.bySection.map(s => esc(s.label) + ' ' + s.confirmed).join(' · ') + '</span>' : '') +
     (rv.today.pending ? ' · <span class="warn">čeká ' + rv.today.pending + '</span>' : '') + '</div></div>');
-  let html = '<div class="grid">' + cards.join('') + '</div>';
+  let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card"><h2>K vyřízení</h2>' + (data.todo.length ? '<ul>' + data.todo.map(t => '<li class="' + (t.level === 'warn' ? 'warn' : '') + '">' + esc(t.text) + '</li>').join('') + '</ul>' : '<span class="ok">Nic k vyřízení.</span>') + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
@@ -140,6 +141,40 @@ function render(data) {
   }
   if (data.briefingText) html += '<div class="card"><h2>Ranní zpráva</h2><pre>' + esc(data.briefingText) + '</pre></div>';
   $('content').innerHTML = html;
+  loadWeb();
+}
+
+// Card "Web {venue}": read live from the website when the page asks, nothing of it is stored in OKO1 (docs/web-v1.md).
+const areas = {diner: 'Diner', bar: 'Bar', klub: 'Klub'};
+const states = {nova: 'čeká', potvrzena: 'potvrzená'};
+const tableName = id => /^[pk][A-Z0-9]+$/.test(id) ? (id[0] === 'k' ? 'klub ' : '') + id.slice(1) : id;
+const clock = (iso, zone) => new Date(iso).toLocaleTimeString('cs-CZ', {timeZone: zone, hour: '2-digit', minute: '2-digit'});
+function webCard(c) {
+  let h = '<div class="card"><h2>' + esc(c.name) + '</h2>';
+  if (c.error) return h + '<p class="warn">' + esc(c.error) + '</p></div>';
+  h += '<div class="muted">načteno živě v ' + esc(clock(c.readAt, c.timeZone)) + '</div>';
+  if (c.warnings.length) h += '<p class="warn">' + c.warnings.map(esc).join('<br>') + '</p>';
+  const list = c.reservations;
+  h += '<h3>Rezervace ' + esc(czDate(c.today)) + ': ' + list.length + (c.pending ? ' · <span class="warn">čeká na potvrzení ' + esc(c.pending) + '</span>' : '') + '</h3>';
+  if (list.length) h += '<div class="scroll"><table><tr><th>čas</th><th>jméno</th><th class="n">osoby</th><th>prostor</th><th>stůl</th><th>stav</th><th>kontakt</th><th>poznámka</th></tr>' +
+    list.map(r => '<tr><td>' + esc(r.cas) + '</td><td>' + esc(r.jmeno ?? '–') + '</td><td class="n">' + esc(r.osoby) + '</td><td>' + esc(areas[r.prostor] ?? r.prostor) +
+      '</td><td>' + esc(r.stoly.map(tableName).join(', ')) + '</td><td class="' + (r.stav === 'nova' ? 'warn' : '') + '">' + esc(states[r.stav] ?? r.stav) +
+      '</td><td>' + esc(r.kontakt) + '</td><td>' + esc(r.poznamka) + '</td></tr>').join('') + '</table></div>';
+  if (c.otherReservations) h += '<div class="muted">zrušené, odmítnuté a propadlé: ' + esc(c.otherReservations) + '</div>';
+  const v = c.visits;
+  h += '<h3>Návštěvnost webu</h3>' + (v ? '<div>dnes <b>' + esc(v.today.navstevy) + '</b> <span class="muted">(s akcí ' + esc(v.today.sAkci) + ')</span> · včera <b>' +
+    esc(v.yesterday?.navstevy ?? 0) + '</b> <span class="muted">(s akcí ' + esc(v.yesterday?.sAkci ?? 0) + ')</span></div>' : '<span class="muted">bez dat</span>');
+  h += '<h3>Recenze čekající na odpověď: ' + esc(c.reviewsWaiting) + '</h3>';
+  if (c.reviews.length) h += '<ul>' + c.reviews.map(r => '<li>' + esc('★'.repeat(Number(r.hvezdicky) || 0)) + ' <b>' + esc(r.autor) + '</b> <span class="muted">' +
+    esc([r.zdroj, r.datum].filter(Boolean).join(', ')) + '</span><br>' + esc(r.text) + '</li>').join('') + '</ul>';
+  return h + '</div>';
+}
+async function loadWeb() {
+  const box = $('web');
+  const r = await fetch(base + '/web').catch(() => null);
+  const body = r && r.ok ? await r.json().catch(() => null) : null;
+  if (!body) { box.innerHTML = r && r.status === 401 ? '' : '<div class="card"><h2>Web</h2><p class="warn">Web teď nejde načíst.</p></div>'; return; }
+  box.innerHTML = body.card ? webCard(body.card) : '';
 }
 
 async function load(date) {
