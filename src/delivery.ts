@@ -17,9 +17,9 @@ export function deliveryConfigured(env: DeliveryEnv): boolean {
 }
 
 /** BulkGate (WhatsApp with SMS fallback, preferred) or Twilio SMS, one message per recipient. Any failed recipient marks the whole delivery failed so the next hour retries it. */
-export async function deliver(env: DeliveryEnv, recipients: string[], text: string): Promise<DeliveryStatus> {
+export async function deliver(env: DeliveryEnv, recipients: string[], text: string, options: {smsOnly?: boolean} = {}): Promise<DeliveryStatus> {
   if (!deliveryConfigured(env) || !recipients.length) return 'stored';
-  if (bulkgateConfigured(env)) return deliverBulkGate(env, recipients, text);
+  if (bulkgateConfigured(env)) return deliverBulkGate(env, recipients, text, options.smsOnly ?? false);
   const url = `${TWILIO_API}/2010-04-01/Accounts/${encodeURIComponent(env.TWILIO_ACCOUNT_SID!)}/Messages.json`;
   const authorization = 'Basic ' + btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`);
   let failed = false;
@@ -58,13 +58,14 @@ export function whatsappText(text: string): string {
  * (one text parameter) and falls back to SMS when WhatsApp does not deliver; without it, SMS only.
  * A number as SMS sender becomes gOwn, anything else a text sender (gText).
  */
-async function deliverBulkGate(env: DeliveryEnv, recipients: string[], text: string): Promise<DeliveryStatus> {
+async function deliverBulkGate(env: DeliveryEnv, recipients: string[], text: string, smsOnly: boolean): Promise<DeliveryStatus> {
   const sender = (env.SMS_SENDER || 'JamesDean').trim();
   const senderNumber = sender.replace(/[\s+]/g, '');
   const sms = /^\d{9,15}$/.test(senderNumber)
     ? {sender_id: 'gOwn', sender_id_value: senderNumber, unicode: false}
     : {sender_id: 'gText', sender_id_value: sender, unicode: false};
-  const whatsappSender = env.WHATSAPP_SENDER?.replace(/[\s+]/g, '');
+  // Login codes go as SMS only: the WhatsApp template is the morning briefing.
+  const whatsappSender = smsOnly ? undefined : env.WHATSAPP_SENDER?.replace(/[\s+]/g, '');
   const channel = whatsappSender
     ? {whatsapp: {sender: whatsappSender, expiration: 600, template: {
         template: env.WHATSAPP_TEMPLATE || 'ranni_prehled', language: 'cs', body: [{type: 'text', text: whatsappText(text)}],

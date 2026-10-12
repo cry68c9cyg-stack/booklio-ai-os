@@ -30,6 +30,8 @@ export type TenantConfig = {
   bottleCheck: {minLossCents: number} | null;
   /** Read-only OneDrive share link to the managers' report folder (interim until Pexeso). Set from a GitHub secret, never in Git. */
   reportsLink: string | null;
+  /** Phones that may log into the dashboard (the owner). Not set = only the first of `recipients`. */
+  dashboardPhones: string[] | null;
 };
 /** Loss threshold when a check arrives but the venue has no `bottleCheck` setting. */
 export const DEFAULT_BOTTLE_LOSS_CENTS = 10000;
@@ -134,6 +136,11 @@ export function validateBatch(raw: unknown): Batch {
   };
 }
 
+function phone(item: unknown): string {
+  if (typeof item !== 'string' || !/^\+\d{8,15}$/.test(item)) fail();
+  return item as string;
+}
+
 /** Only OneDrive / SharePoint share links over HTTPS. */
 function shareLink(value: unknown): string {
   if (typeof value !== 'string' || value.length > 1000) fail();
@@ -144,7 +151,7 @@ function shareLink(value: unknown): string {
 }
 
 export function validateConfig(raw: unknown): TenantConfig {
-  const value = object(raw, ['name', 'timeZone', 'businessDayCutoffHour', 'sendHours', 'registers', 'sections', 'recipients'], ['bottleCheck', 'reportsLink']);
+  const value = object(raw, ['name', 'timeZone', 'businessDayCutoffHour', 'sendHours', 'registers', 'sections', 'recipients'], ['bottleCheck', 'reportsLink', 'dashboardPhones']);
   const timeZone = text(value.timeZone, 60);
   try { new Intl.DateTimeFormat('en', {timeZone}); } catch { fail(); }
   const sendHours = list(value.sendHours, 6, hour => int(hour, 0, 23));
@@ -155,10 +162,8 @@ export function validateConfig(raw: unknown): TenantConfig {
     name: text(value.name, 80), timeZone, businessDayCutoffHour: int(value.businessDayCutoffHour, 0, 12), sendHours: [...sendHours].sort((a, b) => a - b),
     registers: list(value.registers, 20, id),
     sections: Object.fromEntries(Object.entries(sections).map(([key, label]) => [id(key), text(label, 40)])),
-    recipients: list(value.recipients, 10, item => {
-      if (typeof item !== 'string' || !/^\+\d{8,15}$/.test(item)) fail();
-      return item as string;
-    }),
+    recipients: list(value.recipients, 10, phone),
+    dashboardPhones: value.dashboardPhones == null ? null : list(value.dashboardPhones, 3, phone),
     bottleCheck: value.bottleCheck == null ? null : {minLossCents: int(object(value.bottleCheck, ['minLossCents']).minLossCents, 0, 1e7)},
     reportsLink: value.reportsLink == null || value.reportsLink === '' ? null : shareLink(value.reportsLink),
   };

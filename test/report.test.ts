@@ -11,7 +11,7 @@ import {bookSheets, reportSheets, xlsx, zip} from './xlsx-fixture.ts';
 
 const config: TenantConfig = {
   name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9],
-  registers: ['diner', 'bar', 'klub'], sections: {diner: 'Diner', bar: 'Bar', club: 'Klub'}, recipients: [], bottleCheck: null, reportsLink: null,
+  registers: ['diner', 'bar', 'klub'], sections: {diner: 'Diner', bar: 'Bar', club: 'Klub'}, recipients: [], bottleCheck: null, reportsLink: null, dashboardPhones: null,
 };
 
 test('xlsx: stored and deflated workbooks, shared strings, numbers, Excel dates', async () => {
@@ -141,4 +141,18 @@ test('briefing from the managers\' report: revenue, payments, discounts, cash, n
     {kind: 'info', text: 'DJ Zdeněk', amountCents: null}, {kind: 'task', text: 'Hygiena v pondělí', amountCents: null},
   ]}}));
   assert.match(analysed, /\nReport dne:\n⚠ Host rozbil sklenici\n• Objednat led\n• Hygiena v pondělí\n… a další 1$/);
+});
+
+test('to-do list: missing report first, then warnings by Kč, at most fifteen', async () => {
+  const {todoList} = await import('../src/todo.ts');
+  const briefing = buildBriefing({businessDate: '2026-10-09', config, bills: [], closings: [], planHistory: [], incomplete: true, notes: {summary: '', points: [
+    {kind: 'problem', text: 'Rozbitý mrazák', amountCents: null}, {kind: 'incident', text: 'Chybí 5 000 Kč v kase', amountCents: 500000},
+    ...Array.from({length: 20}, (_, i) => ({kind: 'task' as const, text: `Úkol ${i}`, amountCents: null})),
+  ]}});
+  const list = todoList(briefing);
+  assert.deepEqual(list.slice(0, 3).map(item => item.text), ['Report za den chybí (uzávěrky: diner, bar, klub).', 'Chybí 5 000 Kč v kase', 'Rozbitý mrazák']);
+  assert.equal(list.length, 15);
+  assert.equal(list.at(-1)!.text, '… a další 9');
+  assert.deepEqual(validateConfig({...config, dashboardPhones: ['+420600000001']}).dashboardPhones, ['+420600000001']);
+  assert.throws(() => validateConfig({...config, dashboardPhones: ['600000001']}), InputError);
 });
