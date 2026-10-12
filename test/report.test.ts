@@ -126,7 +126,11 @@ test('cash book as a journal: revenue by section as a fallback, the daily report
     {name: 'Peněžní deník.xlsx', bytes: await xlsx(journalSheets())},
     {name: 'Denní report 9.10.2026.xlsx', bytes: await xlsx(reportSheetsDated())},
   ], '2026-10-09'))!;
-  assert.ok(!both.lines.some(entry => entry.label.startsWith(JOURNAL_LABEL)), 'no double revenue');
+  assert.ok(!both.lines.some(entry => entry.kind !== 'journal_revenue' && entry.label.startsWith(JOURNAL_LABEL)), 'no double revenue');
+  assert.deepEqual(both.lines.filter(entry => entry.kind === 'journal_revenue').map(entry => [entry.key, entry.amountCents]),
+    [['diner', 5000000], ['bar', 10000000], ['club', 15000000]], 'the cash book\'s revenue stays beside it for the check');
+  assert.equal(total(both, 'revenue_section'), 30000000);
+  assert.deepEqual(buildBriefing({businessDate: '2026-10-09', config, bills: [], closings: [], planHistory: [], incomplete: false, report: both}).report!.journalMismatches, [], 'both say the same');
   assert.equal(line(both, 'payment', 'cash')!.amountCents, 2000000, 'payments from the daily report');
 });
 
@@ -245,4 +249,19 @@ test('to-do list: missing report first, then warnings by Kč, at most fifteen', 
   assert.equal(list.at(-1)!.text, '… a další 9');
   assert.deepEqual(validateConfig({...config, dashboardPhones: ['+420600000001']}).dashboardPhones, ['+420600000001']);
   assert.throws(() => validateConfig({...config, dashboardPhones: ['600000001']}), InputError);
+});
+
+test('daily report against the cash book: a section that differs by a crown or more is a warning', () => {
+  const entry = (kind: 'revenue_section' | 'journal_revenue', key: string, amountCents: number) => ({kind, key, label: kind === 'journal_revenue' ? JOURNAL_LABEL + key : key, count: null, amountCents});
+  const briefing = buildBriefing({businessDate: '2026-10-09', config, bills: [], closings: [], planHistory: [], incomplete: false, report: {
+    businessDate: '2026-10-09', source: 'onedrive', files: [], notes: null, warnings: [], lines: [
+      entry('revenue_section', 'diner', 4520000), entry('journal_revenue', 'diner', 4490000),
+      entry('revenue_section', 'bar', 1000050), entry('journal_revenue', 'bar', 1000000),
+      entry('revenue_section', 'club', 2000000), entry('journal_revenue', 'club', 1999900)]}});
+  assert.equal(briefing.revenueCents, 7520050, 'the cash book\'s revenue is not counted');
+  assert.deepEqual(briefing.report!.journalMismatches.map(row => [row.section, row.reportCents, row.journalCents]), [['diner', 4520000, 4490000], ['club', 2000000, 1999900]], 'half a crown is rounding');
+  assert.match(renderBriefing('Testovací podnik', briefing), /⚠ Tržba v reportu nesedí s deníkem: Diner: report 45 200 Kč, deník 44 900 Kč, Klub: report 20 000 Kč, deník 19 999 Kč/);
+  const todo = todoList(briefing);
+  assert.equal(todo[0].text, 'Tržba nesedí s deníkem, Diner: report 45 200 Kč, deník 44 900 Kč');
+  assert.equal(todo[0].amountCents, 30000);
 });

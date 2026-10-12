@@ -1,4 +1,4 @@
-import {CASH_DIFFERENCE_CENTS, crowns, type Briefing} from './briefing.ts';
+import {CASH_DIFFERENCE_CENTS, crowns, mismatch, type Briefing} from './briefing.ts';
 
 export type TodoItem = {level: 'warn' | 'info'; text: string; amountCents: number | null};
 const LIMIT = 15;
@@ -13,6 +13,7 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   if (briefing.report?.safeCents != null && briefing.report.safeCents < 0) warn(`Trezor je v deníku záporný: ${crowns(briefing.report.safeCents)}`, briefing.report.safeCents);
   const difference = briefing.report?.cashDifferenceCents ?? null;
   if (difference !== null && Math.abs(difference) >= CASH_DIFFERENCE_CENTS) warn(`Přepočet pokladny nesedí s deníkem: ${difference > 0 ? '+' : ''}${crowns(difference)}`, difference);
+  for (const row of briefing.report?.journalMismatches ?? []) warn(`Tržba nesedí s deníkem, ${mismatch(row)}`, row.reportCents - row.journalCents);
   if (briefing.reservations?.today.pending) warn(`Rezervace na dnešek čekající na potvrzení: ${briefing.reservations.today.pending}`);
   const reviews = briefing.reviews;
   if (reviews?.low) warn(`Slabé recenze (3 ★ a méně): ${reviews.low}`);

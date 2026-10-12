@@ -24,7 +24,9 @@ export type Briefing = {
   /** Where the revenue comes from: POS bills, the managers' daily report (interim), or nothing yet. */
   source: 'pos' | 'report' | 'none';
   /** Figures only the managers' report has today: cash expenses, cash payouts, safe, discount detail. */
-  report: {expensesCents: number; payoutsCents: number; safeCents: number | null; cashDifferenceCents: number | null; discounts: {label: string; count: number | null; amountCents: number}[]} | null;
+  report: {expensesCents: number; payoutsCents: number; safeCents: number | null; cashDifferenceCents: number | null; discounts: {label: string; count: number | null; amountCents: number}[];
+    /** Sections whose revenue in the daily report differs from the cash book's (both written by the managers). */
+    journalMismatches: {section: string; label: string; reportCents: number; journalCents: number}[]} | null;
   /** "Report dne": points from the analysis, or the raw text while it is not analysed. */
   notes: {points: NotePoint[]; summary: string | null; raw: string | null} | null;
   /** Bookings of the reported day and of the day that is starting. `null` = the reservation system sent nothing for either day. */
@@ -46,6 +48,19 @@ export type MonthResult = {
   revenueCents: number; revenueDays: number; error: string | null;
 };
 const positive = (report: DailyReport, kind: 'expense' | 'payout') => report.lines.filter(entry => entry.kind === kind && entry.amountCents > 0).reduce((sum, entry) => sum + entry.amountCents, 0);
+
+/** The daily report and the cash book should say the same revenue per section; any difference of a crown or more is shown. */
+export const JOURNAL_MISMATCH_CENTS = 100;
+function journalMismatches(report: DailyReport, names: Record<string, string>): NonNullable<Briefing['report']>['journalMismatches'] {
+  const journal = report.lines.filter(entry => entry.kind === 'journal_revenue');
+  if (!journal.length) return [];
+  const sum = (kind: 'revenue_section' | 'journal_revenue', key: string) => report.lines.filter(entry => entry.kind === kind && entry.key === key).reduce((total, entry) => total + entry.amountCents, 0);
+  const keys = [...new Set([...report.lines.filter(entry => entry.kind === 'revenue_section').map(entry => entry.key), ...journal.map(entry => entry.key)])];
+  const order = Object.keys(names);
+  return keys.map(section => ({section, label: names[section] ?? section, reportCents: sum('revenue_section', section), journalCents: sum('journal_revenue', section)}))
+    .filter(row => Math.abs(row.reportCents - row.journalCents) >= JOURNAL_MISMATCH_CENTS)
+    .sort((a, b) => (order.indexOf(a.section) + 1 || 99) - (order.indexOf(b.section) + 1 || 99) || a.section.localeCompare(b.section));
+}
 
 /** Counts bookings: the reported day (who came, who did not) and today's outlook (confirmed and still waiting). */
 export function summarizeReservations(config: TenantConfig, day: Reservation[], today: Reservation[]): Briefing['reservations'] {
@@ -191,6 +206,7 @@ export function buildBriefing(input: {
       expensesCents: positive(report, 'expense'), payoutsCents: positive(report, 'payout'), safeCents: line(report, 'balance', 'safe')?.amountCents ?? null, cashDifferenceCents: line(report, 'total', 'cash-difference')?.amountCents ?? null,
       discounts: report.lines.filter(entry => entry.kind === 'discount' && entry.amountCents > 0).sort((a, b) => b.amountCents - a.amountCents)
         .map(({label, count, amountCents}) => ({label, count, amountCents})),
+      journalMismatches: journalMismatches(report, input.config.sections),
     } : null,
     notes: input.notes ? {points: input.notes.points, summary: input.notes.summary, raw: null}
       : report?.notes ? {points: [], summary: null, raw: report.notes} : null,
@@ -278,8 +294,12 @@ export function renderReport(briefing: Pick<Briefing, 'report'>): string[] {
   // Coins and rounding make a few crowns of difference every day; from 500 Kč it is worth a look.
   if (report.cashDifferenceCents !== null && Math.abs(report.cashDifferenceCents) >= CASH_DIFFERENCE_CENTS)
     lines.push(`⚠ Přepočet pokladny nesedí se zůstatkem v deníku: ${report.cashDifferenceCents < 0 ? 'chybí' : 'přebývá'} ${crowns(Math.abs(report.cashDifferenceCents))}`);
+  if (report.journalMismatches.length) lines.push('⚠ Tržba v reportu nesedí s deníkem: ' + report.journalMismatches.map(mismatch).join(', '));
   return lines;
 }
+
+/** "Diner: report 45 200 Kč, deník 44 900 Kč" */
+export const mismatch = (row: NonNullable<Briefing['report']>['journalMismatches'][number]) => `${row.label}: report ${crowns(row.reportCents)}, deník ${crowns(row.journalCents)}`;
 
 const NOTE_LINES = 3;
 const marks: Record<NotePoint['kind'], string> = {incident: '⚠', problem: '⚠', task: '•', info: '•'};
