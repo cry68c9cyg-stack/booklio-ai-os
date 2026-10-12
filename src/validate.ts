@@ -79,6 +79,8 @@ export type TenantConfig = {
    * WEB_TOKEN_<TENANT>, never part of the config.
    */
   web: {url: string} | null;
+  /** Where the venue is, for the weather forecast (MET Norway); 4 decimals at most, as its terms ask. */
+  location: {lat: number; lon: number} | null;
 };
 /** Websites OKO1 may read (docs/web-v1.md). Nothing else is ever fetched with a web token. */
 export const WEB_HOSTS: readonly string[] = ['jamesdean.cz'];
@@ -274,7 +276,7 @@ function website(raw: unknown): {url: string} {
 }
 
 export function validateConfig(raw: unknown): TenantConfig {
-  const value = object(raw, ['name', 'timeZone', 'businessDayCutoffHour', 'sendHours', 'registers', 'sections', 'recipients'], ['bottleCheck', 'reportsLink', 'dashboardPhones', 'web']);
+  const value = object(raw, ['name', 'timeZone', 'businessDayCutoffHour', 'sendHours', 'registers', 'sections', 'recipients'], ['bottleCheck', 'reportsLink', 'dashboardPhones', 'web', 'location']);
   const timeZone = text(value.timeZone, 60);
   try { new Intl.DateTimeFormat('en', {timeZone}); } catch { fail(); }
   const sendHours = list(value.sendHours, 6, hour => int(hour, 0, 23));
@@ -290,7 +292,17 @@ export function validateConfig(raw: unknown): TenantConfig {
     bottleCheck: value.bottleCheck == null ? null : {minLossCents: int(object(value.bottleCheck, ['minLossCents']).minLossCents, 0, 1e7)},
     reportsLink: value.reportsLink == null || value.reportsLink === '' ? null : shareLink(value.reportsLink),
     web: value.web == null ? null : website(value.web),
+    location: value.location == null ? null : coordinates(value.location),
   };
+}
+
+function coordinates(raw: unknown): {lat: number; lon: number} {
+  const value = object(raw, ['lat', 'lon']);
+  const degree = (input: unknown, limit: number) => {
+    if (typeof input !== 'number' || !Number.isFinite(input) || Math.abs(input) > limit) fail();
+    return Math.round((input as number) * 10000) / 10000;
+  };
+  return {lat: degree(value.lat, 90), lon: degree(value.lon, 180)};
 }
 
 /** Daily totals imported from a previous POS (for example a one-off rkeeper export), used for the plan. */

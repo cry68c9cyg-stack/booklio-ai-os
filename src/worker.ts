@@ -1,7 +1,7 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
-import {buildBriefing, forecast, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
+import {buildBriefing, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
@@ -15,6 +15,7 @@ import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, 
 import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Reservation, type ReviewSummary, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
 import {dashboardWeb} from './web-views.ts';
+import {WEATHER_AGENT, WEATHER_URL, weatherDays, type WeatherDay} from './weather.ts';
 import {MCP_PATH, oauthOptions, type Venues} from './oauth.ts';
 
 export type Env = DeliveryEnv & WebEnv & IuctoEnv & {
@@ -109,6 +110,10 @@ export class TenantObject extends DurableObject<Env> {
       -- Posted costs per month and synthetic account from iÚčto (sums only), and the last read of each month.
       CREATE TABLE IF NOT EXISTS costs(month TEXT NOT NULL, account TEXT NOT NULL, name TEXT NOT NULL, amount_cents INTEGER NOT NULL, PRIMARY KEY(month, account));
       CREATE TABLE IF NOT EXISTS cost_fetches(month TEXT PRIMARY KEY, through TEXT NOT NULL, at TEXT NOT NULL, error TEXT);
+      -- The forecast each morning's message gave for the day starting and the 6 after it (horizon = days ahead); the first one counts.
+      CREATE TABLE IF NOT EXISTS forecast_log(for_date TEXT NOT NULL, horizon INTEGER NOT NULL, cents INTEGER NOT NULL, made_on TEXT NOT NULL, PRIMARY KEY(for_date, horizon));
+      -- Weather forecast for the venue's location per local day (MET Norway), refreshed at most every 3 hours.
+      CREATE TABLE IF NOT EXISTS weather(date TEXT PRIMARY KEY, json TEXT NOT NULL, fetched_at TEXT NOT NULL);
     `));
     // Wrong codes for unknown venues are counted per venue name in the shared stand-in (see `loginStub`).
     if (!this.sql.exec<{name: string}>('PRAGMA table_info(login_failures)').toArray().some(column => column.name === 'scope')) {
@@ -263,7 +268,8 @@ export class TenantObject extends DurableObject<Env> {
     const revenue = (entry: string) => { if (!cache.has(entry)) cache.set(entry, this.dayRevenue(entry)); return cache.get(entry)!; };
     const series = Array.from({length: 35}, (_, i) => addDays(day, i - 34)).map(entry => ({
       date: entry, revenueCents: revenue(entry),
-      planCents: planFrom([7, 14, 21, 28].map(back => revenue(addDays(entry, -back))).filter((value): value is number => value !== null).map(revenueCents => ({revenueCents})))?.revenueCents ?? null,
+      // The plan the morning message gave when there is one, else the weekday average.
+      planCents: this.loggedPlan(entry) ?? planFrom([7, 14, 21, 28].map(back => revenue(addDays(entry, -back))).filter((value): value is number => value !== null).map(revenueCents => ({revenueCents})))?.revenueCents ?? null,
     }));
     const balances = Object.fromEntries((report?.lines ?? []).filter(line => line.kind === 'balance').map(line => [line.key, line.amountCents]));
     const stored = this.sql.exec<{text: string}>('SELECT text FROM briefings WHERE business_date=?', day).toArray()[0];
@@ -697,7 +703,23 @@ export class TenantObject extends DurableObject<Env> {
     let cents = 0, days = 0;
     const missing: string[] = [];
     for (let day = month + '-01'; day <= date; day = addDays(day, 1)) { const value = revenue(day); if (value !== null) { cents += value; days++; } else missing.push(day); }
-    return forecast({today, bases, seasonal, monthActual: {cents, days, missing}});
+    // Confirmed guests summed in SQL (nothing of the guests is read): the next 7 days, and each weekday's usual over the 4 weeks (days with bookings, at least two).
+    const guests = (from: string, to: string) => new Map(this.sql.exec<{day: string; guests: number | null}>(`SELECT business_date AS day,
+        SUM(CASE WHEN json_extract(json, '$.status') = 'confirmed' THEN json_extract(json, '$.partySize') ELSE 0 END) AS guests
+      FROM records WHERE type='reservation' AND business_date BETWEEN ? AND ? GROUP BY business_date`, from, to).toArray().map(row => [row.day, row.guests ?? 0]));
+    const past = guests(window.at(-1)!, date), coming = guests(today, addDays(today, 6));
+    const usual = Array.from({length: 7}, (_, day) => {
+      const values = window.filter(entry => weekday(entry) === day && past.has(entry)).map(entry => past.get(entry)!);
+      return values.length >= 2 ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : null;
+    });
+    const bookings = Object.fromEntries(Array.from({length: 7}, (_, i) => addDays(today, i)).map(day => [day, {guests: coming.get(day) ?? 0, usualGuests: usual[weekday(day)]}]));
+    const weather = this.sql.exec<{json: string}>('SELECT json FROM weather WHERE date >= ? ORDER BY date LIMIT 10', today).toArray().map(row => JSON.parse(row.json) as WeatherDay);
+    // The plan each morning gave for its day against what the day made, over the 28 days up to the reported one.
+    // Up to the day before the reported one: the reported day's revenue may still be incomplete.
+    const logged = this.sql.exec<{day: string; cents: number}>('SELECT for_date AS day, cents FROM forecast_log WHERE horizon=0 AND for_date BETWEEN ? AND ?', window.at(-1)!, addDays(date, -1)).toArray();
+    const accuracy = forecastAccuracy(logged.map(row => ({forecastCents: row.cents, actualCents: revenue(row.day)}))
+      .filter((row): row is {forecastCents: number; actualCents: number} => row.actualCents !== null));
+    return forecast({today, bases, seasonal, monthActual: {cents, days, missing}, bookings, weather, accuracy});
   }
 
   /** The 7 days up to the reported day against the 7 days before them. */
@@ -743,6 +765,7 @@ export class TenantObject extends DurableObject<Env> {
       month: weekday(date) === 0 || addDays(date, 1).endsWith('-01') ? this.month(config, date) : null,
       lastWeekRevenueCents: this.dayRevenue(addDays(date, -7)), discountHistory: this.discountHistory(date),
       ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast: this.forecast(date),
+      forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};
   }
@@ -769,6 +792,7 @@ export class TenantObject extends DurableObject<Env> {
         await this.analyse(config, date);
         // Costs once a day (a failed read is tried again at the next send hour); the quota is the venue's (5 000 requests a day on the Firma plan).
         await this.fetchCosts(tenant, date, businessDate(at, config.timeZone, 0));
+        await this.refreshWeather(config, at);
       })(), PREPARE_BUDGET_MS);
     }
     const decision = briefingDecision({localHour: hour, sendHours: config.sendHours, alreadySent: sent, ready: this.ready(config, date)});
@@ -777,11 +801,40 @@ export class TenantObject extends DurableObject<Env> {
     // Without a configured channel the briefing is 'stored' and readable through the admin API.
     // A 'failed' delivery is not counted as sent, so the next send hour (until the last one) tries again.
     const status = await deliver(this.env, config.recipients, text);
+    // What a message that went out forecast is kept, so tomorrow's message compares the day with it; a failed one is not (the retry counts).
+    for (const [horizon, day] of status === 'failed' ? [] : (briefing.forecast?.days ?? []).entries()) {
+      if (day.cents !== null) this.sql.exec('INSERT OR IGNORE INTO forecast_log VALUES(?,?,?,?)', day.date, horizon, day.cents, date);
+    }
     this.sql.exec(`INSERT INTO briefings VALUES(?,?,?,?,?,?) ON CONFLICT(business_date) DO UPDATE SET
       status=excluded.status, incomplete=excluded.incomplete, text=excluded.text, json=excluded.json, created_at=excluded.created_at`,
     date, status, briefing.incomplete ? 1 : 0, text, JSON.stringify(briefing), at.toISOString());
     this.archive(`t/${tenant}/export/${date}.json`, JSON.stringify(this.exportDay(date)));
     return {decision, businessDate: date, status, text};
+  }
+
+  /** The plan a sent morning message gave for its day (horizon 0), if any. */
+  private loggedPlan(date: string): number | null {
+    return this.sql.exec<{cents: number}>('SELECT cents FROM forecast_log WHERE for_date=? AND horizon=0', date).toArray()[0]?.cents ?? null;
+  }
+
+  /** The weather forecast for the venue (MET Norway, no key); a failed read keeps the last one. */
+  private async refreshWeather(config: TenantConfig, at: Date) {
+    if (!config.location) return;
+    const last = this.sql.exec<{at: string | null}>('SELECT max(fetched_at) AS at FROM weather').toArray()[0]?.at;
+    if (last && at.getTime() - Date.parse(last) < 3 * HOUR_MS) return;
+    try {
+      const response = await fetch(`${WEATHER_URL}?lat=${config.location.lat}&lon=${config.location.lon}`,
+        {headers: {'user-agent': WEATHER_AGENT, accept: 'application/json'}, signal: AbortSignal.timeout(10000)});
+      if (!response.ok) { console.log('weather', response.status); return; }
+      const days = weatherDays(await response.json(), config.timeZone);
+      if (!days.length) return;
+      this.ctx.storage.transactionSync(() => {
+        this.sql.exec('DELETE FROM weather WHERE date < ?', addDays(localTime(at, config.timeZone).date, -1));
+        for (const day of days) this.sql.exec('INSERT OR REPLACE INTO weather VALUES(?,?,?)', day.date, JSON.stringify(day), at.toISOString());
+      });
+    } catch (error) {
+      console.log('weather', error instanceof Error ? error.name : 'error');
+    }
   }
 
   /** Everything stored about one business day, for the daily export to R2. */

@@ -7,5 +7,6 @@
   "sections": {"diner": "Diner", "bar": "Bar", "club": "Klub"},
   "recipients": ["+420000000000"],
   "bottleCheck": {"minLossCents": 10000},
-  "web": {"url": "https://jamesdean.cz"}
+  "web": {"url": "https://jamesdean.cz"},
+  "location": {"lat": 50.0899, "lon": 14.4207}
 }
