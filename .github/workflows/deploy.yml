@@ -183,6 +183,14 @@ jobs:
           rm -f "$RUNNER_TEMP/web-cteni.json"
           sleep 10
           check | jq -c '{ok, tabulky: .tables, chyba: .error}' || echo "::warning::Kontrolu čtení webu nejde spustit."
+      - name: Příjem dat (kdo a kdy naposledy poslal, bez obsahu a počtů)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AI_OS_URL: https://oko1.rr7whdyyhf.workers.dev
+        run: |
+          export AI_OS_ADMIN_SECRET=$(printf '%s' oko1-admin | openssl dgst -sha256 -hmac "$CLOUDFLARE_API_TOKEN" -r | cut -d' ' -f1)
+          node scripts/admin.ts ingest james-dean 2> /dev/null | jq -c '{instalace: [.installations[] | {installationId, pairedAt, lastSeenAt}],
+            davky: [.batches[] | {installationId, receivedAt}], typy: [.records[] | {type, lastReceivedAt}]}' || echo "::warning::Stav příjmu dat nejde přečíst."
       - name: SMS brána (BulkGate, případně Twilio), jen když jsou tajemství vyplněná
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
