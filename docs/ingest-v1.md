@@ -84,7 +84,9 @@ Doplněno 9. 10. 2026 zpětně kompatibilně, stejně jako kontrola lahví: AI O
 | `arrival` | `arrived` \| `no_show` \| `null` | zápis obsluhy, zda host dorazil |
 | `source` | string \| `null` | odkud rezervace přišla, např. `web`, `obsluha`, `mcp` |
 
-Jména, kontakty ani poznámky hostů se neposílají; AI OS potřebuje jen počty. Ranní přehled ukáže dva řádky: potvrzené rezervace za vykazovaný den s počtem hostů a no-show, a potvrzené rezervace na právě začínající den po střediscích s počtem čekajících na potvrzení. Na rezervace přehled nečeká.
+Jména, kontakty ani poznámky hostů se neposílají; AI OS potřebuje jen počty.
+
+> Poznámka (12. 10. 2026): údaje hostů včetně jmen a kontaktů OKO1 od této změny čte živě přímo z webu James Dean, jen pro MCP server a dashboard vedení, a neukládá je ([docs/web-v1.md](web-v1.md)). Tento kontrakt se tím nemění: rezervace sem dál chodí jen jako počty a z nich se skládá ranní zpráva. Ranní přehled ukáže dva řádky: potvrzené rezervace za vykazovaný den s počtem hostů a no-show, a potvrzené rezervace na právě začínající den po střediscích s počtem čekajících na potvrzení. Na rezervace přehled nečeká.
 
 ## Kdy posílat
 
