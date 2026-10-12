@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
-import {briefingDecision, reportDate} from '../src/schedule.ts';
+import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
 import {businessDate} from '../src/time.ts';
@@ -280,4 +280,37 @@ test('BulkGate: rows from every answer shape', async () => {
   assert.deepEqual(bulkGateRows({total: {status: {sent: 0, accepted: 1, scheduled: 0, error: 0}}}), [{status: 'accepted'}]);
   assert.deepEqual(bulkGateRows({total: {status: {accepted: 0, error: 1}}}), [{status: 'error'}]);
   assert.deepEqual(bulkGateRows(null), []);
+});
+
+test('weekly summary only in the Monday message (Sunday\'s report), silent senders in the message and the to-do list', () => {
+  const part = {revenueCents: 140000000, revenueDays: 7, reservations: 30, guests: 120, noShows: 2, visits: 2100, visitDays: 7, reviews: 9, starsTenths: 46};
+  const week = {from: '2026-10-05', to: '2026-10-11', current: part, previous: {...part, revenueCents: 100000000, guests: 100, visits: null, reviews: 0, starsTenths: null}};
+  assert.deepEqual(renderWeek(week), ['Týden 5. 10.–11. 10.: tržba 1 400 000 Kč (+40 %) · rezervace 30, 120 hostů (+20 %), nedorazilo 2 · web 2 100 návštěv · recenze 9, průměr 4,6 ★']);
+  assert.deepEqual(renderWeek({...week, current: {...part, revenueDays: 5}}), ['Týden 5. 10.–11. 10.: tržba 1 400 000 Kč (5 dní s daty) · rezervace 30, 120 hostů (+20 %), nedorazilo 2 · web 2 100 návštěv · recenze 9, průměr 4,6 ★'],
+    'no change against a week with a different number of days');
+  assert.match(renderWeek({...week, current: {...part, revenueDays: 3}, previous: {...part, revenueDays: 3, revenueCents: 100000000, visits: 1000, visitDays: 2}})[0],
+    /^Týden 5\. 10\.–11\. 10\.: tržba 1 400 000 Kč \(\+40 %, 3 dny s daty\) · .* · web 2 100 návštěv · /, 'one bracket; visits compared only over as many days');
+  assert.deepEqual(renderWeek(null), []);
+  const silent = [{name: 'Web', since: '12. 10. 18:01'}];
+  const sunday = buildBriefing({businessDate: '2026-10-11', config, bills: [], closings: [], planHistory: [], incomplete: false, week, silent});
+  const text = renderBriefing('Testovací podnik', sunday);
+  assert.match(text, /\nTýden 5\. 10\.–11\. 10\.: tržba 1 400 000 Kč/);
+  assert.match(text, /^Testovací podnik · [^\n]+\n⚠ Web neposílá data od 12\. 10\. 18:01\.\n/, 'right under the heading');
+  assert.ok(todoList(sunday).some(item => item.text === 'Web neposílá data od 12. 10. 18:01'));
+  const saturday = buildBriefing({businessDate: '2026-10-10', config, bills: [], closings: [], planHistory: [], incomplete: false, week});
+  assert.doesNotMatch(renderBriefing('Testovací podnik', saturday), /Týden/, 'the week only on Mondays');
+});
+
+test('silent senders: the newest installation of each kind counts, the web after 3 h, a POS after 26 h', () => {
+  const now = new Date('2026-10-13T07:00:00Z');
+  const rows = [
+    {installation_id: 'booklio-web-1', last_seen_at: '2026-10-10T10:00:00Z'},
+    {installation_id: 'booklio-web-2', last_seen_at: '2026-10-13T05:00:00Z'},
+    {installation_id: 'pos-installation-1', last_seen_at: '2026-10-12T04:00:00Z'},
+    {installation_id: 'pos-never', last_seen_at: null},
+  ];
+  assert.deepEqual(sendersFrom(rows, now).map(row => [row.name, row.silent]), [['Pokladna', true], ['Web', false]], 'a re-paired website is not silent');
+  assert.deepEqual(sendersFrom(rows.slice(0, 1), now).map(row => [row.name, row.silent]), [['Web', true]]);
+  assert.deepEqual(sendersFrom([{installation_id: 'pos-installation-1', last_seen_at: '2026-10-12T06:00:00Z'}], now).map(row => row.silent), [false]);
+  assert.deepEqual(sendersFrom([], now), []);
 });

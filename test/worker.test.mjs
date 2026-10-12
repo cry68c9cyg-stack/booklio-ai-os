@@ -343,9 +343,14 @@ try {
   assert.equal(data.days.length, 35);
   assert.equal(data.days.at(-1).date, '2026-10-09');
   assert.deepEqual([data.balances.register, data.balances.safe], [14080100, 3000000]);
-  assert.deepEqual(data.todo.slice(0, 3).map(item => item.text), ['Tržba nesedí s deníkem, Bar: report 150 000 Kč, deník 100 000 Kč',
-    'Tržba nesedí s deníkem, Klub: report 180 000 Kč, deník 150 000 Kč', 'Přepočet pokladny nesedí s deníkem: +29 199 Kč'],
-    'the synthetic report and cash book differ in the bar and the club; the bigger amount first');
+  assert.deepEqual(data.todo.slice(0, 4).map(item => item.text), ['Platba nesedí s deníkem, karta: report 380 000 Kč, deník 295 000 Kč',
+    'Tržba nesedí s deníkem, Bar: report 150 000 Kč, deník 100 000 Kč', 'Tržba nesedí s deníkem, Klub: report 180 000 Kč, deník 150 000 Kč',
+    'Přepočet pokladny nesedí s deníkem: +29 199 Kč'],
+    'the synthetic report and cash book differ in card payments, the bar and the club; the bigger amount first');
+  // The week up to the shown day against the week before, and every source with the time it last sent.
+  assert.deepEqual([data.week.from, data.week.to, data.week.current.revenueCents, data.week.current.revenueDays], ['2026-10-03', '2026-10-09', 39000000, 1]);
+  assert.ok(Array.isArray(data.sources.senders) && Array.isArray(data.sources.types));
+  assert.equal(data.sources.report.found, true);
   // "Vyřízeno": kept per day and item, only with a session, undone by the same switch.
   assert.ok(data.todo.every(item => /^[a-f0-9]{24}$/.test(item.key) && item.done === false));
   const first = data.todo[0];

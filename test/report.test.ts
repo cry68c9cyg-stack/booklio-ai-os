@@ -126,7 +126,9 @@ test('cash book as a journal: revenue by section as a fallback, the daily report
     {name: 'Peněžní deník.xlsx', bytes: await xlsx(journalSheets())},
     {name: 'Denní report 9.10.2026.xlsx', bytes: await xlsx(reportSheetsDated())},
   ], '2026-10-09'))!;
-  assert.ok(!both.lines.some(entry => entry.kind !== 'journal_revenue' && entry.label.startsWith(JOURNAL_LABEL)), 'no double revenue');
+  assert.ok(!both.lines.some(entry => entry.kind !== 'journal_revenue' && entry.kind !== 'journal_payment' && entry.label.startsWith(JOURNAL_LABEL)), 'no double revenue');
+  assert.deepEqual(both.lines.filter(entry => entry.kind === 'journal_payment').map(entry => [entry.key, entry.amountCents]),
+    [['cash', 500000], ['card', 29500000]], 'the cash book\'s payments stay beside it for the check');
   assert.deepEqual(both.lines.filter(entry => entry.kind === 'journal_revenue').map(entry => [entry.key, entry.amountCents]),
     [['diner', 5000000], ['bar', 10000000], ['club', 15000000]], 'the cash book\'s revenue stays beside it for the check');
   assert.equal(total(both, 'revenue_section'), 30000000);
@@ -164,8 +166,11 @@ test('OneDrive: a report with the date in its header is the report, not a cash b
   assert.deepEqual(report.warnings, []);
   const briefing = buildBriefing({businessDate: '2026-10-09', config, bills: [], closings: [], planHistory: [], incomplete: false, report});
   assert.equal(briefing.report!.cashDifferenceCents, 2919900);
-  assert.match(renderBriefing('Testovací podnik', briefing), /\n⚠ Přepočet pokladny nesedí se zůstatkem v deníku: přebývá 29 199 Kč$/);
+  assert.match(renderBriefing('Testovací podnik', briefing), /\n⚠ Přepočet pokladny nesedí se zůstatkem v deníku: přebývá 29 199 Kč\n/);
   assert.ok(todoList(briefing).some(item => item.text === 'Přepočet pokladny nesedí s deníkem: +29 199 Kč'));
+  assert.deepEqual(briefing.report!.paymentMismatches.map(row => [row.section, row.reportCents, row.journalCents]), [['cash', 2000000, 500000], ['card', 28000000, 29500000]]);
+  assert.match(renderBriefing('Testovací podnik', briefing), /\n⚠ Platby v reportu nesedí s deníkem: hotovost: report 20 000 Kč, deník 5 000 Kč, karta: report 280 000 Kč, deník 295 000 Kč$/);
+  assert.ok(todoList(briefing).some(item => item.text.startsWith('Platba nesedí s deníkem, hotovost: report 20 000 Kč')));
 });
 
 test('OneDrive: share id, picking the day\'s files, report from the downloaded workbooks', async () => {

@@ -26,7 +26,9 @@ export type Briefing = {
   /** Figures only the managers' report has today: cash expenses, cash payouts, safe, discount detail. */
   report: {expensesCents: number; payoutsCents: number; safeCents: number | null; cashDifferenceCents: number | null; discounts: {label: string; count: number | null; amountCents: number}[];
     /** Sections whose revenue in the daily report differs from the cash book's (both written by the managers). */
-    journalMismatches: {section: string; label: string; reportCents: number; journalCents: number}[]} | null;
+    journalMismatches: {section: string; label: string; reportCents: number; journalCents: number}[];
+    /** Payment methods (cash, cards, customer cards) whose amount in the daily report differs from the cash book's. */
+    paymentMismatches: {section: string; label: string; reportCents: number; journalCents: number}[]} | null;
   /** "Report dne": points from the analysis, or the raw text while it is not analysed. */
   notes: {points: NotePoint[]; summary: string | null; raw: string | null} | null;
   /** Bookings of the reported day and of the day that is starting. `null` = the reservation system sent nothing for either day. */
@@ -38,11 +40,17 @@ export type Briefing = {
   web: {visits: number; withAction: number; lastWeekVisits: number | null; reservationsSent: number; reviewScans: number; topOrigins: {name: string; visits: number}[]} | null;
   /** Reviews that reached the website's admin on the reported calendar day, and how many wait there. `null` = nothing sent. */
   reviews: {newCount: number; averageTenths: number | null; low: number; bySource: {name: string; newCount: number}[]; waiting: number; forManagement: number; failed: number} | null;
+  /** The 7 days up to the reported day against the 7 before: sums only. `null` = not asked for. */
+  week: Week | null;
+  /** Sources that sent data before but have been silent too long (e.g. the website's hourly push). */
+  silent: {name: string; since: string}[];
   /** Posted costs from accounting (iÚčto) against OKO1's revenue: this month so far, and the month before in its first half. */
   costs: MonthResult | null;
   costsPrevious: MonthResult | null;
   incomplete: boolean;
 };
+export type WeekPart = {revenueCents: number; revenueDays: number; reservations: number; guests: number; noShows: number; visits: number | null; visitDays: number; reviews: number; starsTenths: number | null};
+export type Week = {from: string; to: string; current: WeekPart; previous: WeekPart};
 export type MonthResult = {
   month: string; through: string; rows: {account: string; name: string; amountCents: number}[];
   revenueCents: number; revenueDays: number; error: string | null;
@@ -51,13 +59,17 @@ const positive = (report: DailyReport, kind: 'expense' | 'payout') => report.lin
 
 /** The daily report and the cash book should say the same revenue per section; any difference of a crown or more is shown. */
 export const JOURNAL_MISMATCH_CENTS = 100;
-function journalMismatches(report: DailyReport, names: Record<string, string>): NonNullable<Briefing['report']>['journalMismatches'] {
-  const journal = report.lines.filter(entry => entry.kind === 'journal_revenue');
+function journalMismatches(report: DailyReport, names: Record<string, string>, reportKind: 'revenue_section' | 'payment' = 'revenue_section',
+  journalKind: 'journal_revenue' | 'journal_payment' = 'journal_revenue', only: string[] | null = null, onBothSides = false): NonNullable<Briefing['report']>['journalMismatches'] {
+  const wanted = (key: string) => !only || only.includes(key);
+  const journal = report.lines.filter(entry => entry.kind === journalKind && wanted(entry.key));
   if (!journal.length) return [];
-  const sum = (kind: 'revenue_section' | 'journal_revenue', key: string) => report.lines.filter(entry => entry.kind === kind && entry.key === key).reduce((total, entry) => total + entry.amountCents, 0);
-  const keys = [...new Set([...report.lines.filter(entry => entry.kind === 'revenue_section').map(entry => entry.key), ...journal.map(entry => entry.key)])];
+  const sum = (kind: string, key: string) => report.lines.filter(entry => entry.kind === kind && entry.key === key).reduce((total, entry) => total + entry.amountCents, 0);
+  const reported = report.lines.filter(entry => entry.kind === reportKind && wanted(entry.key)).map(entry => entry.key);
+  // Payments: a method only one of the two files has a row for (the report has no customer cards row) is not compared.
+  const keys = onBothSides ? [...new Set(reported)].filter(key => journal.some(entry => entry.key === key)) : [...new Set([...reported, ...journal.map(entry => entry.key)])];
   const order = Object.keys(names);
-  return keys.map(section => ({section, label: names[section] ?? section, reportCents: sum('revenue_section', section), journalCents: sum('journal_revenue', section)}))
+  return keys.map(section => ({section, label: names[section] ?? section, reportCents: sum(reportKind, section), journalCents: sum(journalKind, section)}))
     .filter(row => Math.abs(row.reportCents - row.journalCents) >= JOURNAL_MISMATCH_CENTS)
     .sort((a, b) => (order.indexOf(a.section) + 1 || 99) - (order.indexOf(b.section) + 1 || 99) || a.section.localeCompare(b.section));
 }
@@ -141,6 +153,7 @@ export function buildBriefing(input: {
   web?: WebTraffic; webLastWeek?: WebTraffic;
   costs?: MonthResult | null; costsPrevious?: MonthResult | null;
   reviews?: ReviewSummary;
+  week?: Week | null; silent?: {name: string; since: string}[];
 }): Briefing {
   const closed = input.bills.filter(bill => bill.status === 'closed');
   const add = <K>(map: Map<K, number>, key: K, value: number) => map.set(key, (map.get(key) ?? 0) + value);
@@ -207,6 +220,7 @@ export function buildBriefing(input: {
       discounts: report.lines.filter(entry => entry.kind === 'discount' && entry.amountCents > 0).sort((a, b) => b.amountCents - a.amountCents)
         .map(({label, count, amountCents}) => ({label, count, amountCents})),
       journalMismatches: journalMismatches(report, input.config.sections),
+      paymentMismatches: journalMismatches(report, methods, 'payment', 'journal_payment', ['cash', 'card', 'customer_card'], true),
     } : null,
     notes: input.notes ? {points: input.notes.points, summary: input.notes.summary, raw: null}
       : report?.notes ? {points: [], summary: null, raw: report.notes} : null,
@@ -214,6 +228,8 @@ export function buildBriefing(input: {
     web: summarizeWeb(input.web, input.webLastWeek),
     reviews: summarizeReviews(input.reviews),
     costs: input.costs ?? null, costsPrevious: input.costsPrevious ?? null,
+    week: input.week ?? null,
+    silent: input.silent ?? [],
     incomplete: input.incomplete,
   };
 }
@@ -237,6 +253,7 @@ function czechDate(date: string): string {
 export function renderBriefing(name: string, briefing: Briefing): string {
   const lines = [`${name} · ${czechDate(briefing.businessDate)}`];
   if (briefing.incomplete) lines.push(`⚠ Report chybí${briefing.missingClosings.length ? ': ' + briefing.missingClosings.join(', ') : ''}. Čísla nemusí být konečná.`);
+  for (const source of briefing.silent) lines.push(`⚠ ${source.name} neposílá data od ${source.since}.`);
   let revenue = `Tržba: ${crowns(briefing.revenueCents)}`;
   if (briefing.plan) {
     const delta = briefing.plan.revenueCents ? Math.round((briefing.revenueCents / briefing.plan.revenueCents - 1) * 100) : 0;
@@ -263,6 +280,8 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderReviews(briefing.reviews));
   lines.push(...renderCosts(briefing.costs, briefing.costsPrevious));
   lines.push(...renderNotes(briefing));
+  // The week in a few numbers once a week, in the message about Sunday (Monday morning).
+  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week));
   return lines.join('\n');
 }
 
@@ -295,6 +314,7 @@ export function renderReport(briefing: Pick<Briefing, 'report'>): string[] {
   if (report.cashDifferenceCents !== null && Math.abs(report.cashDifferenceCents) >= CASH_DIFFERENCE_CENTS)
     lines.push(`⚠ Přepočet pokladny nesedí se zůstatkem v deníku: ${report.cashDifferenceCents < 0 ? 'chybí' : 'přebývá'} ${crowns(Math.abs(report.cashDifferenceCents))}`);
   if (report.journalMismatches.length) lines.push('⚠ Tržba v reportu nesedí s deníkem: ' + report.journalMismatches.map(mismatch).join(', '));
+  if (report.paymentMismatches.length) lines.push('⚠ Platby v reportu nesedí s deníkem: ' + report.paymentMismatches.map(mismatch).join(', '));
   return lines;
 }
 
@@ -356,6 +376,27 @@ export function renderReviews(reviews: Briefing['reviews']): string[] {
     reviews.failed && `neodeslané odpovědi ${reviews.failed}`].filter(Boolean);
   if (admin.length) line += `; v adminu ${admin.join(', ')}`;
   return [line];
+}
+
+/** Change in whole per cent, with its sign; empty when there is nothing to compare with. */
+const change = (now: number, before: number) => before ? ` (${now >= before ? '+' : '−'}${Math.round(Math.abs(now - before) / before * 100)} %)` : '';
+const daysWord = (count: number) => `${count} ${count === 1 ? 'den' : count >= 2 && count <= 4 ? 'dny' : 'dní'}`;
+const shortDate = (date: string) => `${Number(date.slice(8))}. ${Number(date.slice(5, 7))}.`;
+/** The 7 days up to the reported day against the 7 before: revenue, bookings, no-shows, website, reviews. */
+export function renderWeek(week: Briefing['week']): string[] {
+  if (!week) return [];
+  const {current: now, previous: before} = week;
+  // Changes only against a week with data for as many days; otherwise the per cent would compare different lengths.
+  const same = before.revenueDays === now.revenueDays;
+  const parts: string[] = [];
+  if (now.revenueDays) {
+    const notes = [same ? change(now.revenueCents, before.revenueCents).slice(2, -1) : '', now.revenueDays < 7 ? `${daysWord(now.revenueDays)} s daty` : ''].filter(Boolean);
+    parts.push(`tržba ${crowns(now.revenueCents)}${notes.length ? ` (${notes.join(', ')})` : ''}`);
+  }
+  if (now.reservations || before.reservations) parts.push(`rezervace ${now.reservations}, ${now.guests} ${guestsWord(now.guests)}${change(now.guests, before.guests)}${now.noShows ? `, nedorazilo ${now.noShows}` : ''}`);
+  if (now.visits !== null) parts.push(`web ${group(now.visits)} ${visitsWord(now.visits)}${before.visits !== null && before.visitDays === now.visitDays ? change(now.visits, before.visits) : ''}`);
+  if (now.reviews) parts.push(`recenze ${now.reviews}${now.starsTenths !== null ? `, průměr ${(now.starsTenths / 10).toFixed(1).replace('.', ',')} ★` : ''}`);
+  return parts.length ? [`Týden ${shortDate(week.from)}–${shortDate(week.to)}: ${parts.join(' · ')}`] : [];
 }
 
 const MONTHS = ['leden', 'únor', 'březen', 'duben', 'květen', 'červen', 'červenec', 'srpen', 'září', 'říjen', 'listopad', 'prosinec'];

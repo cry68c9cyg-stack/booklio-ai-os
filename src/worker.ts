@@ -1,12 +1,12 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
-import {buildBriefing, planFrom, renderBriefing} from './briefing.ts';
+import {buildBriefing, planFrom, renderBriefing, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
-import {briefingDecision, localHour, reportDate} from './schedule.ts';
-import {addDays, businessDate, isDate} from './time.ts';
+import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
+import {addDays, businessDate, isDate, localTime, weekday} from './time.ts';
 import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-report.ts';
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
@@ -67,6 +67,12 @@ async function withinBudget(work: Promise<unknown>, ms: number): Promise<void> {
     new Promise(resolve => { timer = setTimeout(() => { console.error('prepare over budget'); resolve(null); }, ms); }),
   ]);
   clearTimeout(timer);
+}
+
+/** A moment as the venue reads it, e.g. "12. 10. 18:01". */
+function stamp(at: Date, timeZone: string): string {
+  const local = localTime(at, timeZone);
+  return `${Number(local.date.slice(8))}. ${Number(local.date.slice(5, 7))}. ${local.hour}:${String(local.minute).padStart(2, '0')}`;
 }
 
 /** One SQLite Durable Object per venue (tenant). Nothing here is shared between venues. */
@@ -265,7 +271,8 @@ export class TenantObject extends DurableObject<Env> {
     const todo = todoList(briefing, report?.warnings ?? [])
       // "… a další 3" is not an item of its own: no switch.
       .map(item => item.text.startsWith('… a další') ? {...item, key: null, done: false} : {...item, key: todoKey(item.text), done: done.has(todoKey(item.text))});
-    return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text});
+    return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
+      week: briefing.week ?? this.week(day), sources: this.sources(config)});
   }
 
   /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
@@ -531,13 +538,65 @@ export class TenantObject extends DurableObject<Env> {
     return config.registers.every(register => closed.has(register));
   }
 
-  private briefingFor(config: TenantConfig, date: string, incomplete: boolean) {
+  /** One stretch of days for the weekly summary: revenue, confirmed bookings, website visits, new reviews. */
+  private weekPart(from: string, to: string): WeekPart {
+    const part: WeekPart = {revenueCents: 0, revenueDays: 0, reservations: 0, guests: 0, noShows: 0, visits: null, visitDays: 0, reviews: 0, starsTenths: null};
+    let rated = 0, starSum = 0;
+    for (let date = from; date <= to; date = addDays(date, 1)) {
+      const revenue = this.dayRevenue(date);
+      if (revenue !== null) { part.revenueCents += revenue; part.revenueDays++; }
+      for (const row of this.day<Reservation>('reservation', date).filter(row => row.status === 'confirmed')) {
+        part.reservations++; part.guests += row.partySize; if (row.arrival === 'no_show') part.noShows++;
+      }
+      const web = this.day<WebTraffic>('web_traffic', date)[0];
+      if (web) { part.visits = (part.visits ?? 0) + web.visits; part.visitDays++; }
+      for (const source of this.day<ReviewSummary>('review_summary', date)[0]?.sources ?? []) {
+        source.stars.forEach((count, i) => { rated += count; starSum += count * (i + 1); });
+        part.reviews += source.stars.reduce((sum, count) => sum + count, 0) + source.unrated;
+      }
+    }
+    part.starsTenths = rated ? Math.round(starSum / rated * 10) : null;
+    return part;
+  }
+
+  /** The 7 days up to the reported day against the 7 days before them. */
+  private week(date: string): Week {
+    return {from: addDays(date, -6), to: date, current: this.weekPart(addDays(date, -6), date), previous: this.weekPart(addDays(date, -13), addDays(date, -7))};
+  }
+
+  private senders(now: Date) {
+    return sendersFrom(this.sql.exec<{installation_id: string; last_seen_at: string | null}>('SELECT installation_id, last_seen_at FROM installations').toArray(), now);
+  }
+
+  /** Senders silent too long, for the briefing: only for the report day of `now` (this morning's message), not for old days. */
+  private silentSources(config: TenantConfig, date: string, now: Date): {name: string; since: string}[] {
+    if (date !== reportDate(now, config.timeZone, config.businessDayCutoffHour)) return [];
+    return this.senders(now).filter(row => row.silent).map(row => ({name: row.name, since: stamp(row.at, config.timeZone)}));
+  }
+
+  /** Dashboard: every kind of sender and type of data with the time it last arrived, plus the last report and cost fetches. No content. */
+  private sources(config: TenantConfig) {
+    const at = (value: string | null) => value ? stamp(new Date(value), config.timeZone) : null;
+    const names: Record<string, string> = {bill: 'Účty z pokladny', cash_closing: 'Uzávěrky pokladen', bottle_check: 'Kontrola lahví', reservation: 'Rezervace', web_traffic: 'Návštěvnost webu', review_summary: 'Recenze'};
+    const report = this.sql.exec<{at: string; found: number}>('SELECT at, found FROM report_fetches ORDER BY at DESC LIMIT 1').toArray()[0];
+    const cost = this.sql.exec<{at: string; error: string | null}>('SELECT at, error FROM cost_fetches ORDER BY at DESC LIMIT 1').toArray()[0];
+    return {
+      senders: this.senders(new Date()).map(row => ({name: row.name, lastSeen: stamp(row.at, config.timeZone), silent: row.silent})),
+      types: this.sql.exec<{type: string; last: string}>('SELECT type, max(received_at) AS last FROM records GROUP BY type ORDER BY type').toArray()
+        .map(row => ({name: names[row.type] ?? row.type, lastReceived: at(row.last)})),
+      report: report ? {at: at(report.at), found: report.found === 1} : null,
+      costs: cost ? {at: at(cost.at), ok: !cost.error} : null,
+    };
+  }
+
+  private briefingFor(config: TenantConfig, date: string, incomplete: boolean, now = new Date()) {
     const planHistory = [7, 14, 21, 28].map(days => this.dayRevenue(addDays(date, -days))).filter((value): value is number => value !== null).map(revenueCents => ({revenueCents}));
     const briefing = buildBriefing({businessDate: date, config, bills: this.day<Bill>('bill', date), closings: this.day<CashClosing>('cash_closing', date),
       bottleChecks: this.day<BottleCheck>('bottle_check', date), planHistory, incomplete, report: this.report(date), notes: this.notes(date),
       reservations: this.day<Reservation>('reservation', date), reservationsToday: this.day<Reservation>('reservation', addDays(date, 1)),
       web: this.day<WebTraffic>('web_traffic', date)[0], webLastWeek: this.day<WebTraffic>('web_traffic', addDays(date, -7))[0],
       reviews: this.day<ReviewSummary>('review_summary', date)[0],
+      week: weekday(date) === 0 ? this.week(date) : null, silent: this.silentSources(config, date, now),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};
   }
@@ -568,7 +627,7 @@ export class TenantObject extends DurableObject<Env> {
     }
     const decision = briefingDecision({localHour: hour, sendHours: config.sendHours, alreadySent: sent, ready: this.ready(config, date)});
     if (decision !== 'send' && decision !== 'send-incomplete') return {decision, businessDate: date};
-    const {briefing, text} = this.briefingFor(config, date, decision === 'send-incomplete');
+    const {briefing, text} = this.briefingFor(config, date, decision === 'send-incomplete', at);
     // Without a configured channel the briefing is 'stored' and readable through the admin API.
     // A 'failed' delivery is not counted as sent, so the next send hour (until the last one) tries again.
     const status = await deliver(this.env, config.recipients, text);
