@@ -103,6 +103,26 @@ jobs:
             node scripts/admin.ts fetch james-dean "$d" --keep | jq -c --arg d "$d" '{den: $d, nalezeno: .found, ponechano: (.kept // false), upozorneni: .warnings}' || echo "::warning::Den $d se nenačetl."
             d=$(date -u -d "$d + 1 day" +%F); n=$((n + 1))
           done
+      - name: Spárování rezervačního systému (web James Dean posílá rezervace, jen poprvé)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AI_OS_URL: https://oko1.rr7whdyyhf.workers.dev
+          WEB: james-dean-web-production
+        run: |
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WEB/secrets"
+          auth=(-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
+          names=$(curl -sS "${auth[@]}" "$api")
+          if ! echo "$names" | jq -e '.success' > /dev/null; then echo "::warning::Tajemství webu nejde přečíst, rezervace se nespárují."; echo "$names" | jq -c '.errors'; exit 0; fi
+          if echo "$names" | jq -e '.result | map(.name) | index("OKO1_TOKEN")' > /dev/null; then echo "Web už je spárovaný."; exit 0; fi
+          # The web gets its own installation and token: it can only send records into OKO1 and is revocable on its own.
+          export AI_OS_ADMIN_SECRET=$(printf '%s' oko1-admin | openssl dgst -sha256 -hmac "$CLOUDFLARE_API_TOKEN" -r | cut -d' ' -f1)
+          id="booklio-web-$GITHUB_RUN_ID"; token=$(openssl rand -hex 32); echo "::add-mask::$token"
+          jq -n --arg i "$id" --arg t "$token" '{installationId: $i, token: $t}' > "$RUNNER_TEMP/pair.json"
+          node scripts/admin.ts pair james-dean "$RUNNER_TEMP/pair.json" > /dev/null; rm "$RUNNER_TEMP/pair.json"
+          put() { jq -n --arg n "$1" --arg v "$2" '{name: $n, text: $v, type: "secret_text"}' | curl -sS -X PUT "${auth[@]}" -H 'content-type: application/json' --data @- "$api" | jq -e '.success' > /dev/null; }
+          # The token goes last: without it the web sends nothing, so a half-done run is harmless and the next deploy repeats it.
+          if put OKO1_URL "$AI_OS_URL" && put OKO1_PROVOZOVNA james-dean && put OKO1_INSTALACE "$id" && put OKO1_TOKEN "$token"; then echo "Web spárován jako $id."
+          else echo "::warning::Tajemství webu se nepodařilo uložit, zkusí se při dalším nasazení."; fi
       - name: SMS brána (BulkGate, případně Twilio), jen když jsou tajemství vyplněná
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
