@@ -343,7 +343,9 @@ try {
   assert.equal(data.days.length, 35);
   assert.equal(data.days.at(-1).date, '2026-10-09');
   assert.deepEqual([data.balances.register, data.balances.safe], [14080100, 3000000]);
-  assert.equal(data.todo[0].text, 'Přepočet pokladny nesedí s deníkem: +29 199 Kč');
+  assert.deepEqual(data.todo.slice(0, 3).map(item => item.text), ['Tržba nesedí s deníkem, Bar: report 150 000 Kč, deník 100 000 Kč',
+    'Tržba nesedí s deníkem, Klub: report 180 000 Kč, deník 150 000 Kč', 'Přepočet pokladny nesedí s deníkem: +29 199 Kč'],
+    'the synthetic report and cash book differ in the bar and the club; the bigger amount first');
   assert.equal((await board('GET', '/data', undefined, {cookie: 'oko1_session=' + 'f'.repeat(64)})).status, 401);
   assert.equal((await mf.dispatchFetch('http://local.test/d/excel-venue/data', {headers: cookieHeader})).status, 200, 'the session works without other headers');
   assert.equal((await mf.dispatchFetch('http://local.test/d/other-venue/data', {headers: cookieHeader})).status, 401, 'a session is valid for its venue only');
