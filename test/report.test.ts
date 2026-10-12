@@ -6,8 +6,9 @@ import {parseAnalysis, pseudonymise, restore} from '../src/notes.ts';
 import {allowedUrl, pickFiles, reportFromFiles, shareId} from '../src/onedrive.ts';
 import {InputError, validateConfig, type TenantConfig} from '../src/validate.ts';
 import {excelDate, readXlsx} from '../src/xlsx.ts';
+import {todoList} from '../src/todo.ts';
 import {unzip} from '../src/zip.ts';
-import {bookSheets, reportSheets, xlsx, zip} from './xlsx-fixture.ts';
+import {bookSheets, journalSheets, reportSheets, reportSheetsDated, xlsx, zip} from './xlsx-fixture.ts';
 
 const config: TenantConfig = {
   name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9],
@@ -71,6 +72,59 @@ test('cash book: only the column of the business day, blocks for expenses, payou
   assert.deepEqual(lines.filter(entry => entry.kind === 'cash_count').map(entry => entry.key), ['euro', 'dolar']);
   assert.ok(!lines.some(entry => entry.amountCents === 4630400), 'the date header is not an amount');
   assert.equal(extractCashBook(await readXlsx(await xlsx(bookSheets())), '2026-10-20'), null);
+});
+
+test('cash book as a journal: the day\'s block, expenses, payouts, money in, cash count and its difference', async () => {
+  const lines = extractCashBook(await readXlsx(await xlsx(journalSheets())), '2026-10-09')!;
+  const report = {lines};
+  assert.deepEqual(lines.filter(entry => entry.kind === 'expense').map(entry => [entry.label, entry.amountCents]), [['Dodavatel B', 200000], ['DJ oprava světel', 150000]]);
+  assert.deepEqual(lines.filter(entry => entry.kind === 'payout').map(entry => [entry.label, entry.amountCents]), [['Security', 600000], ['DJ', 400000], ['Zkouška barman', 70000]]);
+  assert.deepEqual(lines.filter(entry => entry.kind === 'movement').map(entry => entry.key), ['vklad-jd', 'prodej-oleje'], 'cash received is not spending');
+  assert.equal(line(report, 'balance', 'register-start')!.amountCents, 9900100);
+  assert.equal(line(report, 'balance', 'register')!.amountCents, 14080100);
+  assert.equal(line(report, 'balance', 'safe')!.amountCents, 3000000, 'the counted safe');
+  assert.deepEqual(lines.filter(entry => entry.kind === 'cash_count').map(entry => entry.key), ['euro', 'hotovost', 'celkem']);
+  assert.equal(line(report, 'total', 'trzba-restaurace-den')!.amountCents, 300000, 'the cash part of the revenue is only a total');
+  assert.equal(line(report, 'total', 'cash-difference')!.amountCents, 17000000 - 14080100);
+  assert.ok(!lines.some(entry => entry.label.startsWith('Dodavatel A') || entry.label.startsWith('Dodavatel C')), 'other days stay out');
+  assert.equal(extractCashBook(await readXlsx(await xlsx(journalSheets())), '2026-10-20'), null);
+});
+
+test('cash book as a journal: the closing count wins, no day column guessed, a lone journal is a book', async () => {
+  const sheet = {List1: [
+    [46304, null, 'Počáteční stav', 1000, null, 'Počáteční výčetka'],
+    [null, null, 'Dodavatel', 100, null, 'Trezor', 500],
+    [null, null, null, 0, null, 'Celkem', 1000],
+    [null, null, 'Zůstatek', 900, null, 'Konečná výčetka'],
+    [null, null, null, null, null, 'Trezor', 800],
+    [null, null, null, null, null, 'Celkem', 901],
+    [46305, null, 'Počáteční stav', null],
+    [null, null, 'Tržba Club', 46310],
+  ]};
+  const lines = extractCashBook(await readXlsx(await xlsx(sheet)), '2026-10-09')!;
+  assert.equal(line({lines}, 'balance', 'safe')!.amountCents, 80000);
+  assert.equal(line({lines}, 'total', 'cash-difference')!.amountCents, 100);
+  assert.equal(extractCashBook(await readXlsx(await xlsx(sheet)), '2026-10-15'), null, 'an amount equal to a date serial is not a day column');
+  assert.equal(line({lines: extractCashBook(await readXlsx(await xlsx(sheet)), '2026-10-10')!}, 'total', 'trzba-club')!.amountCents, 4631000, 'an empty opening balance keeps the amount column');
+  const lone = (await reportFromFiles([{name: 'sdileny-soubor.xlsx', bytes: await xlsx(journalSheets())}], '2026-10-09'))!;
+  assert.equal(lone.notes, null);
+  assert.equal(total(lone, 'payout'), 1070000);
+});
+
+test('OneDrive: a report with the date in its header is the report, not a cash book', async () => {
+  const report = (await reportFromFiles([
+    {name: 'Peněžní deník.xlsx', bytes: await xlsx(journalSheets())},
+    {name: 'Denní report 9.10.2026.xlsx', bytes: await xlsx(reportSheetsDated())},
+  ], '2026-10-09'))!;
+  assert.deepEqual(report.files, ['Peněžní deník.xlsx', 'Denní report 9.10.2026.xlsx']);
+  assert.equal(total(report, 'revenue_section'), 30000000);
+  assert.deepEqual([line(report, 'total', 'discounts')!.amountCents, line(report, 'discount', 'promo-club')!.count], [300000, 2]);
+  assert.equal(total(report, 'payout'), 1070000);
+  assert.deepEqual(report.warnings, []);
+  const briefing = buildBriefing({businessDate: '2026-10-09', config, bills: [], closings: [], planHistory: [], incomplete: false, report});
+  assert.equal(briefing.report!.cashDifferenceCents, 2919900);
+  assert.match(renderBriefing('Testovací podnik', briefing), /\n⚠ Přepočet pokladny nesedí se zůstatkem v deníku: přebývá 29 199 Kč$/);
+  assert.ok(todoList(briefing).some(item => item.text === 'Přepočet pokladny nesedí s deníkem: +29 199 Kč'));
 });
 
 test('OneDrive: share id, picking the day\'s files, report from the downloaded workbooks', async () => {
@@ -144,7 +198,6 @@ test('briefing from the managers\' report: revenue, payments, discounts, cash, n
 });
 
 test('to-do list: missing report first, then warnings by Kč, at most fifteen', async () => {
-  const {todoList} = await import('../src/todo.ts');
   const briefing = buildBriefing({businessDate: '2026-10-09', config, bills: [], closings: [], planHistory: [], incomplete: true, notes: {summary: '', points: [
     {kind: 'problem', text: 'Rozbitý mrazák', amountCents: null}, {kind: 'incident', text: 'Chybí 5 000 Kč v kase', amountCents: 500000},
     ...Array.from({length: 20}, (_, i) => ({kind: 'task' as const, text: `Úkol ${i}`, amountCents: null})),

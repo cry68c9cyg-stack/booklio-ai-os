@@ -24,7 +24,7 @@ export type Briefing = {
   /** Where the revenue comes from: POS bills, the managers' daily report (interim), or nothing yet. */
   source: 'pos' | 'report' | 'none';
   /** Figures only the managers' report has today: cash expenses, cash payouts, safe, discount detail. */
-  report: {expensesCents: number; payoutsCents: number; safeCents: number | null; discounts: {label: string; count: number | null; amountCents: number}[]} | null;
+  report: {expensesCents: number; payoutsCents: number; safeCents: number | null; cashDifferenceCents: number | null; discounts: {label: string; count: number | null; amountCents: number}[]} | null;
   /** "Report dne": points from the analysis, or the raw text while it is not analysed. */
   notes: {points: NotePoint[]; summary: string | null; raw: string | null} | null;
   incomplete: boolean;
@@ -119,7 +119,7 @@ export function buildBriefing(input: {
     bottleCheckMissing: !check && !!input.config.bottleCheck,
     source,
     report: report ? {
-      expensesCents: positive(report, 'expense'), payoutsCents: positive(report, 'payout'), safeCents: line(report, 'balance', 'safe')?.amountCents ?? null,
+      expensesCents: positive(report, 'expense'), payoutsCents: positive(report, 'payout'), safeCents: line(report, 'balance', 'safe')?.amountCents ?? null, cashDifferenceCents: line(report, 'total', 'cash-difference')?.amountCents ?? null,
       discounts: report.lines.filter(entry => entry.kind === 'discount' && entry.amountCents > 0).sort((a, b) => b.amountCents - a.amountCents)
         .map(({label, count, amountCents}) => ({label, count, amountCents})),
     } : null,
@@ -187,6 +187,7 @@ export function renderBottles(briefing: Pick<Briefing, 'bottles' | 'bottleCheckM
   ];
 }
 
+export const CASH_DIFFERENCE_CENTS = 50000;
 const count = (value: number | null) => value === null ? '' : `${value}× `;
 /** Cash the POS does not see yet: expenses and payouts from the cash book, the safe, where discounts went. */
 export function renderReport(briefing: Pick<Briefing, 'report'>): string[] {
@@ -196,6 +197,9 @@ export function renderReport(briefing: Pick<Briefing, 'report'>): string[] {
   if (report.discounts.length) lines.push('Slevy a odpisy: ' + report.discounts.slice(0, 3).map(row => `${row.label} ${count(row.count)}${crowns(row.amountCents)}`).join(', '));
   if (report.expensesCents || report.payoutsCents) lines.push(`Výdaje z kasy ${crowns(report.expensesCents)} · výplaty v hotovosti ${crowns(report.payoutsCents)}`);
   if (report.safeCents !== null && report.safeCents < 0) lines.push(`⚠ Trezor je v deníku záporný: ${crowns(report.safeCents)}`);
+  // Coins and rounding make a few crowns of difference every day; from 500 Kč it is worth a look.
+  if (report.cashDifferenceCents !== null && Math.abs(report.cashDifferenceCents) >= CASH_DIFFERENCE_CENTS)
+    lines.push(`⚠ Přepočet pokladny nesedí se zůstatkem v deníku: ${report.cashDifferenceCents < 0 ? 'chybí' : 'přebývá'} ${crowns(Math.abs(report.cashDifferenceCents))}`);
   return lines;
 }
 

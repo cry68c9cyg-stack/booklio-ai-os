@@ -2,7 +2,7 @@
  * Reads the managers' Excel files from a OneDrive folder shared with a read-only link ("anyone with the link can view").
  * No Microsoft account or app for OKO1: the share link is the only credential, and it can only read.
  */
-import {extractCashBook, extractDailyReport, type DailyReport} from './daily-report.ts';
+import {extractCashBook, extractDailyReport, isJournalBook, type DailyReport} from './daily-report.ts';
 import {readXlsx} from './xlsx.ts';
 
 export type FetchedFile = {name: string; bytes: Uint8Array};
@@ -138,18 +138,19 @@ const plain = (name: string) => name.normalize('NFD').replace(/[\u0300-\u036f]/g
 export async function reportFromFiles(files: FetchedFile[], businessDate: string, warnings: string[] = []): Promise<DailyReport | null> {
   const lines: DailyReport['lines'] = [], notes: string[] = [], used: string[] = [];
   const problems = [...warnings];
+  let bookUsed = false;
   for (const file of files) {
     let sheets;
     try { sheets = await readXlsx(file.bytes); } catch { problems.push(`Soubor ${file.name} není čitelný sešit Excelu.`); continue; }
-    const book = extractCashBook(sheets, businessDate);
     const day = extractDailyReport(sheets);
-    // A cash book holds many days: only its column for the business day counts. Any other workbook is the day's report.
-    const bookUsed = used.some(name => plain(name).includes('denik'));
-    if (book && !bookUsed) { lines.push(...book); used.push(file.name); }
-    const isBook = plain(file.name).includes('denik');
-    if (files.length === 1 || (!book && !isBook)) {
-      const revenue = day.lines.some(entry => entry.kind === 'revenue_section');
-      if (revenue || day.notes.length) { lines.push(...day.lines.filter(entry => !book || entry.kind !== 'unmapped')); notes.push(...day.notes); if (!used.includes(file.name)) used.push(file.name); }
+    const revenue = day.lines.some(entry => entry.kind === 'revenue_section');
+    // A cash book holds many days: only the business day counts. A workbook with revenue by section is the day's report,
+    // even when its header carries the date (that alone does not make it a cash book).
+    const isBook = plain(file.name).includes('denik') || isJournalBook(sheets) || (!revenue && !day.notes.length);
+    const book = isBook ? extractCashBook(sheets, businessDate) : null;
+    if (book?.length && !bookUsed) { lines.push(...book); used.push(file.name); bookUsed = true; }
+    if (!isBook && (revenue || day.notes.length)) {
+      lines.push(...day.lines); notes.push(...day.notes); if (!used.includes(file.name)) used.push(file.name);
     }
   }
   if (!lines.length && !notes.length) return null;

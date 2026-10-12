@@ -120,3 +120,49 @@ export const bookSheets = () => ({
     ['Dolar', null, null, 11000],
   ],
 });
+
+/** Synthetic daily report as the managers really save it: the date in the header row, a bare "SLEVY" block, "CELKEM" at its end. */
+export const reportSheetsDated = () => ({
+  List1: [
+    [null, 'ST', '09.10.2026', 'suma'],
+    [null, null, 'RESTAURACE DEN', 50000],
+    [null, null, 'RESTAURACE NOC', 100000],
+    [null, null, 'CLUB Celkem', 150000],
+    [null, null, 'HOTOVOST', 20000],
+    [null, null, 'KARTY', 280000],
+    [null, null, 'CELKEM podle výjezdů', 300000],
+    [null, null, 'Storno:', 0],
+    [null, null, 'SLEVY'],
+    [null, null, 'Personál', 10, 2000],
+    [null, null, 'Promo Club', 2, 1000],
+    [null, null, 'CELKEM', null, 3000],
+  ],
+});
+
+/** Synthetic cash book as a journal: a block per day from "Počáteční stav" (with the date) to "Zůstatek", cash count beside it. */
+export const journalSheets = () => {
+  const row = (date: number | null, text: string | null, amount: number | null, side: [string, number] | null = null) =>
+    [date, null, text, amount, null, null, null, null, null, null, null, null, side?.[0] ?? null, side?.[1] ?? null];
+  return {
+    List1: [
+      [null, 'Doklad', 'Text', 'Hotovost'],
+      row(46303, 'Počáteční stav', 100000),
+      row(null, 'Dodavatel A', 999),
+      row(null, 'Zůstatek', 99001),
+      row(46304, 'Počáteční stav', 99001),
+      row(null, 'Dodavatel B', 2000),
+      row(null, 'Vklad JD', -50000),
+      row(null, 'Prodej oleje', -1000),
+      row(null, null, 0, ['Euro', 40000]),
+      row(null, 'Tržba Restaurace den', 3000, ['Trezor', 30000]),
+      row(null, 'Security', 6000, ['Hotovost', 100000]),
+      row(null, 'DJ', 4000, ['Celkem', 170000]),
+      row(null, 'DJ oprava světel', 1500),
+      row(null, 'Zkouška barman', 700),
+      row(null, 'Tržba hotovost + karty celkem + ZK', 5000),
+      row(null, 'Zůstatek', 140801),
+      row(46305, 'Počáteční stav', 140801),
+      row(null, 'Dodavatel C', 300),
+    ],
+  };
+};
