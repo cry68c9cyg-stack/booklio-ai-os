@@ -204,3 +204,14 @@ test('login clock: the next code 60 s after the last, at most 5 an hour and 10 a
   assert.equal(seconds(1), 1);
   assert.equal(seconds(-5000), 0);
 });
+
+test('BulkGate: rows from every answer shape', async () => {
+  const {bulkGateRows} = await import('../src/delivery.ts');
+  assert.deepEqual(bulkGateRows({response: [{status: 'accepted', number: 'x'}]}), [{status: 'accepted'}]);
+  assert.deepEqual(bulkGateRows([{status: 'scheduled'}]), [{status: 'scheduled'}]);
+  assert.deepEqual(bulkGateRows({status: 'accepted', sms_id: 'x'}), [{status: 'accepted'}]);
+  assert.deepEqual(bulkGateRows({response: {status: 'sent'}}), [{status: 'sent'}]);
+  assert.deepEqual(bulkGateRows({total: {status: {sent: 0, accepted: 1, scheduled: 0, error: 0}}}), [{status: 'accepted'}]);
+  assert.deepEqual(bulkGateRows({total: {status: {accepted: 0, error: 1}}}), [{status: 'error'}]);
+  assert.deepEqual(bulkGateRows(null), []);
+});
