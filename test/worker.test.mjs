@@ -1,6 +1,8 @@
 // End-to-end test on the real workerd runtime (Miniflare) with synthetic data only.
 import assert from 'node:assert/strict';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdtemp, readdir, readFile, rm} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import vm from 'node:vm';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {build} from 'esbuild';
@@ -9,13 +11,17 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {writeFile} from 'node:fs/promises';
 import {journalSheets, reportSheets, xlsx} from './xlsx-fixture.ts';
+import {addDays, businessDate, localTime} from '../src/time.ts';
 
 const dir = await mkdtemp(join(tmpdir(), 'ai-os-worker-'));
+const webDir = await mkdtemp(join(tmpdir(), 'ai-os-web-'));
 const admin = 'local-test-only-admin-secret-32-characters';
 const token = 'a'.repeat(64);
 let mf;
 try {
-  const bundle = await build({entryPoints: ['src/worker.ts'], bundle: true, write: false, format: 'esm', platform: 'neutral', external: ['node:crypto', 'cloudflare:workers']});
+  // Like wrangler: packages resolve for workerd (the MCP SDK and the OAuth provider).
+  const bundle = await build({entryPoints: ['src/worker.ts'], bundle: true, write: false, format: 'esm', platform: 'neutral',
+    mainFields: ['module', 'main'], conditions: ['workerd', 'worker', 'browser'], external: ['node:crypto', 'cloudflare:workers']});
   const options = {
     modules: true, script: bundle.outputFiles[0].text, compatibilityDate: '2026-08-06', compatibilityFlags: ['nodejs_compat'],
     durableObjects: {TENANTS: {className: 'TenantObject', useSQLite: true}, REGISTRY: {className: 'Registry', useSQLite: true}},
@@ -289,6 +295,248 @@ try {
   // Admin can end every session; a change of the allowed phones ends them too.
   assert.deepEqual(await (await call('POST', '/admin/t/excel-venue/logout', {})).json(), {ended: 0});
 
+  // Web James Dean read live (docs/web-v1.md): the MCP server behind OAuth, the dashboard card, nothing from the web stored.
+  await mf.dispose();
+  const webToken = 'e'.repeat(64);
+  const guestName = 'Zuzana <b>Testovaci</b> Hostova', guestPhone = '+420777000111', guestNote = '<img src=x onerror=alert(1)>';
+  const prague = at => localTime(at, 'Europe/Prague');
+  const today = businessDate(new Date(), 'Europe/Prague', 6), calendar = prague(new Date()).date;
+  const webBooking = (id, extra) => ({_klic: String(id), id, kod: `JD-AAA${id}`, stav: 'potvrzena', zdroj: 'web', osoby: 2, prostor: 'diner', datum: today, cas: '19:00',
+    zacatek: `${today}T17:00:00.000Z`, jmeno: 'Petr Synteticky', kontakt_typ: 'email', kontakt: 'petr@example.com', poznamka: null, prichod: null, ...extra});
+  const web = {down: false, requests: [], tables: {
+    rezervace: [webBooking(1, {osoby: 4, jmeno: guestName, kontakt_typ: 'tel', kontakt: guestPhone, poznamka: guestNote}), webBooking(2, {stav: 'nova', prostor: 'klub', cas: '22:00', zacatek: `${today}T20:00:00.000Z`}),
+      webBooking(3, {stav: 'zrusena_hostem'}), webBooking(4, {stav: 'nova', datum: addDays(today, 3)})],
+    rezervace_stoly: [{_klic: '1|p4', rezervace_id: 1, stul: 'p4'}, {_klic: '1|p5', rezervace_id: 1, stul: 'p5'}, {_klic: '2|kA', rezervace_id: 2, stul: 'kA'}],
+    hoste: [{_klic: '10', id: 10, jmeno: guestName, kontakt: guestPhone, kontakt_typ: 'tel', pocet_rezervaci: 5}],
+    hoste_pozvanky: [], cerna_listina_vyrazeni: [],
+    nedorazeni: [1, 2, 3].map(i => ({_klic: String(i), id: i, rezervace_id: 100 + i, kontakt_typ: 'tel', kontakt: guestPhone, jmeno: guestName, datum: '2026-09-0' + i})),
+    zpravy: [{_klic: '50', id: 50, rezervace_id: 1, kanal: 'sms', druh: 'potvrzeni', vysledek: 'odeslano', vytvoreno: '2026-10-01T10:00:00.000Z'}],
+    recenze: [{_klic: '7', id: 7, stav: 'nova', zdroj: 'google', hvezdicky: 2, autor: 'Recenzent <i>X</i>', text: 'Pomalá obsluha', datum: today},
+      {_klic: '8', id: 8, stav: 'odeslano', zdroj: 'tripadvisor', hvezdicky: 5, autor: 'Spokojený', text: 'Super', datum: today}],
+    objednavky_karet: [{_klic: '20', id: 20, kod: 'JD-K-AB12', stav: 'zaplacena', jmeno: 'Karta Kupujici', polozky: '[{"druh":"voucher","hodnota":1000,"kusy":2}]', celkem_kc: 2000, vytvoreno: `${today}T09:00:00.000Z`}],
+    platby: [], blokace: [], blokace_stoly: [], akce: [], akce_kanaly: [], akce_fotky: [], pozvanky: [], pozvanky_rozeslani: [], skeny_qr: [],
+  }};
+  const dateColumn = {rezervace: 'datum', nedorazeni: 'datum', zpravy: 'vytvoreno', recenze: 'datum', objednavky_karet: 'vytvoreno', platby: 'vytvoreno', blokace: 'od', akce: 'datum', pozvanky: 'vytvoreno', skeny_qr: 'cas'};
+  const filters = {rezervace: ['id', 'kod', 'kontakt', 'stav', 'zdroj', 'prostor'], rezervace_stoly: ['rezervace_id', 'stul'], hoste: ['id', 'kontakt'], hoste_pozvanky: ['kontakt'],
+    nedorazeni: ['kontakt', 'rezervace_id'], cerna_listina_vyrazeni: ['kontakt'], zpravy: ['rezervace_id'], recenze: ['stav', 'zdroj'], objednavky_karet: ['id', 'kod', 'stav'], platby: ['rezervace_id', 'stav']};
+  /** The web's read-only API with synthetic data: Bearer token, pages of two rows, od/do and rovno like the real one. */
+  const fakeWeb = url => {
+    if (url.pathname === '/api/oko1/v1/tabulky') return Response.json({tabulky: Object.keys(web.tables).map(nazev => ({nazev, klic: ['id'], datum: dateColumn[nazev] ?? null, filtry: filters[nazev] ?? []}))});
+    const table = url.pathname.match(/^\/api\/oko1\/v1\/tabulka\/([a-z_]+)$/)?.[1];
+    if (table) {
+      if (!web.tables[table]) return Response.json({chyba: 'Tabulka není k dispozici.'}, {status: 404});
+      let rows = web.tables[table].map((row, i) => ({row, rowid: i + 1}));
+      const [from, to] = [url.searchParams.get('od'), url.searchParams.get('do')];
+      if ((from || to) && !dateColumn[table]) return Response.json({chyba: 'Tabulka se nedá zúžit podle dne.'}, {status: 422});
+      if (from) rows = rows.filter(({row}) => String(row[dateColumn[table]]).slice(0, 10) >= from);
+      if (to) rows = rows.filter(({row}) => String(row[dateColumn[table]]).slice(0, 10) <= to);
+      for (const equal of url.searchParams.getAll('rovno')) {
+        const [column, ...rest] = equal.split(':');
+        if (!filters[table]?.includes(column)) return Response.json({chyba: `Podle sloupce „${column}“ tabulka ${table} filtrovat nejde.`}, {status: 422});
+        rows = rows.filter(({row}) => String(row[column]) === rest.join(':'));
+      }
+      const after = Number(url.searchParams.get('po') ?? 0), size = Math.min(2, Number(url.searchParams.get('limit') ?? 1000));
+      const page = rows.filter(entry => entry.rowid > after).slice(0, size);
+      return Response.json({nazev: table, radky: page.map(entry => entry.row), dalsi: page.length === size ? page.at(-1).rowid : null});
+    }
+    if (url.pathname === '/api/oko1/v1/navstevnost') return Response.json({statistiky: {dnes: calendar, od: url.searchParams.get('od'), prvniDen: '2026-10-05', prvniSken: null,
+      dny: [{den: addDays(calendar, -1), navstevy: 30, sAkci: 5, skenyHodnoceni: 0}, {den: calendar, navstevy: 42, sAkci: 7, skenyHodnoceni: 1}]}, online: {celkem: 2, minut: 5, stranky: [], zarizeni: [], jazyky: []}});
+    if (url.pathname === '/api/oko1/v1/prehled') return Response.json({potvrzovani: {automaticke: false, zmeneno: null}, dobaDrzeniMin: 120, kapacitaWebu: null, asistenti: null, kopieNaEmail: false, kredity: null, cekajici: 2});
+    return Response.json({chyba: 'Nenalezeno.'}, {status: 404});
+  };
+  const texts = [];
+  const webOptions = {...options, durableObjectsPersist: join(webDir, 'do'), kvNamespaces: ['OAUTH_KV'], kvPersist: join(webDir, 'kv'), r2Buckets: ['ARCHIVE'], r2Persist: join(webDir, 'r2'),
+    bindings: {...options.bindings, WEB_TOKEN_JAMES_DEAN: webToken, TWILIO_ACCOUNT_SID: 'AC-test', TWILIO_AUTH_TOKEN: 'test-only-token', TWILIO_FROM: '+420700000000'},
+    outboundService: async request => {
+      const url = new URL(request.url);
+      if (url.hostname === 'jamesdean.cz') {
+        web.requests.push({path: url.pathname + url.search, auth: request.headers.get('authorization'), method: request.method});
+        if (web.down) return new Response('down', {status: 503});
+        if (request.headers.get('authorization') !== 'Bearer ' + webToken) return Response.json({chyba: 'Neplatný token.'}, {status: 401});
+        return fakeWeb(url);
+      }
+      if (url.hostname === 'api.twilio.com') { texts.push(new URLSearchParams(await request.text()).get('Body')); return new Response('{}', {status: 201}); }
+      return new Response('unexpected', {status: 599});
+    },
+  };
+  mf = new Miniflare(webOptions);
+  const jdConfig = {...config, name: 'James Dean', registers: [], recipients: ['+420600000009'], web: {url: 'https://jamesdean.cz'}};
+  assert.equal((await call('PUT', '/admin/t/james-dean/config', {...jdConfig, web: {url: 'https://evil.example'}})).status, 400);
+  assert.equal((await call('PUT', '/admin/t/james-dean/config', jdConfig)).status, 200);
+  await call('POST', '/admin/t/james-dean/pair', {installationId: 'pos-installation-1', token});
+  assert.equal((await ingest('batch-web-1', [bill('w1', 1, 80000, today)], 'Bearer ' + token, 'james-dean')).status, 200);
+  const local = (path, init = {}) => mf.dispatchFetch('http://localhost' + path, init);
+
+  // Without an OAuth token the MCP server answers 401 and points to its metadata.
+  const rpc = (id, method, params = {}) => JSON.stringify({jsonrpc: '2.0', id, method, params});
+  const mcpHeaders = {'content-type': 'application/json', accept: 'application/json, text/event-stream'};
+  const anonymous = await local('/mcp', {method: 'POST', headers: mcpHeaders, body: rpc(1, 'tools/list')});
+  assert.equal(anonymous.status, 401);
+  assert.match(anonymous.headers.get('www-authenticate'), /resource_metadata="http:\/\/localhost\/\.well-known\/oauth-protected-resource\/mcp"/);
+  assert.equal((await local('/mcp', {method: 'POST', headers: {...mcpHeaders, authorization: 'Bearer x:y:z'}, body: rpc(1, 'tools/list')})).status, 401);
+  assert.equal((await (await local('/.well-known/oauth-protected-resource/mcp')).json()).resource, 'http://localhost/mcp');
+  assert.equal(web.requests.length, 0);
+
+  // Connecting Claude: client registration, venue + phone, the SMS code, then the code exchange with PKCE.
+  const registered = await (await local('/oauth/register', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({
+    redirect_uris: ['http://localhost:7777/callback'], client_name: 'Claude <test>', token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'], response_types: ['code']})})).json();
+  const verifier = 'synthetic-pkce-verifier-'.padEnd(64, 'x');
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
+  const authorizeUrl = '/oauth/authorize?' + new URLSearchParams({response_type: 'code', client_id: registered.client_id, redirect_uri: 'http://localhost:7777/callback',
+    code_challenge: challenge, code_challenge_method: 'S256', state: 'state-123', resource: 'http://localhost/mcp'});
+  const formPost = (fields, origin = 'http://localhost') => local(authorizeUrl, {method: 'POST', redirect: 'manual',
+    headers: {'content-type': 'application/x-www-form-urlencoded', origin}, body: new URLSearchParams(fields).toString()});
+  const consent = await local(authorizeUrl);
+  assert.equal(consent.status, 200);
+  assert.match(consent.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  const consentPage = await consent.text();
+  assert.ok(consentPage.includes('Claude &lt;test&gt;') && !consentPage.includes('Claude <test>'), 'the client name is escaped');
+  assert.equal((await local('/oauth/authorize?client_id=nobody&response_type=code')).status, 400);
+  assert.equal((await formPost({krok: 'kod', provozovna: 'james-dean', telefon: '600000009'}, 'https://evil.example')).status, 403);
+  assert.equal(texts.length, 0);
+  // Another number or an unknown venue gets the same page and nothing is sent.
+  assert.match(await (await formPost({krok: 'kod', provozovna: 'no-such-venue', telefon: '600000009'})).text(), /Kód z SMS/);
+  assert.match(await (await formPost({krok: 'kod', provozovna: 'james-dean', telefon: '600000123'})).text(), /Kód z SMS/);
+  assert.equal(texts.length, 0);
+  assert.equal((await formPost({krok: 'kod', provozovna: 'james-dean', telefon: '600 000 009'})).status, 200);
+  assert.equal(texts.length, 1);
+  const mcpCode = texts[0].match(/(\d{6})/)[1];
+  assert.equal((await formPost({krok: 'overit', provozovna: 'james-dean', kod: mcpCode === '000000' ? '111111' : '000000'})).status, 401);
+  assert.equal((await formPost({krok: 'overit', provozovna: 'no-such-venue', kod: mcpCode})).status, 401);
+  const approved = await formPost({krok: 'overit', provozovna: 'james-dean', kod: mcpCode});
+  assert.equal(approved.status, 302);
+  const callback = new URL(approved.headers.get('location'));
+  assert.equal(callback.origin + callback.pathname, 'http://localhost:7777/callback');
+  assert.equal(callback.searchParams.get('state'), 'state-123');
+  const tokenResponse = await local('/oauth/token', {method: 'POST', headers: {'content-type': 'application/x-www-form-urlencoded'}, body: new URLSearchParams({
+    grant_type: 'authorization_code', code: callback.searchParams.get('code'), redirect_uri: 'http://localhost:7777/callback', client_id: registered.client_id, code_verifier: verifier}).toString()});
+  assert.equal(tokenResponse.status, 200);
+  const tokens = await tokenResponse.json();
+  const mcp = async (name, args = {}) => {
+    const response = await local('/mcp', {method: 'POST', headers: {...mcpHeaders, authorization: 'Bearer ' + tokens.access_token}, body: rpc(9, 'tools/call', {name, arguments: args})});
+    assert.equal(response.status, 200, name);
+    const {result} = await response.json();
+    return {error: result.isError === true, text: result.content[0].text, data: result.isError ? null : JSON.parse(result.content[0].text)};
+  };
+  const initialized = await (await local('/mcp', {method: 'POST', headers: {...mcpHeaders, authorization: 'Bearer ' + tokens.access_token},
+    body: rpc(1, 'initialize', {protocolVersion: '2025-06-18', capabilities: {}, clientInfo: {name: 'test', version: '1'}})})).json();
+  assert.equal(initialized.result.serverInfo.name, 'oko1');
+  const listed = await (await local('/mcp', {method: 'POST', headers: {...mcpHeaders, authorization: 'Bearer ' + tokens.access_token}, body: rpc(2, 'tools/list')})).json();
+  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['den', 'kontrola_lahvi', 'ranni_prehled', 'report_manazeru', 'trzby_dne', 'trzby_obdobi', 'ucty',
+    'web_blokace_a_akce', 'web_darkove_karty', 'web_host', 'web_navstevnost', 'web_platby_lahvi', 'web_prehled', 'web_recenze', 'web_rezervace', 'web_rezervace_detail', 'web_tabulka']);
+  assert.ok(listed.result.tools.every(entry => entry.annotations.readOnlyHint === true), 'read only');
+
+  // Tools: live data of the web (names, contacts, tables) and the POS data of OKO1, together in "den".
+  const day = await mcp('web_rezervace', {od: today, do: today});
+  assert.equal(day.data.pocet, 3);
+  assert.deepEqual(day.data.rezervace.map(row => [row.id, row.jmeno, row.stoly]), [[1, guestName, ['p4', 'p5']], [2, 'Petr Synteticky', ['kA']], [3, 'Petr Synteticky', []]]);
+  assert.ok(web.requests.every(entry => entry.auth === 'Bearer ' + webToken && entry.method === 'GET'));
+  assert.ok(web.requests.some(entry => entry.path.startsWith('/api/oko1/v1/tabulka/rezervace?po=2&')), 'pages are followed');
+  assert.equal((await mcp('web_rezervace', {od: today, do: today, stav: 'nova', prostor: 'klub'})).data.pocet, 1);
+  const guest = await mcp('web_host', {kontakt: '777 000 111'});
+  assert.equal(guest.data.kontakt, guestPhone);
+  assert.deepEqual(guest.data.cernaListina, {pocetNedorazeni: 3, vyrazenoPriPoctu: null, naListine: true});
+  assert.equal(guest.data.hoste[0].jmeno, guestName);
+  const detail = await mcp('web_rezervace_detail', {kod: 'aaa1'});
+  assert.deepEqual([detail.data.rezervace.kod, detail.data.stoly, detail.data.zpravy.length], ['JD-AAA1', ['p4', 'p5'], 1]);
+  assert.equal((await mcp('web_rezervace_detail', {kod: 'JD-NONE'})).error, true);
+  assert.equal((await mcp('web_prehled')).data.cekajici, 2);
+  assert.equal((await mcp('web_recenze', {stav: 'nova'})).data.recenze[0].autor, 'Recenzent <i>X</i>');
+  assert.deepEqual((await mcp('web_darkove_karty', {od: today, do: today})).data.objednavky[0].polozky, [{druh: 'voucher', hodnota: 1000, kusy: 2}]);
+  assert.equal((await mcp('web_navstevnost')).data.statistiky.dnes, calendar);
+  const refused = await mcp('web_tabulka', {nazev: 'rezervace', rovno: ['jmeno:Zuzana']});
+  assert.equal(refused.error, true);
+  assert.match(refused.text, /^Web teď nejde načíst: HTTP 422 \(Podle sloupce „jmeno“ tabulka rezervace filtrovat nejde\.\)\.$/);
+  assert.equal((await mcp('web_tabulka', {nazev: 'rezervace_stoly', rovno: ['rezervace_id:1']})).data.pocet, 2);
+  assert.equal((await mcp('trzby_dne', {datum: today})).data.revenueCents, 80000);
+  assert.equal((await mcp('trzby_dne', {datum: '12.10.2026'})).error, true);
+  assert.equal((await mcp('trzby_obdobi', {od: addDays(today, -6), do: today})).data.totalCents, 80000);
+  assert.equal((await mcp('ucty', {datum: today})).data.bills[0].id, 'w1');
+  const both = await mcp('den', {datum: today});
+  assert.equal(both.data.pokladna.revenueCents, 80000);
+  assert.equal(both.data.web.pocetRezervaci, 3);
+  assert.equal(both.data.web.navstevnost.den, today);
+
+  // The dashboard card reads the web live; the page escapes every value.
+  const jdBoard = (method, path, body, headers = {}) => mf.dispatchFetch('http://local.test/d/james-dean' + path, {method, headers: {'content-type': 'application/json', ...headers}, body: body === undefined ? undefined : JSON.stringify(body)});
+  assert.equal((await jdBoard('GET', '/web')).status, 401);
+  await jdBoard('POST', '/login', {phone: '+420600000009'});
+  const boardCode = texts.at(-1).match(/(\d{6})/)[1];
+  const jdCookie = {cookie: (await jdBoard('POST', '/verify', {code: boardCode})).headers.get('set-cookie').split(';')[0]};
+  const card = (await (await jdBoard('GET', '/web', undefined, jdCookie)).json()).card;
+  assert.equal(card.name, 'Web James Dean');
+  assert.deepEqual(card.reservations.map(row => [row.cas, row.jmeno, row.stoly, row.stav]), [['19:00', guestName, ['p4', 'p5'], 'potvrzena'], ['22:00', 'Petr Synteticky', ['kA'], 'nova']]);
+  assert.deepEqual([card.otherReservations, card.pending, card.reviewsWaiting, card.visits.today.navstevy, card.visits.yesterday.navstevy], [1, 2, 1, 42, 30]);
+  const pageHtml = await (await jdBoard('GET', '')).text();
+  const pageScript = pageHtml.match(/<script nonce="[a-f0-9]+">([\s\S]*?)<\/script>/)[1];
+  const renderCard = async answers => {
+    const elements = {};
+    const element = id => elements[id] ??= {hidden: false, value: '', textContent: '', innerHTML: '', disabled: false, focus() {}};
+    const fetch = async url => { const body = answers[url.split('?')[0]]; return {ok: true, status: 200, json: async () => body}; };
+    vm.runInNewContext(pageScript, {document: {getElementById: element}, location: {reload() {}}, fetch, console});
+    await new Promise(resolve => setTimeout(resolve, 100));
+    return elements.web.innerHTML;
+  };
+  const boardData = await (await jdBoard('GET', '/data', undefined, jdCookie)).json();
+  const shown = await renderCard({'/d/james-dean/data': boardData, '/d/james-dean/web': {card}});
+  assert.ok(shown.includes('Zuzana &lt;b&gt;Testovaci&lt;/b&gt; Hostova') && !shown.includes('<b>Testovaci</b>'), 'guest names are escaped');
+  assert.ok(shown.includes('&lt;img src=x onerror=alert(1)&gt;') && !shown.includes('<img'), 'notes are escaped');
+  assert.ok(shown.includes('Recenzent &lt;i&gt;X&lt;/i&gt;') && shown.includes('stůl') && shown.includes('4, 5') && shown.includes('klub A'));
+
+  // A web outage is a warning: POS tools keep working, the card says the web cannot be read now.
+  web.down = true;
+  const down = await mcp('web_rezervace', {od: today, do: today});
+  assert.equal(down.error, true);
+  assert.equal(down.text, 'Web teď nejde načíst: HTTP 503.');
+  const downDay = await mcp('den', {datum: today});
+  assert.equal(downDay.data.pokladna.revenueCents, 80000);
+  assert.equal(downDay.data.web.varovani, 'Web teď nejde načíst: HTTP 503.');
+  const downCard = (await (await jdBoard('GET', '/web', undefined, jdCookie)).json()).card;
+  assert.equal(downCard.error, 'Web teď nejde načíst (HTTP 503).');
+  assert.match(await renderCard({'/d/james-dean/data': boardData, '/d/james-dean/web': {card: downCard}}), /Web teď nejde načíst \(HTTP 503\)\./);
+  web.down = false;
+  // Without web.url the web tools say so clearly; the dashboard shows no card.
+  assert.equal((await call('PUT', '/admin/t/james-dean/config', {...jdConfig, web: null})).status, 200);
+  const unplugged = await mcp('web_prehled');
+  assert.equal(unplugged.error, true);
+  assert.match(unplugged.text, /^Web není připojený: provozovna nemá v nastavení adresu webu/);
+  assert.equal((await (await jdBoard('GET', '/web', undefined, jdCookie)).json()).card, null);
+  assert.equal((await mcp('trzby_dne', {datum: today})).data.revenueCents, 80000);
+  assert.equal((await call('PUT', '/admin/t/james-dean/config', jdConfig)).status, 200);
+
+  // The morning briefing and the export to R2 never carry anything from the web.
+  const next = addDays(today, 1);
+  const nine = [5, 6, 7, 8].map(hour => new Date(`${next}T0${hour}:00:00Z`)).find(at => prague(at).hour === 9);
+  const morning = await (await call('POST', '/admin/t/james-dean/tick', {at: nine.toISOString()})).json();
+  assert.equal(morning.decision, 'send-incomplete');
+  assert.ok(!morning.text.includes('Testovaci') && !morning.text.includes('777000111'));
+  const archive = await mf.getR2Bucket('ARCHIVE');
+  let exported = null;
+  for (let i = 0; i < 50 && !exported; i++) { exported = await archive.get(`t/james-dean/export/${today}.json`); if (!exported) await new Promise(resolve => setTimeout(resolve, 50)); }
+  const exportText = await exported.text();
+  assert.ok(exportText.includes('"w1"') && !exportText.includes('Testovaci') && !exportText.includes('777000111') && !exportText.includes('Synteticky'));
+
+  // Logging everybody out ends the MCP connection too: the access token and its refresh stop working.
+  assert.deepEqual(await (await call('POST', '/admin/t/james-dean/logout', {})).json(), {ended: 2});
+  assert.equal((await local('/mcp', {method: 'POST', headers: {...mcpHeaders, authorization: 'Bearer ' + tokens.access_token}, body: rpc(3, 'tools/list')})).status, 401);
+  assert.equal((await local('/oauth/token', {method: 'POST', headers: {'content-type': 'application/x-www-form-urlencoded'}, body: new URLSearchParams({
+    grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: registered.client_id}).toString()})).status, 400);
+
+  // Nothing read from the web is stored anywhere: not in the venue's SQLite, the KV of OAuth or R2.
+  await mf.dispose();
+  const leaked = [], seen = new Set();
+  for (const file of await readdir(webDir, {recursive: true, withFileTypes: true})) {
+    if (!file.isFile()) continue;
+    const bytes = await readFile(join(file.parentPath, file.name));
+    if (['Testovaci', '777000111', 'Synteticky', 'petr@example.com', 'Recenzent', 'Kupujici'].some(text => bytes.includes(text))) leaked.push(file.name);
+    // What OKO1 does keep is found by the same search: the config (owner's phone), the OAuth client and the export.
+    for (const text of ['+420600000009', 'Claude <test>', `t/james-dean/export/${today}.json`]) if (bytes.includes(text)) seen.add(text);
+  }
+  assert.ok(web.requests.length > 20);
+  assert.equal(seen.size, 3, 'the search sees the stored data of the Durable Object, the KV and R2');
+  assert.deepEqual(leaked, [], 'no file of the Durable Objects, KV or R2 contains data from the web');
+  mf = new Miniflare(options);
+
   // The admin script talks to a real HTTP endpoint: config, rkeeper-style CSV import, preview.
   await mf.dispose();
   mf = new Miniflare({...options, port: 0});
@@ -304,4 +552,5 @@ try {
 } finally {
   await mf?.dispose();
   await rm(dir, {recursive: true, force: true});
+  await rm(webDir, {recursive: true, force: true});
 }

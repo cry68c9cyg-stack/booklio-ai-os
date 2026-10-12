@@ -1,24 +1,33 @@
 import {DurableObject} from 'cloudflare:workers';
+import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
 import {buildBriefing, planFrom, renderBriefing} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate} from './schedule.ts';
-import {addDays, isDate} from './time.ts';
+import {addDays, businessDate, isDate} from './time.ts';
 import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-report.ts';
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
-import {InputError, validateBatch, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Reservation, type TenantConfig} from './validate.ts';
+import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Reservation, type TenantConfig} from './validate.ts';
+import {webSite, type WebEnv} from './web-client.ts';
+import {dashboardWeb} from './web-views.ts';
+import {MCP_PATH, oauthOptions, type Venues} from './oauth.ts';
 
-type Env = DeliveryEnv & {
+export type Env = DeliveryEnv & WebEnv & {
   TENANTS: DurableObjectNamespace<TenantObject>; REGISTRY: DurableObjectNamespace<Registry>; ADMIN_SECRET: string; DATA_JURISDICTION?: string;
+  /** Grants and tokens of the MCP server's OAuth (docs/web-v1.md). Optional: without it /mcp is not available. */
+  OAUTH_KV?: KVNamespace;
+  /** Set by the OAuth provider for the authorization page. */
+  OAUTH_PROVIDER?: OAuthHelpers;
   /** R2 bucket in the EU (production): untouched copies of everything received and a daily export. Optional: without it nothing is archived. */
   ARCHIVE?: R2Bucket;
   /** OKO1's own Claude API key for "Report dne". Optional: without it the raw text goes into the briefing. */
   ANTHROPIC_API_KEY?: string;
 };
 type Result = {status: number; body: unknown};
+export type VenueSetup = {name: string; timeZone: string; businessDayCutoffHour: number; web: {url: string} | null; today: string; reportDay: string};
 
 // With DATA_JURISDICTION=eu (production) the venue data is created and stored only in the EU.
 // The local test runtime has no jurisdictions, so tests leave it unset.
@@ -202,6 +211,61 @@ export class TenantObject extends DurableObject<Env> {
     const stored = this.sql.exec<{text: string}>('SELECT text FROM briefings WHERE business_date=?', day).toArray()[0];
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo: todoList(briefing, report?.warnings ?? []),
       briefingText: stored?.text ?? text});
+  }
+
+  /** What the MCP tools and the dashboard need to know about the venue (no recipients or phones). Null = not set up. */
+  setup(): VenueSetup | null {
+    const config = this.config();
+    if (!config) return null;
+    const now = new Date();
+    return {name: config.name, timeZone: config.timeZone, businessDayCutoffHour: config.businessDayCutoffHour, web: config.web,
+      today: businessDate(now, config.timeZone, config.businessDayCutoffHour), reportDay: reportDate(now, config.timeZone, config.businessDayCutoffHour)};
+  }
+
+  /** MCP: revenue and everything the briefing knows about one business day (POS bills, else the managers' report). */
+  posDay(date: string) {
+    const config = this.config();
+    if (!config) return null;
+    const ready = this.ready(config, date);
+    return {businessDate: date, ready, revenueCents: this.dayRevenue(date), briefing: this.briefingFor(config, date, !ready).briefing};
+  }
+
+  /** MCP: revenue per day for a range (POS, else the managers' report, else the imported history). */
+  posRange(from: string, to: string) {
+    const days: {date: string; revenueCents: number | null}[] = [];
+    for (let date = from; date <= to && days.length < 400; date = addDays(date, 1)) days.push({date, revenueCents: this.dayRevenue(date)});
+    const known = days.filter(day => day.revenueCents !== null);
+    return {from, to, days, totalCents: known.reduce((sum, day) => sum + day.revenueCents!, 0), daysWithData: known.length};
+  }
+
+  /** MCP: the morning briefing as stored (sent or kept), or a preview when none is stored for the day. */
+  posBriefing(date: string) {
+    const config = this.config();
+    if (!config) return null;
+    const stored = this.sql.exec<{status: string; incomplete: number; text: string; created_at: string}>('SELECT status, incomplete, text, created_at FROM briefings WHERE business_date=?', date).toArray()[0];
+    if (stored) return {businessDate: date, stored: true, status: stored.status, incomplete: stored.incomplete === 1, text: stored.text, createdAt: stored.created_at};
+    const ready = this.ready(config, date);
+    return {businessDate: date, stored: false, status: null, incomplete: !ready, text: this.briefingFor(config, date, !ready).text, createdAt: null};
+  }
+
+  /** MCP: the managers' daily report of a day and the analysis of "Report dne". */
+  posReport(date: string) {
+    return {businessDate: date, report: this.report(date), notes: this.notes(date)};
+  }
+
+  /** MCP: the morning bottle checks of a day and the losses as the briefing shows them. */
+  posBottles(date: string) {
+    const config = this.config();
+    if (!config) return null;
+    const {briefing} = this.briefingFor(config, date, false);
+    return {businessDate: date, checks: this.day<BottleCheck>('bottle_check', date), summary: briefing.bottles, missing: briefing.bottleCheckMissing,
+      minLossCents: config.bottleCheck?.minLossCents ?? DEFAULT_BOTTLE_LOSS_CENTS};
+  }
+
+  /** MCP: the POS bills of a day (closed and cancelled), oldest first. */
+  posBills(date: string) {
+    const bills = this.day<Bill>('bill', date).sort((a, b) => a.closedAt.localeCompare(b.closedAt));
+    return {businessDate: date, count: bills.length, bills: bills.slice(0, 2000), truncated: bills.length > 2000};
   }
 
   private saveConfig(tenant: string, body: unknown): Result {
@@ -467,6 +531,10 @@ async function dashboard(request: Request, env: Env, tenant: string, action: str
     if (!known || !await stub.validSession(cookie(request))) return json(failure('UNAUTHORIZED', 401));
     return json(await stub.dashboardData(new URL(request.url).searchParams.get('date') ?? undefined));
   }
+  if (action === 'web' && request.method === 'GET') {
+    if (!known || !await stub.validSession(cookie(request))) return json(failure('UNAUTHORIZED', 401));
+    return json(ok({card: await webCard(env, tenant, stub)}));
+  }
   if (request.method !== 'POST' || !['login', 'verify', 'logout'].includes(action ?? '')) return json(failure('NOT_FOUND', 404));
   // Only same-site JSON posts: a form on another site cannot send them.
   if (!(request.headers.get('content-type') ?? '').startsWith('application/json')) return json(failure('UNSUPPORTED_MEDIA_TYPE', 415));
@@ -483,31 +551,42 @@ async function dashboard(request: Request, env: Env, tenant: string, action: str
   return Response.json({ok: true}, {headers: {'cache-control': 'no-store', 'set-cookie': `${SESSION_COOKIE}=${token}; Path=${path}; HttpOnly; Secure; SameSite=Strict; Max-Age=${SESSION_MS / 1000}`}});
 }
 
+/**
+ * The dashboard card "Web {venue}", read live from the website at the moment the page asks (docs/web-v1.md); nothing of
+ * it is stored. Null = the venue has no website; `error` = the web cannot be read right now.
+ */
+async function webCard(env: Env, tenant: string, stub: DurableObjectStub<TenantObject>) {
+  const setup = await stub.setup() as VenueSetup | null;
+  if (!setup?.web) return null;
+  const name = `Web ${setup.name}`;
+  const site = webSite(setup.web, env, tenant);
+  if (!site.ok) return {name, error: site.error};
+  const card = await dashboardWeb(site.value, setup, new Date());
+  return card.ok ? card.value : {name, error: `Web teď nejde načíst (${card.error}).`};
+}
+
 const isResult = (value: unknown): value is Result => !!value && typeof value === 'object' && 'status' in value && 'body' in value && Object.keys(value).length === 2;
 
+const venues = (env: Env): Venues => ({known: tenant => registry(env).has(tenant), stub: tenant => tenantStub(env, tenant)});
+/** Paths of the MCP server and its OAuth (metadata, registration, token, the authorization page). */
+const isOAuthPath = (path: string) => path === MCP_PATH || path.startsWith(`${MCP_PATH}/`) || path.startsWith('/oauth/') || path.startsWith('/.well-known/oauth-');
+/** One OAuth provider per origin (its resource URL must be absolute); null = an origin where OAuth is not possible. */
+const providers = new Map<string, OAuthProvider<Env> | null>();
+
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    const board = url.pathname.match(/^\/d\/([a-z0-9-]{3,64})(?:\/([a-z]+))?$/);
-    if (board) return dashboard(request, env, board[1], board[2]);
-    const match = url.pathname.match(/^\/(v1|admin)\/t\/([a-z0-9-]{3,64})\/([a-z]+)$/);
-    const route = match ? `${match[1]}/${match[3]}` : '';
-    if (!match || !routes[route]) return json(failure('NOT_FOUND', 404));
-    if (!routes[route].includes(request.method)) return json(failure('METHOD_NOT_ALLOWED', 405));
-    const authorization = request.headers.get('authorization') || '';
-    if (match[1] === 'admin' && !(typeof env.ADMIN_SECRET === 'string' && env.ADMIN_SECRET.length >= 32 && same(authorization, 'Bearer ' + env.ADMIN_SECRET))) {
-      return json(failure('UNAUTHORIZED', 401));
+    if (!isOAuthPath(url.pathname)) return app(request, env);
+    if (!env.OAUTH_KV) return json(failure('MCP_NOT_CONFIGURED', 503));
+    let provider = providers.get(url.origin);
+    if (provider === undefined) {
+      try { provider = new OAuthProvider(oauthOptions(url.origin, app, venues)); } catch (error) {
+        console.error('oauth not possible for', url.origin, error instanceof Error ? error.message : 'Error');
+        provider = null;
+      }
+      providers.set(url.origin, provider);
     }
-    const token = match[1] === 'v1' && /^Bearer [a-f0-9]{64}$/.test(authorization) ? authorization.slice(7) : null;
-    if (match[1] === 'v1' && !token) return json(failure('UNAUTHORIZED', 401));
-    let body: unknown = null;
-    if (request.method !== 'GET') {
-      body = await readBody(request, route === 'v1/ingest' ? 1048576 : 262144);
-      if (isResult(body)) return json(body);
-    }
-    const tenant = match[2];
-    const stub = tenantStub(env, tenant);
-    return json(await stub.handle(tenant, route, request.method, body, token, Object.fromEntries(url.searchParams)));
+    return provider ? provider.fetch(request, env, ctx) : json(failure('NOT_FOUND', 404));
   },
 
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -515,3 +594,28 @@ export default {
     for (const tenant of tenants) ctx.waitUntil(tenantStub(env, tenant).tick(new Date(event.scheduledTime), tenant));
   },
 };
+
+/** Everything but the MCP server: ingest, admin API and the dashboard. */
+async function app(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const board = url.pathname.match(/^\/d\/([a-z0-9-]{3,64})(?:\/([a-z]+))?$/);
+  if (board) return dashboard(request, env, board[1], board[2]);
+  const match = url.pathname.match(/^\/(v1|admin)\/t\/([a-z0-9-]{3,64})\/([a-z]+)$/);
+  const route = match ? `${match[1]}/${match[3]}` : '';
+  if (!match || !routes[route]) return json(failure('NOT_FOUND', 404));
+  if (!routes[route].includes(request.method)) return json(failure('METHOD_NOT_ALLOWED', 405));
+  const authorization = request.headers.get('authorization') || '';
+  if (match[1] === 'admin' && !(typeof env.ADMIN_SECRET === 'string' && env.ADMIN_SECRET.length >= 32 && same(authorization, 'Bearer ' + env.ADMIN_SECRET))) {
+    return json(failure('UNAUTHORIZED', 401));
+  }
+  const token = match[1] === 'v1' && /^Bearer [a-f0-9]{64}$/.test(authorization) ? authorization.slice(7) : null;
+  if (match[1] === 'v1' && !token) return json(failure('UNAUTHORIZED', 401));
+  let body: unknown = null;
+  if (request.method !== 'GET') {
+    body = await readBody(request, route === 'v1/ingest' ? 1048576 : 262144);
+    if (isResult(body)) return json(body);
+  }
+  const tenant = match[2];
+  const stub = tenantStub(env, tenant);
+  return json(await stub.handle(tenant, route, request.method, body, token, Object.fromEntries(url.searchParams)));
+}
