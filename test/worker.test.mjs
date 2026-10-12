@@ -116,6 +116,12 @@ try {
   assert.equal((await ingest('batch-0003p', [{...reviewDay, text: 'Super'}])).status, 400, 'no text');
   assert.equal((await ingest('batch-0003q', [{...reviewDay, sources: [{...reviewDay.sources[0], stars: [1, 2, 3, 4]}]}])).status, 400, 'five star counts');
   assert.equal((await ingest('batch-0003r', [reviewDay])).status, 200);
+  // Outlook, no-shows and the web funnel come from SQL sums over the stored bookings and traffic.
+  await ingest('batch-0003s', [booking('r10', 1, '2026-10-01', 'diner', 5, 'confirmed', null)]);
+  const outlookDay = (await (await call('GET', '/admin/t/test-venue/briefing?date=2026-10-14')).json()).briefing;
+  assert.deepEqual([outlookDay.outlook.usualGuests, outlookDay.noShows], [6, null], 'Thursdays 8. 10. (4 + 2 guests) and 1. 10. (5 guests)');
+  const sunday = (await (await call('GET', '/admin/t/test-venue/briefing?date=2026-10-11')).json()).briefing;
+  assert.deepEqual([sunday.week.current.guests, sunday.week.current.noShowGuests, sunday.week.current.webSent, sunday.week.current.webConfirmed], [19, 2, 4, 6]);
   // Who sends and when (admin): installations, last batches and types, never the records themselves.
   const status = await (await call('GET', '/admin/t/test-venue/ingest')).json();
   assert.deepEqual(status.installations.map(row => row.installationId), ['pos-installation-1']);
@@ -351,6 +357,11 @@ try {
   assert.deepEqual([data.week.from, data.week.to, data.week.current.revenueCents, data.week.current.revenueDays], ['2026-10-03', '2026-10-09', 39000000, 1]);
   assert.ok(Array.isArray(data.sources.senders) && Array.isArray(data.sources.types));
   assert.equal(data.sources.report.found, true);
+  // The month so far: one day of the synthetic report, its sections, and the cash book's payouts and expenses.
+  assert.deepEqual([data.month.month, data.month.through, data.month.complete, data.month.current.revenueCents, data.month.current.revenueDays], ['2026-10', '2026-10-09', false, 39000000, 1]);
+  assert.equal(data.month.current.bySection.reduce((sum, row) => sum + row.revenueCents, 0), 39000000);
+  assert.deepEqual([data.month.payoutsCents, data.month.expensesCents], [data.briefing.report.payoutsCents, data.briefing.report.expensesCents]);
+  assert.deepEqual([data.month.previous.month, data.month.previous.through, data.month.previous.revenueDays], ['2026-09', '2026-09-09', 0]);
   // "Vyřízeno": kept per day and item, only with a session, undone by the same switch.
   assert.ok(data.todo.every(item => /^[a-f0-9]{24}$/.test(item.key) && item.done === false));
   const first = data.todo[0];

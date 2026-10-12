@@ -1,7 +1,7 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
-import {buildBriefing, planFrom, renderBriefing, type Week, type WeekPart} from './briefing.ts';
+import {buildBriefing, planFrom, renderBriefing, type DiscountHistory, type Month, type MonthPart, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
@@ -272,7 +272,7 @@ export class TenantObject extends DurableObject<Env> {
       // "… a další 3" is not an item of its own: no switch.
       .map(item => item.text.startsWith('… a další') ? {...item, key: null, done: false} : {...item, key: todoKey(item.text), done: done.has(todoKey(item.text))});
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
-      week: briefing.week ?? this.week(day), sources: this.sources(config)});
+      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), sources: this.sources(config)});
   }
 
   /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
@@ -540,16 +540,18 @@ export class TenantObject extends DurableObject<Env> {
 
   /** One stretch of days for the weekly summary: revenue, confirmed bookings, website visits, new reviews. */
   private weekPart(from: string, to: string): WeekPart {
-    const part: WeekPart = {revenueCents: 0, revenueDays: 0, reservations: 0, guests: 0, noShows: 0, visits: null, visitDays: 0, reviews: 0, starsTenths: null};
+    const part: WeekPart = {revenueCents: 0, revenueDays: 0, reservations: 0, guests: 0, noShows: 0, noShowGuests: 0, visits: null, visitDays: 0, webSent: 0, webConfirmed: 0, reviews: 0, starsTenths: null};
     let rated = 0, starSum = 0;
     for (let date = from; date <= to; date = addDays(date, 1)) {
       const revenue = this.dayRevenue(date);
       if (revenue !== null) { part.revenueCents += revenue; part.revenueDays++; }
       for (const row of this.day<Reservation>('reservation', date).filter(row => row.status === 'confirmed')) {
-        part.reservations++; part.guests += row.partySize; if (row.arrival === 'no_show') part.noShows++;
+        part.reservations++; part.guests += row.partySize;
+        if (row.arrival === 'no_show') { part.noShows++; part.noShowGuests += row.partySize; }
+        if (row.source === 'web') part.webConfirmed++;
       }
       const web = this.day<WebTraffic>('web_traffic', date)[0];
-      if (web) { part.visits = (part.visits ?? 0) + web.visits; part.visitDays++; }
+      if (web) { part.visits = (part.visits ?? 0) + web.visits; part.visitDays++; part.webSent += web.actions['rezervace-odeslana'] ?? 0; }
       for (const source of this.day<ReviewSummary>('review_summary', date)[0]?.sources ?? []) {
         source.stars.forEach((count, i) => { rated += count; starSum += count * (i + 1); });
         part.reviews += source.stars.reduce((sum, count) => sum + count, 0) + source.unrated;
@@ -557,6 +559,98 @@ export class TenantObject extends DurableObject<Env> {
     }
     part.starsTenths = rated ? Math.round(starSum / rated * 10) : null;
     return part;
+  }
+
+  /** Revenue of a stretch of days, and by section when every day with revenue has its sections (POS bills or the managers' report). */
+  private monthPart(config: TenantConfig, from: string, to: string): MonthPart {
+    const part: MonthPart = {revenueCents: 0, revenueDays: 0, bySection: null};
+    const sections = new Map<string, number>();
+    let split = true;
+    for (let date = from; date <= to; date = addDays(date, 1)) {
+      const revenue = this.dayRevenue(date);
+      if (revenue === null) continue;
+      part.revenueCents += revenue; part.revenueDays++;
+      const bills = this.day<Bill>('bill', date).filter(bill => bill.status === 'closed');
+      const rows = bills.length ? bills.map(bill => ({key: bill.section, amountCents: bill.totalCents}))
+        : this.sql.exec<{key: string; amount_cents: number}>("SELECT key, amount_cents FROM report_lines WHERE business_date=? AND kind='revenue_section'", date).toArray()
+          .map(row => ({key: row.key, amountCents: row.amount_cents}));
+      // A day known only from the imported history has its total but no sections.
+      if (!rows.length) split = false;
+      for (const row of rows) sections.set(row.key, (sections.get(row.key) ?? 0) + row.amountCents);
+    }
+    const order = Object.keys(config.sections);
+    if (split && sections.size) part.bySection = [...sections].map(([section, revenueCents]) => ({section, label: config.sections[section] ?? section, revenueCents}))
+      .sort((a, b) => (order.indexOf(a.section) + 1 || 99) - (order.indexOf(b.section) + 1 || 99) || a.section.localeCompare(b.section));
+    return part;
+  }
+
+  /**
+   * Cash payouts or cash expenses summed by their label over a stretch of days, largest first. The cash book numbers
+   * a label repeated on one day (`security`, `security-2`), so the label, not the key, is what adds up.
+   */
+  private reportSums(kind: 'payout' | 'expense', from: string, to: string): {label: string; amountCents: number}[] {
+    return this.sql.exec<{label: string; total: number}>(`SELECT max(label) AS label, SUM(amount_cents) AS total FROM report_lines
+      WHERE kind=? AND business_date BETWEEN ? AND ? AND amount_cents > 0 GROUP BY lower(label) ORDER BY total DESC, lower(label)`, kind, from, to).toArray()
+      .map(row => ({label: row.label, amountCents: row.total}));
+  }
+
+  /** Discounts over a stretch of days: by type, and the total as each day's report states it ("Slevy a odpisy celkem", else its lines). */
+  private discountSums(from: string, to: string): {rows: {label: string; amountCents: number}[]; totalCents: number} {
+    const rows = this.sql.exec<{label: string; total: number}>(`SELECT max(label) AS label, SUM(amount_cents) AS total FROM report_lines
+      WHERE kind='discount' AND business_date BETWEEN ? AND ? AND amount_cents > 0 GROUP BY key ORDER BY total DESC, key`, from, to).toArray()
+      .map(row => ({label: row.label, amountCents: row.total}));
+    const totalCents = this.sql.exec<{total: number | null}>(`SELECT SUM(day_total) AS total FROM (SELECT coalesce(
+        max(CASE WHEN kind='total' AND key='discounts' THEN amount_cents END), SUM(CASE WHEN kind='discount' AND amount_cents > 0 THEN amount_cents ELSE 0 END)) AS day_total
+      FROM report_lines WHERE business_date BETWEEN ? AND ? AND (kind='discount' OR (kind='total' AND key='discounts')) GROUP BY business_date)`, from, to).toArray()[0]?.total ?? 0;
+    return {rows, totalCents};
+  }
+
+  /** The month up to the reported day against the same days of the month before; complete on the month's last day. */
+  private month(config: TenantConfig, date: string): Month {
+    const from = date.slice(0, 7) + '-01', previousLast = addDays(from, -1), previousMonth = previousLast.slice(0, 7);
+    const complete = addDays(date, 1).endsWith('-01');
+    // The whole month on its last day is compared with the whole month before, otherwise the same days of it.
+    const previousThrough = complete || `${previousMonth}-${date.slice(8)}` > previousLast ? previousLast : `${previousMonth}-${date.slice(8)}`;
+    const sum = (rows: {amountCents: number}[]) => rows.reduce((total, row) => total + row.amountCents, 0);
+    const payouts = this.reportSums('payout', from, date), expenses = this.reportSums('expense', from, date), discounts = this.discountSums(from, date);
+    return {month: date.slice(0, 7), through: date, complete,
+      current: this.monthPart(config, from, date), previous: {...this.monthPart(config, previousMonth + '-01', previousThrough), month: previousMonth, through: previousThrough},
+      payouts, payoutsCents: sum(payouts), expenses, expensesCents: sum(expenses), discounts: discounts.rows, discountsCents: discounts.totalCents};
+  }
+
+  /** Discounts by type on the same weekday of the 4 weeks before, counting only days whose managers' report has the discount block. */
+  private discountHistory(date: string): DiscountHistory {
+    const history: DiscountHistory = {days: 0, totals: {}};
+    for (const back of [7, 14, 21, 28]) {
+      const day = addDays(date, -back);
+      // A report whose discount block is missing says nothing about the usual discounts.
+      if (!this.hasReport(day) || !this.sql.exec("SELECT 1 FROM report_lines WHERE business_date=? AND (kind='discount' OR (kind='total' AND key='discounts')) LIMIT 1", day).toArray().length) continue;
+      history.days++;
+      for (const row of this.sql.exec<{key: string; total: number}>("SELECT key, SUM(amount_cents) AS total FROM report_lines WHERE business_date=? AND kind='discount' AND amount_cents > 0 GROUP BY key", day).toArray())
+        history.totals[row.key] = (history.totals[row.key] ?? 0) + row.total;
+    }
+    return history;
+  }
+
+  /** The starting day's weekday over the 4 weeks before: revenue for the plan, confirmed guests on days that had bookings. */
+  private outlookHistory(today: string) {
+    const back = [7, 14, 21, 28].map(days => addDays(today, -days));
+    return {
+      todayPlanHistory: back.map(day => this.dayRevenue(day)).filter((value): value is number => value !== null).map(revenueCents => ({revenueCents})),
+      // Sums in SQL: nothing of the guests is read for a count.
+      todayGuestHistory: back.map(day => this.sql.exec<{rows: number; guests: number | null}>(`SELECT count(*) AS rows,
+          SUM(CASE WHEN json_extract(json, '$.status') = 'confirmed' THEN json_extract(json, '$.partySize') ELSE 0 END) AS guests
+        FROM records WHERE type='reservation' AND business_date=?`, day).toArray()[0]).filter(row => row && row.rows > 0).map(row => row.guests ?? 0),
+    };
+  }
+
+  /** Confirmed and no-show guests over the 28 days before the reported day (one query, no guest details read). */
+  private noShowHistory(date: string) {
+    const row = this.sql.exec<{confirmed: number | null; noShow: number | null}>(`SELECT
+        SUM(json_extract(json, '$.partySize')) AS confirmed,
+        SUM(CASE WHEN json_extract(json, '$.arrival') = 'no_show' THEN json_extract(json, '$.partySize') ELSE 0 END) AS noShow
+      FROM records WHERE type='reservation' AND business_date BETWEEN ? AND ? AND json_extract(json, '$.status') = 'confirmed'`, addDays(date, -28), addDays(date, -1)).toArray()[0];
+    return {confirmedGuests: row?.confirmed ?? 0, noShowGuests: row?.noShow ?? 0};
   }
 
   /** The 7 days up to the reported day against the 7 days before them. */
@@ -597,6 +691,9 @@ export class TenantObject extends DurableObject<Env> {
       web: this.day<WebTraffic>('web_traffic', date)[0], webLastWeek: this.day<WebTraffic>('web_traffic', addDays(date, -7))[0],
       reviews: this.day<ReviewSummary>('review_summary', date)[0],
       week: weekday(date) === 0 ? this.week(date) : null, silent: this.silentSources(config, date, now),
+      month: weekday(date) === 0 || addDays(date, 1).endsWith('-01') ? this.month(config, date) : null,
+      lastWeekRevenueCents: this.dayRevenue(addDays(date, -7)), discountHistory: this.discountHistory(date),
+      ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};
   }

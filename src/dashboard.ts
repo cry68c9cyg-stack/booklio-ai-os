@@ -157,11 +157,32 @@ function weekCard(w) {
   const dayWord = d => d + ' ' + (d === 1 ? 'den' : d >= 2 && d <= 4 ? 'dny' : 'dní');
   rows.push('<tr><td>Tržba' + (n.revenueDays < 7 ? ' <span class="muted">(' + dayWord(n.revenueDays) + ' s daty)</span>' : '') + '</td><td class="n">' + kc(n.revenueDays ? n.revenueCents : null) + (p.revenueDays === n.revenueDays ? vs(n.revenueCents, p.revenueCents) : '') + '</td><td class="n muted">' + kc(p.revenueDays ? p.revenueCents : null) + '</td></tr>');
   rows.push('<tr><td>Rezervace (hosté)</td><td class="n">' + n.reservations + ' (' + n.guests + ')' + vs(n.guests, p.guests) + '</td><td class="n muted">' + p.reservations + ' (' + p.guests + ')</td></tr>');
-  rows.push('<tr><td>Nedorazilo</td><td class="n' + (n.noShows ? ' warn' : '') + '">' + n.noShows + '</td><td class="n muted">' + p.noShows + '</td></tr>');
+  const ns = x => x.noShowGuests + ' ' + (x.guests ? '(' + Math.round(x.noShowGuests / x.guests * 100) + ' %)' : '');
+  rows.push('<tr><td>Nedorazilo hostů</td><td class="n' + (n.noShowGuests ? ' warn' : '') + '">' + ns(n) + '</td><td class="n muted">' + ns(p) + '</td></tr>');
   rows.push('<tr><td>Návštěvy webu</td><td class="n">' + (n.visits === null ? '–' : num(n.visits) + (p.visits !== null && p.visitDays === n.visitDays ? vs(n.visits, p.visits) : '')) + '</td><td class="n muted">' + (p.visits === null ? '–' : num(p.visits)) + '</td></tr>');
   const stars = t => t === null ? '' : ', ' + (t / 10).toFixed(1).replace('.', ',') + ' ★';
+  rows.push('<tr><td>Web: odeslané formuláře → potvrzené rezervace z webu</td><td class="n">' + n.webSent + ' → ' + n.webConfirmed + '</td><td class="n muted">' + p.webSent + ' → ' + p.webConfirmed + '</td></tr>');
   rows.push('<tr><td>Nové recenze</td><td class="n">' + n.reviews + stars(n.starsTenths) + '</td><td class="n muted">' + p.reviews + stars(p.starsTenths) + '</td></tr>');
   return '<div class="card"><h2>Týden ' + short(w.from) + '–' + short(w.to) + '</h2><table><tr><th></th><th class="n">7 dní</th><th class="n">7 dní předtím</th></tr>' + rows.join('') + '</table></div>';
+}
+
+// The month up to the shown day against the same days of the month before, and the cash the cash book paid out.
+const monthNames = ['leden', 'únor', 'březen', 'duben', 'květen', 'červen', 'červenec', 'srpen', 'září', 'říjen', 'listopad', 'prosinec'];
+function monthCard(m) {
+  if (!m || !m.current.revenueDays) return '';
+  const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.';
+  const name = mo => monthNames[Number(mo.slice(5, 7)) - 1];
+  const n = m.current, p = m.previous, rows = [];
+  const dayWord = d => d + ' ' + (d === 1 ? 'den' : d >= 2 && d <= 4 ? 'dny' : 'dní');
+  rows.push('<tr><th></th><th class="n">' + esc(name(m.month)) + '</th><th class="n">' + esc(short(p.month + '-01')) + '–' + esc(short(p.through)) + '</th></tr>');
+  rows.push('<tr><td>Tržba' + (n.revenueDays < Number(m.through.slice(8)) ? ' <span class="muted">(' + dayWord(n.revenueDays) + ' s daty)</span>' : '') + '</td><td class="n">' + kc(n.revenueCents) +
+    (p.revenueCents && (p.revenueDays === n.revenueDays || (n.revenueDays === Number(m.through.slice(8)) && p.revenueDays === Number(p.through.slice(8)))) ? ' <span class="muted">(' + signed(pct(n.revenueCents, p.revenueCents)) + ')</span>' : '') + '</td><td class="n muted">' + kc(p.revenueDays ? p.revenueCents : null) + '</td></tr>');
+  const before = new Map((p.bySection ?? []).map(r => [r.section, r.revenueCents]));
+  for (const r of n.bySection ?? []) rows.push('<tr><td class="muted">' + esc(r.label) + '</td><td class="n">' + kc(r.revenueCents) + '</td><td class="n muted">' + kc(before.has(r.section) ? before.get(r.section) : null) + '</td></tr>');
+  const list = (title, total, items, limit) => total ? '<details><summary>' + esc(title) + ' <b>' + kc(total) + '</b></summary><table>' +
+    items.slice(0, limit).map(r => '<tr><td>' + esc(r.label) + '</td><td class="n">' + kc(r.amountCents) + '</td></tr>').join('') + '</table></details>' : '';
+  return '<div class="card"><h2>' + esc(name(m.month)[0].toUpperCase() + name(m.month).slice(1)) + (m.complete ? ' celkem' : ' do ' + esc(short(m.through))) + '</h2><table>' + rows.join('') + '</table>' +
+    list('Výplaty v hotovosti' + (n.revenueCents > 0 && m.payoutsCents ? ' (' + (Math.round(m.payoutsCents / n.revenueCents * 1000) / 10).toFixed(1).replace('.', ',') + ' % tržby)' : ''), m.payoutsCents, m.payouts, 20) + list('Výdaje z kasy', m.expensesCents, m.expenses, 10) + list('Slevy a odpisy', m.discountsCents, m.discounts, 10) + '</div>';
 }
 
 // Who sends data to OKO1 and when it last arrived; a sender silent too long is marked.
@@ -201,7 +222,10 @@ function render(data) {
     (rv.day.noShows ? ' · <span class="warn">nedorazilo ' + rv.day.noShows + ' (' + hosts(rv.day.noShowGuests) + ')</span>' : '') + (rv.day.cancelled ? ' · zrušeno ' + rv.day.cancelled : '') + '</div>' +
     '<div>' + esc(czDate(shift(data.businessDate, 1))) + ': <b>' + rv.today.confirmed + '</b> (' + hosts(rv.today.guests) + ')' +
     (rv.today.bySection.length > 1 ? ' <span class="muted">' + rv.today.bySection.map(s => esc(s.label) + ' ' + s.confirmed).join(' · ') + '</span>' : '') +
-    (rv.today.pending ? ' · <span class="warn">čeká ' + rv.today.pending + '</span>' : '') + '</div></div>');
+    (rv.today.pending ? ' · <span class="warn">čeká ' + rv.today.pending + '</span>' : '') + '</div>' +
+    (b.outlook && (b.outlook.usualGuests || b.outlook.planCents) ? '<div class="muted">' + [b.outlook.usualGuests ? 'obvykle za celý den ' + hosts(b.outlook.usualGuests) : '',
+      b.outlook.planCents ? 'plán tržby ' + kc(b.outlook.planCents) : ''].filter(Boolean).join(' · ') + '</div>' : '') +
+    (b.noShows && b.noShows.guests ? '<div class="muted">nedorazilo ' + Math.round(b.noShows.ratePermille / 10) + ' % rezervovaných hostů' + (b.noShows.usualPermille !== null ? ' (obvykle ' + Math.round(b.noShows.usualPermille / 10) + ' %)' : '') + '</div>' : '') + '</div>');
   const w = b.web, visits = n => n + ' ' + (n === 1 ? 'návštěva' : n >= 2 && n <= 4 ? 'návštěvy' : 'návštěv');
   if (w) cards.push('<div class="card"><h2>Návštěvnost webu</h2><div class="big">' + w.visits + '</div><div class="muted">' + visits(w.visits) +
     (w.lastWeekVisits !== null ? ' · před týdnem ' + w.lastWeekVisits + (w.lastWeekVisits ? ' (' + signed(pct(w.visits, w.lastWeekVisits)) + ')' : '') : '') + '</div>' +
@@ -223,7 +247,7 @@ function render(data) {
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card" id="todo">' + todoCard(data.todo) + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
-  html += weekCard(data.week) + sourcesCard(data.sources);
+  html += weekCard(data.week) + monthCard(data.month) + sourcesCard(data.sources);
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
   if (r) {
