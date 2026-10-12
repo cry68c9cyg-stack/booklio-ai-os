@@ -49,8 +49,19 @@ export type WebTraffic = {
   type: 'web_traffic'; id: string; version: number; businessDate: string; visits: number; visitsWithAction: number;
   origins: {key: string; name: string; visits: number; withAction: number}[]; actions: Record<string, number>; reviewScans: number;
 };
+/**
+ * Reviews that reached the website's admin (Google, TripAdvisor) on one Prague calendar day, and how many wait there:
+ * counts only, no author, title or text. Sent hourly for yesterday and today; the higher `version` overwrites.
+ */
+export type ReviewSummary = {
+  type: 'review_summary'; id: string; version: number; businessDate: string;
+  /** Per source: new reviews by stars (`stars[0]` = 1 ★ … `stars[4]` = 5 ★) and those without stars. */
+  sources: {key: string; name: string; stars: [number, number, number, number, number]; unrated: number}[];
+  /** All reviews in the admin now: waiting for a reply, handed to management, reply failed to send. */
+  waiting: number; forManagement: number; failed: number;
+};
 export const RESERVATION_STATUSES = ['pending', 'confirmed', 'declined', 'expired', 'cancelled'] as const;
-export type IngestRecord = Bill | CashClosing | BottleCheck | Reservation | WebTraffic;
+export type IngestRecord = Bill | CashClosing | BottleCheck | Reservation | WebTraffic | ReviewSummary;
 export type Batch = {batchId: string; installationId: string; records: IngestRecord[]};
 
 export type TenantConfig = {
@@ -205,6 +216,20 @@ function webTraffic(raw: Obj): WebTraffic {
   };
 }
 
+function reviewSummary(raw: Obj): ReviewSummary {
+  const value = object(raw, ['type', 'id', 'version', 'businessDate', 'sources', 'waiting', 'forManagement', 'failed']);
+  return {
+    type: 'review_summary', id: id(value.id), version: int(value.version, 1, Number.MAX_SAFE_INTEGER), businessDate: date(value.businessDate),
+    sources: list(value.sources, 10, item => {
+      const source = object(item, ['key', 'name', 'stars', 'unrated']);
+      const stars = list(source.stars, 5, count => int(count, 0, COUNT_MAX));
+      if (stars.length !== 5) fail();
+      return {key: id(source.key), name: text(source.name, 100), stars: stars as ReviewSummary['sources'][number]['stars'], unrated: int(source.unrated, 0, COUNT_MAX)};
+    }),
+    waiting: int(value.waiting, 0, COUNT_MAX), forManagement: int(value.forManagement, 0, COUNT_MAX), failed: int(value.failed, 0, COUNT_MAX),
+  };
+}
+
 export function validateBatch(raw: unknown): Batch {
   const value = object(raw, ['batchId', 'installationId', 'records']);
   if (typeof value.batchId !== 'string' || !/^[\w-]{8,128}$/.test(value.batchId)) fail();
@@ -217,6 +242,7 @@ export function validateBatch(raw: unknown): Batch {
       if (row?.type === 'bottle_check') return bottleCheck(row);
       if (row?.type === 'reservation') return reservation(row);
       if (row?.type === 'web_traffic') return webTraffic(row);
+      if (row?.type === 'review_summary') return reviewSummary(row);
       return fail();
     }),
   };

@@ -14,6 +14,10 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   const difference = briefing.report?.cashDifferenceCents ?? null;
   if (difference !== null && Math.abs(difference) >= CASH_DIFFERENCE_CENTS) warn(`Přepočet pokladny nesedí s deníkem: ${difference > 0 ? '+' : ''}${crowns(difference)}`, difference);
   if (briefing.reservations?.today.pending) warn(`Rezervace na dnešek čekající na potvrzení: ${briefing.reservations.today.pending}`);
+  const reviews = briefing.reviews;
+  if (reviews?.low) warn(`Slabé recenze (3 ★ a méně): ${reviews.low}`);
+  if (reviews?.forManagement) warn(`Recenze čekají na vedení: ${reviews.forManagement}`);
+  if (reviews?.failed) warn(`Odpovědi na recenze se nepodařilo odeslat: ${reviews.failed}`);
   if (briefing.bottleCheckMissing) warn('Ranní kontrola lahví chybí.');
   for (const row of briefing.bottles?.losses ?? []) warn(`Manko ${row.name}: −${row.lossMl} ml (${crowns(row.lossCents)})`, row.lossCents);
   for (const point of briefing.notes?.points ?? []) items.push({level: point.kind === 'incident' || point.kind === 'problem' ? 'warn' : 'info', text: point.text, amountCents: point.amountCents});
