@@ -186,6 +186,35 @@ Položka `items[]`: `{id, part, category, name, pricesCents, group?, description
 
 Změnou ceny se rozumí jiná kterákoli z cen položky; OKO1 zapíše starou a novou základní cenu i oba texty („225 / 255 Kč“ → „225 / 265 Kč“). První lístek je výchozí stav, změny se počítají až od dalšího. Přejmenování položky, její kategorie nebo objemu je nové `id`, tedy zrušená a nová položka, ne změna ceny. Ceny jsou s DPH; sazbu DPH (jídlo a alkohol mají různou) lístek nenese, pro výdělek po položkách ji OKO1 vezme z produktu pokladny (Pexeso). Dashboard má kartu „Jídelní a nápojový lístek“ (položky po kategoriích s cenami od–do a průměrem, změny za 30 dní), MCP server nástroj `listek` (celý lístek a změny za rok).
 
+### Faktura dodavatele (`supplier_invoice`)
+
+Doplněno 13. 10. 2026 zpětně kompatibilně (rozhodnutí MC 13. 10. 2026: Dishboard napojit jako provizorní zdroj, později ho nahradí jiný, nejspíš Pexeso). Faktury a účtenky dodavatelů: co podnik nakoupil, od koho a za kolik. Obchodní údaje, nic o hostech. Každý odesílatel se páruje jako samostatná instalace se svým tokenem a uvádí `source`; provozovna ho může vypnout v konfiguraci (`disabledSources`, např. `["dishboard"]`): data zůstanou uložená, ale OKO1 je nikde nepočítá. AI OS se musí nasadit dřív, než odesílatel začne faktury posílat.
+
+`{type: "supplier_invoice", id, version, businessDate, source, supplier, netCents, grossCents, kind, items, supplierId?, number?, dueDate?, paidDate?, status?, category?}`
+
+| Pole | Typ | Poznámka |
+|---|---|---|
+| `id`, `version` | string, int ≥ 1 | stálý klíč faktury u odesílatele; vyšší `version` (třeba čas změny v ms) fakturu celou nahradí |
+| `businessDate` | `YYYY-MM-DD` | den vystavení (u účtenky den nákupu) |
+| `source` | string | odesílatel, např. `dishboard` |
+| `supplier`, `supplierId` | string ≤ 200, string \| `null` | dodavatel a jeho IČO |
+| `number` | string ≤ 60 \| `null` | číslo faktury |
+| `dueDate`, `paidDate` | `YYYY-MM-DD` \| `null` | splatnost a den zaplacení; nezaplacená po splatnosti jde do seznamu k vyřízení |
+| `status` | `active` \| `cancelled` | výchozí `active`; zrušená (dobropis celé faktury, duplicita) se nepočítá |
+| `netCents`, `grossCents` | int | celkem bez DPH a s DPH v haléřích (dobropis záporně) |
+| `kind` | `food` \| `beverage` \| `other` | k čemu nákup je: jídlo, nápoje (obojí tvoří food cost), ostatní |
+| `category` | string ≤ 100 \| `null` | kategorie odesílatele, např. „Maso“ |
+| `items[]` | ≤ 500 `{name, quantity, unitPriceCents, netCents, unit?, kind?, category?}` | položky faktury; prázdné pole, když odesílatel položky nezná |
+
+Položka: `name` ≤ 200, `quantity` > 0 (může být desetinné), `unit` ≤ 20 (`ks`, `kg`, `l`…), `unitPriceCents` = cena bez DPH za jednotku v haléřích, `netCents` = řádek bez DPH, `kind` a `category` jen když se liší od faktury. Část faktury, kterou položky nepokryjí (doprava, zaokrouhlení), připadne druhu a kategorii faktury.
+
+OKO1 z faktur počítá:
+- **nákupy** za měsíc do vykazovaného dne bez DPH po druzích, kategoriích a dodavatelích a **food cost** = jídlo a nápoje bez DPH k tržbám s DPH týchž dní (tržby bez DPH OKO1 nezná, protože jídlo a nápoje mají různé sazby);
+- **zdražení**: položka stejného dodavatele se stejným názvem (bez ohledu na velikost písmen a mezery) a jednotkou, jejíž cena za jednotku je o 5 % a víc nad předchozím nákupem; levnější další nákup zdražení ruší. Ranní zpráva a seznam k vyřízení berou 7 dní do vykazovaného dne, dashboard 30 dní, porovnává se s nákupy za rok;
+- **faktury po splatnosti**: nezaplacené, splatnost před dnem, který začíná po vykazovaném.
+
+Ranní zpráva má řádek nákupů s food costem, nejvýš tři nejdražší zdražení a souhrn faktur po splatnosti; seznam k vyřízení každé zdražení (váha = o kolik víc nákup stál) a každou fakturu po splatnosti; dashboard kartu „Náklady a dodavatelé“; MCP server nástroj `naklady_dodavatele(od, do)`.
+
 ## Kdy posílat
 
 Po uzavření každého účtu nebo v intervalu 5–15 minut, a vždy hned po uzávěrce a po dokončení kontroly lahví. Neodeslané dávky drží pokladna ve své frontě a posílá je s opakováním.

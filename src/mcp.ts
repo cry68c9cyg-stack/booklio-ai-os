@@ -114,6 +114,14 @@ export function createServer(context: ToolContext): McpServer {
     return menu ? result(menu) : failed('Lístek zatím do OKO1 nedorazil.');
   });
 
+  tool('naklady_dodavatele', 'Náklady a dodavatelé', 'Faktury dodavatelů za období (nejvýš 400 dní, zatím z Dishboardu, později z Pexesa): nákupy bez DPH po druzích (jídlo, nápoje, ostatní), kategoriích a dodavatelích, ' +
+    'food cost (jídlo a nápoje bez DPH k tržbám s DPH týchž dní, v promile), zdražení položek od 5 % proti předchozímu nákupu, faktury dnes po splatnosti a samotné faktury s položkami a cenami za jednotku. Částky v haléřích.',
+  {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
+    const bad = badRange(od, until);
+    if (bad) return bad;
+    const supplies = await context.venue.posSupplies(od, until);
+    return supplies ? result(supplies) : failed('Provozovna není v OKO1 nastavená.');
+  });
   tool('odhad_a_vyhled', 'Odhad tržby a výhled', 'Výhled jako v ranní zprávě za provozní den „datum“ (zpráva je ráno po něm, výhled začíná následujícím dnem): rezervace a plán tržby na následující den, ' +
     'odhad tržby na 7 dní, tento a příští měsíc (po dnech se svátky, počasím MET Norway, akcemi a rezervacemi a s tím, o kolik je zvedly nebo snížily), přesnost odhadu za 28 dní a akce následujícího dne. ' +
     'Jen pro poslední den (dnešní ranní zprávu) navíc rezervace čekající na potvrzení na dalších 7 dní a hosté, které čekat po částech dne (6–17, 17–22, 22–6 h). ' +

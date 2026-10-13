@@ -79,6 +79,7 @@ Důležité hodnoty: stav rezervace `nova` (čeká na obsluhu), `potvrzena`, `od
 | `souhrn_obdobi(od, do)` | součty za libovolné období (tržba, rezervace, hosté, nedorazili, storna, zdroje, předstih, web, recenze, akce), nejvýš 400 dní |
 | `k_vyrizeni(datum)` | seznam k vyřízení jako na dashboardu a kdy naposledy poslal data každý zdroj |
 | `akce_zebricek(datum)` | akce za půl roku do data seřazené podle hostů navíc: kolikrát, dny v týdnu, hosté proti obvyklému dni a poměr hostů a tržby |
+| `naklady_dodavatele(od, do)` | faktury dodavatelů za období (nejvýš 400 dní): nákupy bez DPH po druzích, kategoriích a dodavatelích, food cost, zdražení od 5 %, faktury po splatnosti a samotné faktury s položkami |
 | `web_rezervace(od, do, stav?, prostor?, limit?)` | rezervace živě se jmény, kontakty, poznámkami a stoly |
 | `web_rezervace_detail(kod nebo id)` | jedna rezervace se stoly, zprávami a platbou stolu s lahví |
 | `web_host(kontakt)` | host podle telefonu nebo e-mailu: databáze hostů, rezervace, nedorazení, černá listina, pozvánky |

@@ -313,6 +313,26 @@ function menuCard(m) {
   return h + '</div>';
 }
 
+// Supplier invoices (Dishboard, later Pexeso): purchases of the month without VAT, food cost, price rises over 30 days, overdue invoices.
+function suppliesCard(s) {
+  if (!s) return '';
+  const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.';
+  const unit = c => String(Math.floor(c / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ',' + String(c % 100).padStart(2, '0') + ' Kč';
+  const m = s.month;
+  let h = '<div class="card"><h2>Náklady a dodavatelé</h2><div class="big">' + kc(m.netCents) + '</div><div class="muted">nákupy ' + esc(short(m.from)) + '–' + esc(short(m.to)) +
+    ' bez DPH, ' + m.invoices + (m.invoices === 1 ? ' faktura' : m.invoices >= 2 && m.invoices <= 4 ? ' faktury' : ' faktur') +
+    (m.foodCostPermille !== null ? ' · food cost <b>' + String(m.foodCostPermille / 10).replace('.', ',') + ' %</b> z tržeb s DPH (' + kc(m.revenueCents) + ')' : '') + '</div>';
+  if (m.byKind.length) h += '<div>' + m.byKind.map(k => esc(k.name) + ' <b>' + kc(k.netCents) + '</b>').join(' · ') + '</div>';
+  h += '<h3>Zdražení za 30 dní</h3>' + (s.rises.length ? '<ul>' + s.rises.map(r => '<li class="warn">' + esc(short(r.date)) + ' <b>' + esc(r.name) + '</b>' + (r.unit ? ' / ' + esc(r.unit) : '') + ' (' + esc(r.supplier) + '): ' +
+    unit(r.oldCents) + ' → ' + unit(r.newCents) + ' (+' + Math.round(r.permille / 10) + ' %)</li>').join('') + '</ul>' : '<span class="muted">žádné zdražení od 5 %</span>');
+  h += '<h3>Po splatnosti</h3>' + (s.overdue.length ? '<div class="warn">' + s.overdueCount + ' za ' + kc(s.overdueCents) + '</div><ul>' + s.overdue.map(o => '<li>' + esc(o.supplier) + (o.number ? ' č. ' + esc(o.number) : '') + ': ' + kc(o.grossCents) +
+    ', splatná ' + esc(short(o.dueDate)) + ' (' + o.days + (o.days === 1 ? ' den' : o.days <= 4 ? ' dny' : ' dní') + ')</li>').join('') + '</ul>' : '<span class="muted">nic po splatnosti</span>');
+  if (m.byCategory.length) h += '<details><summary>Kategorie (' + m.byCategory.length + ')</summary><table>' + m.byCategory.map(c => '<tr><td>' + esc(c.name) + '</td><td class="n">' + kc(c.netCents) + '</td></tr>').join('') + '</table></details>';
+  if (m.bySupplier.length) h += '<details><summary>Dodavatelé (' + m.bySupplier.length + ')</summary><table>' + m.bySupplier.map(c => '<tr><td>' + esc(c.name) + '</td><td class="n muted">' + c.invoices + '×</td><td class="n">' + kc(c.netCents) + '</td></tr>').join('') + '</table></details>';
+  if (s.disabled.length) h += '<div class="muted">vypnuté zdroje: ' + esc(s.disabled.join(', ')) + '</div>';
+  return h + '</div>';
+}
+
 // Who sends data to OKO1 and when it last arrived; a sender silent too long is marked.
 function sourcesCard(s) {
   if (!s) return '';
@@ -382,7 +402,7 @@ function render(data) {
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card" id="todo">' + todoCard(data.todo) + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
-  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast) + weekCard(data.week) + eventsCard(data.eventRanking) + trendsCard(data.trends) + monthCard(data.month) + menuCard(data.menu) + sourcesCard(data.sources);
+  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast) + weekCard(data.week) + eventsCard(data.eventRanking) + trendsCard(data.trends) + monthCard(data.month) + suppliesCard(data.supplies) + menuCard(data.menu) + sourcesCard(data.sources);
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
   if (r) {

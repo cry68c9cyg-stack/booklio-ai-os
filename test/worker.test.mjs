@@ -515,6 +515,16 @@ try {
     menuItem('food:dezerty:pie', 'food', 'Dezerty', 'Apple Pie', [14500])]);
   assert.deepEqual(await (await jdIngest('batch-menu-2', [secondMenu])).json(), {batchId: 'batch-menu-2', accepted: 1, stale: 0});
   assert.deepEqual(await (await jdIngest('batch-menu-3', [firstMenu])).json(), {batchId: 'batch-menu-3', accepted: 0, stale: 1}, 'an older menu changes nothing');
+  // Supplier invoices (interim from Dishboard, synthetic): an older purchase, a dearer one now and an unpaid invoice past its due date.
+  const invoice = (id, businessDate, items, extra = {}) => ({type: 'supplier_invoice', id, version: 1, businessDate, source: 'dishboard', supplier: 'Velkoobchod <Test>',
+    netCents: items.reduce((sum, item) => sum + item.netCents, 0), grossCents: Math.round(items.reduce((sum, item) => sum + item.netCents, 0) * 1.12), kind: 'food', items, ...extra});
+  const berries = (unitPriceCents, quantity = 10) => ({name: 'Borůvky 125 g', quantity, unit: 'ks', unitPriceCents, netCents: unitPriceCents * quantity});
+  assert.equal((await jdIngest('batch-inv-0', [{...invoice('inv-1', addDays(today, -40), [berries(4070)]), kind: 'meat'}])).status, 400, 'known kinds only');
+  assert.equal((await jdIngest('batch-inv-0', [{...invoice('inv-1', addDays(today, -40), [berries(4070)]), guest: {name: 'X'}}])).status, 400, 'no unknown fields');
+  assert.deepEqual(await (await jdIngest('batch-inv-1', [invoice('inv-1', addDays(today, -40), [berries(4070)], {dueDate: addDays(today, -30), paidDate: addDays(today, -31)}),
+    invoice('inv-2', addDays(today, -1), [berries(5159)], {number: '2026-118', dueDate: addDays(today, -1)}),
+    invoice('inv-3', addDays(today, -1), [{name: 'Pivo 50 l', quantity: 2, unit: 'sud', unitPriceCents: 250000, netCents: 500000, kind: 'beverage'}], {status: 'cancelled'})])).json(),
+  {batchId: 'batch-inv-1', accepted: 3, stale: 0});
   // The Monday message (Sunday's report) has a line on the menu's changes over the week.
   const menuSunday = [0, 1, 2, 3, 4, 5, 6].map(i => addDays(calendar, i)).find(day => new Date(day + 'T12:00:00Z').getUTCDay() === 0);
   const menuMonday = await (await call('GET', `/admin/t/james-dean/briefing?date=${menuSunday}`)).json();
@@ -624,7 +634,7 @@ try {
     body: rpc(1, 'initialize', {protocolVersion: '2025-06-18', capabilities: {}, clientInfo: {name: 'test', version: '1'}})})).json();
   assert.equal(initialized.result.serverInfo.name, 'oko1');
   const listed = await (await local('/mcp', {method: 'POST', headers: {...mcpHeaders, authorization: 'Bearer ' + tokens.access_token}, body: rpc(2, 'tools/list')})).json();
-  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['akce_zebricek', 'den', 'k_vyrizeni', 'kontrola_lahvi', 'listek', 'odhad_a_vyhled', 'ranni_prehled', 'report_manazeru', 'souhrn_obdobi', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty',
+  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['akce_zebricek', 'den', 'k_vyrizeni', 'kontrola_lahvi', 'listek', 'naklady_dodavatele', 'odhad_a_vyhled', 'ranni_prehled', 'report_manazeru', 'souhrn_obdobi', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty',
     'web_blokace_a_akce', 'web_darkove_karty', 'web_host', 'web_navstevnost', 'web_platby_lahvi', 'web_prehled', 'web_recenze', 'web_rezervace', 'web_rezervace_detail', 'web_tabulka']);
   assert.ok(listed.result.tools.every(entry => entry.annotations.readOnlyHint === true), 'read only');
 
@@ -676,6 +686,16 @@ try {
   assert.deepEqual(menuTool.changes.map(change => [change.itemId, change.kind, change.oldCents, change.newCents, change.oldText, change.newText]).sort(), [
     ['drinks:vodka:x', 'removed', 9000, null, '90 Kč', null], ['food:burgery:classic', 'price', 22500, 22500, '225 / 255 Kč', '225 / 265 Kč'],
     ['food:burgery:texas', 'price', 24500, 25900, '245 Kč', '259 Kč'], ['food:dezerty:pie', 'added', null, 14500, null, '145 Kč']]);
+  // Costs and suppliers: purchases without VAT, the rise against the purchase before, the overdue invoice; a cancelled one does not count.
+  const supplies = (await mcp('naklady_dodavatele', {od: addDays(today, -6), do: today})).data;
+  assert.deepEqual([supplies.summary.invoices, supplies.summary.netCents, supplies.summary.byKind], [1, 51590, [{kind: 'food', name: 'jídlo', netCents: 51590}]]);
+  assert.deepEqual(supplies.rises.map(rise => [rise.name, rise.oldCents, rise.newCents, rise.permille, rise.extraCents]), [['Borůvky 125 g', 4070, 5159, 268, 10890]]);
+  assert.deepEqual(supplies.overdue.map(row => [row.number, row.days]), [['2026-118', 1]]);
+  // The switch: a sender in disabledSources is left out everywhere, its data stays stored.
+  assert.equal((await call('PUT', '/admin/t/james-dean/config', {...jdConfig, disabledSources: ['dishboard']})).status, 200);
+  const off = (await mcp('naklady_dodavatele', {od: addDays(today, -6), do: today})).data;
+  assert.deepEqual([off.summary.invoices, off.rises.length, off.overdue.length, off.disabledSources], [0, 0, 0, ['dishboard']]);
+  assert.equal((await call('PUT', '/admin/t/james-dean/config', jdConfig)).status, 200);
   const both = await mcp('den', {datum: today});
   assert.equal(both.data.pokladna.revenueCents, 80000);
   assert.equal(both.data.web.pocetRezervaci, 3);
@@ -723,8 +743,12 @@ try {
   assert.deepEqual([boardData.menu.items, boardData.menu.parts.map(part => [part.part, part.items]), boardData.menu.changes.length, boardData.menu.changesTotal], [4, [['food', 3], ['drinks', 1]], 4, 4]);
   assert.deepEqual(boardData.menu.parts[0].categories[0], {name: 'Burgery', items: 2, minCents: 22500, maxCents: 25900, avgCents: 24200});
   const content = await renderCard({'/d/james-dean/data': boardData, '/d/james-dean/web': {card}}, 'content');
+  // The costs card: the rise over 30 days and the invoice past its due date, supplier names escaped.
+  assert.deepEqual(boardData.supplies.rises.map(rise => [rise.name, rise.permille]), [['Borůvky 125 g', 268]]);
+  assert.equal(boardData.supplies.overdueCount, 1);
   assert.ok(content.includes('Jídelní a nápojový lístek') && content.includes('4 položky · jídlo 3, nápoje 1') && content.includes('245 Kč → 259 Kč') && content.includes('225 Kč – 259 Kč'));
   assert.ok(content.includes('Classic &lt;b&gt;Burger&lt;/b&gt;') && !content.includes('<b>Burger</b>'), 'item names are escaped');
+  assert.ok(content.includes('Náklady a dodavatelé') && content.includes('40,70 Kč → 51,59 Kč (+27 %)') && content.includes('Velkoobchod &lt;Test&gt;') && !content.includes('<Test>'), 'costs card');
   assert.deepEqual(boardData.eventRanking.map(rank => [rank.title, rank.count]), [['<img src=x onerror=alert(1)>Jam', 1]]);
   assert.ok(content.includes('Akce za půl roku') && content.includes('&lt;img src=x onerror=alert(1)&gt;Jam') && !content.includes('<img'), 'event titles are escaped');
   assert.ok(shown.includes('Zuzana &lt;b&gt;Testovaci&lt;/b&gt; Hostova') && !shown.includes('<b>Testovaci</b>'), 'guest names are escaped');

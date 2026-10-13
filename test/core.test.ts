@@ -5,14 +5,15 @@ import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts'
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
+import {counted, overdueInvoices, priceRises, renderSupplies, supplyBrief, supplySummary, unitPrice} from '../src/supplies.ts';
 import {weatherDays, weatherText} from '../src/weather.ts';
 import {businessDate, sameClockDaysBefore} from '../src/time.ts';
 import {czechHolidays, easterSunday, holidayName} from '../src/holidays.ts';
-import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type TenantConfig, type WebTraffic} from '../src/validate.ts';
+import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type SupplierInvoice, type TenantConfig, type WebTraffic} from '../src/validate.ts';
 
 const config: TenantConfig = {
   name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9],
-  registers: ['bar', 'klub'], sections: {diner: 'Diner', bar: 'Bar', club: 'Klub'}, recipients: [], bottleCheck: null, reportsLink: null, dashboardPhones: null, web: null, location: null,
+  registers: ['bar', 'klub'], sections: {diner: 'Diner', bar: 'Bar', club: 'Klub'}, recipients: [], bottleCheck: null, reportsLink: null, dashboardPhones: null, web: null, location: null, disabledSources: [],
 };
 const bill = (id: string, extra: Partial<Bill> = {}): Bill => ({
   type: 'bill', id, version: 1, businessDate: '2026-10-08', closedAt: '2026-10-08T20:00:00.000Z', registerId: 'bar', section: 'bar',
@@ -644,4 +645,44 @@ test('rain: the factor from past rainy days and the forecast of a rainy day', ()
   const wet = forecast({today: '2026-10-27', bases: Array(7).fill(10000000), seasonal: {}, monthActual: {cents: 0, days: 0}, weather, rainFactor: {factor: 0.8, days: 9}});
   assert.deepEqual([wet.days[1].cents, wet.days[1].rainFactor, wet.days[2].cents], [8000000, 0.8, 10000000], 'only from 5 mm');
   assert.match(renderForecast(wet)[0], /zítra \(st 28\. 10\.\) 80 000 Kč \(déšť, bývá o 20 % méně\), 12 °C, déšť /);
+});
+
+test('supplier invoices: costs by kind, food cost, price rises, overdue invoices, the switch and the morning lines', () => {
+  const invoice = (id: string, businessDate: string, items: SupplierInvoice['items'], extra: Partial<SupplierInvoice> = {}): SupplierInvoice => ({type: 'supplier_invoice', id, version: 1,
+    businessDate, source: 'dishboard', supplier: 'Makro', supplierId: null, number: null, dueDate: null, paidDate: null, status: 'active',
+    netCents: items.reduce((sum, item) => sum + item.netCents, 0), grossCents: 0, kind: 'food', category: null, items, ...extra});
+  const item = (name: string, unitPriceCents: number, quantity = 1, extra: Partial<SupplierInvoice['items'][number]> = {}) => ({name, quantity, unit: 'ks', unitPriceCents,
+    netCents: unitPriceCents * quantity, kind: null, category: null, ...extra});
+  const invoices = [
+    invoice('a', '2026-09-20', [item('Limety', 10000, 2), item('Borůvky', 4070, 10)]),
+    invoice('b', '2026-10-02', [item('limety ', 11000, 2), item('Rum', 30000, 1, {kind: 'beverage', category: 'Destiláty'})], {netCents: 82000, grossCents: 99000, dueDate: '2026-10-05'}),
+    invoice('c', '2026-10-03', [item('Borůvky', 5159, 10), item('Limety', 10200, 1)], {supplier: 'Jiný', grossCents: 60000, dueDate: '2026-10-10', paidDate: '2026-10-09'}),
+    invoice('d', '2026-10-03', [], {netCents: 50000, kind: 'other', category: 'Úklid', status: 'cancelled'}),
+  ];
+  // The rest of an invoice not covered by its items falls to the invoice's kind and category.
+  const summary = supplySummary(counted(invoices, []), '2026-10-01', '2026-10-31', {revenueCents: 1000000, revenueDays: 3});
+  assert.deepEqual([summary.invoices, summary.netCents, summary.byKind.map(row => [row.kind, row.netCents]), summary.foodCostPermille],
+    [2, 82000 + 61790, [['food', 113790], ['beverage', 30000]], 144]);
+  assert.deepEqual(summary.byCategory.map(row => row.name), ['jídlo', 'Destiláty']);
+  assert.deepEqual(summary.bySupplier.map(row => [row.name, row.invoices]), [['Makro', 1], ['Jiný', 1]]);
+  assert.equal(supplySummary([], '2026-10-01', '2026-10-31', {revenueCents: 0, revenueDays: 0}).foodCostPermille, null);
+  // Same item = same supplier, name (case, spaces) and unit; a cheaper next purchase ends the rise; another supplier is another item.
+  const rises = priceRises(invoices, '2026-10-01', '2026-10-03');
+  assert.deepEqual(rises.map(rise => [rise.supplier, rise.name, rise.oldCents, rise.newCents, rise.permille, rise.extraCents]), [['Makro', 'limety ', 10000, 11000, 100, 2000]]);
+  assert.deepEqual(priceRises(invoices, '2026-10-01', '2026-10-03', 50).length, 1);
+  assert.deepEqual(priceRises([...invoices, invoice('e', '2026-10-04', [item('Limety', 10500, 2)])], '2026-10-01', '2026-10-04').length, 0, 'a cheaper purchase after the rise clears it');
+  assert.deepEqual(overdueInvoices(invoices, '2026-10-05'), [], 'the due day itself is not late');
+  assert.deepEqual(overdueInvoices(invoices, '2026-10-08').map(row => [row.supplier, row.days, row.grossCents]), [['Makro', 3, 99000]]);
+  assert.equal(counted(invoices, ['dishboard']).length, 0, 'a switched-off sender counts nowhere');
+  assert.equal(unitPrice(5159), '51,59 Kč');
+  const brief = supplyBrief(counted(invoices, []), '2026-10-07', {revenueCents: 1000000, revenueDays: 7})!;
+  assert.deepEqual(renderSupplies(brief), [
+    'Nákupy od 1. 10. do 7. 10. (faktury, bez DPH): 1 438 Kč · jídlo 1 138 Kč · nápoje 300 Kč · food cost 14,4 % z tržeb s DPH',
+    '⚠ Zdražení za 7 dní: limety / ks (Makro) 100,00 → 110,00 Kč (+10 %)',
+    '⚠ Faktury po splatnosti: 1 za 990 Kč (nejstarší Makro, 990 Kč, splatná 5. 10. (3 dny))',
+  ]);
+  assert.equal(supplyBrief([], '2026-10-07', {revenueCents: 0, revenueDays: 0}), null);
+  const todo = todoList({...buildBriefing({businessDate: '2026-10-07', config, bills: [], closings: [], planHistory: [], incomplete: false}), supplies: brief});
+  assert.deepEqual(todo.filter(row => /Zdražení|splatnosti/.test(row.text)).map(row => [row.text.slice(0, 30), row.amountCents]),
+    [['Faktura po splatnosti: Makro, ', 99000], ['Zdražení: limety / ks (Makro) ', 2000]]);
 });

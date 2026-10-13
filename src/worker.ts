@@ -13,8 +13,9 @@ import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-repo
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
 import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
+import {counted, overdueInvoices, priceRises, supplyBrief, supplySummary} from './supplies.ts';
 import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
-import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type TenantConfig, type WebTraffic} from './validate.ts';
+import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
 import {dashboardWeb} from './web-views.ts';
 import {WEATHER_AGENT, WEATHER_URL, weatherDays, type WeatherDay} from './weather.ts';
@@ -138,7 +139,7 @@ export class TenantObject extends DurableObject<Env> {
   private config(): TenantConfig | null {
     const row = this.sql.exec<{json: string}>('SELECT json FROM config WHERE id=1').toArray()[0];
     // Configs saved before the bottle check have no `bottleCheck` key.
-    return row ? {bottleCheck: null, reportsLink: null, dashboardPhones: null, web: null, ...JSON.parse(row.json)} as TenantConfig : null;
+    return row ? {bottleCheck: null, reportsLink: null, dashboardPhones: null, web: null, disabledSources: [], ...JSON.parse(row.json)} as TenantConfig : null;
   }
 
   async handle(tenant: string, route: string, method: string, body: unknown, token: string | null, query: Record<string, string>): Promise<Result> {
@@ -299,7 +300,7 @@ export class TenantObject extends DurableObject<Env> {
     const stored = this.sql.exec<{text: string}>('SELECT text FROM briefings WHERE business_date=?', day).toArray()[0];
     const todo = this.todoFor(day, briefing);
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
-      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day)});
+      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day)});
   }
 
   /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
@@ -589,6 +590,55 @@ export class TenantObject extends DurableObject<Env> {
     const today = localTime(new Date(), config.timeZone).date;
     const changes = this.menuChangesBetween(addDays(today, -365), today, 2000);
     return {menu, changes: changes.rows, changesTotal: changes.total};
+  }
+
+  /**
+   * Supplier invoices issued in `from`–`to` that count: not cancelled, not from a switched-off sender (`disabledSources`).
+   * With `unpaidOnly`, every unpaid invoice with a due date, whenever it was issued.
+   */
+  private invoices(config: TenantConfig, from: string, to: string, unpaidOnly = false): SupplierInvoice[] {
+    const rows = unpaidOnly
+      ? this.sql.exec<{json: string}>("SELECT json FROM records WHERE type='supplier_invoice' AND json_extract(json, '$.dueDate') IS NOT NULL AND json_extract(json, '$.paidDate') IS NULL").toArray()
+      : this.sql.exec<{json: string}>("SELECT json FROM records WHERE type='supplier_invoice' AND business_date BETWEEN ? AND ?", from, to).toArray();
+    return counted(rows.map(row => JSON.parse(row.json) as SupplierInvoice), config.disabledSources);
+  }
+
+  /** Revenue with VAT over `from`–`to` and the days that have it (POS, managers' report or imported history). */
+  private revenueBetween(from: string, to: string) {
+    let revenueCents = 0, revenueDays = 0;
+    for (let day = from; day <= to; day = addDays(day, 1)) {
+      const revenue = this.dayRevenue(day);
+      if (revenue !== null) { revenueCents += revenue; revenueDays++; }
+    }
+    return {revenueCents, revenueDays};
+  }
+
+  /** Morning message: purchases of the month up to the day, rises of its last 7 days (against a year of purchases), overdue invoices. */
+  private supplyBriefFor(config: TenantConfig, date: string) {
+    const year = this.invoices(config, addDays(date, -365), date);
+    const unpaid = this.invoices(config, '', '', true).filter(invoice => !year.some(other => other.id === invoice.id));
+    return supplyBrief([...year, ...unpaid], date, this.revenueBetween(date.slice(0, 8) + '01', date));
+  }
+
+  /** Dashboard: the month up to the shown day, rises over its 30 days, invoices overdue the day after, and which senders are off. */
+  private suppliesCard(config: TenantConfig, day: string) {
+    const year = this.invoices(config, addDays(day, -365), day);
+    const overdue = overdueInvoices(this.invoices(config, '', '', true), addDays(day, 1));
+    if (!year.length && !overdue.length) return null;
+    return {month: supplySummary(year, day.slice(0, 8) + '01', day, this.revenueBetween(day.slice(0, 8) + '01', day)),
+      rises: priceRises(year, addDays(day, -29), day).slice(0, 15), overdue: overdue.slice(0, 15), overdueCount: overdue.length,
+      overdueCents: overdue.reduce((sum, row) => sum + row.grossCents, 0), disabled: config.disabledSources};
+  }
+
+  /** MCP: purchases over any stretch of days (at most 400) with price rises in it, invoices overdue today and the invoices themselves. */
+  posSupplies(from: string, to: string) {
+    const config = this.config();
+    if (!config) return null;
+    const history = this.invoices(config, addDays(from, -365), to), invoices = history.filter(invoice => invoice.businessDate >= from);
+    const today = businessDate(new Date(), config.timeZone, config.businessDayCutoffHour);
+    return {summary: supplySummary(invoices, from, to, this.revenueBetween(from, to)), rises: priceRises(history, from, to),
+      overdue: overdueInvoices(this.invoices(config, '', '', true), today), disabledSources: config.disabledSources,
+      invoices: invoices.sort((a, b) => b.businessDate.localeCompare(a.businessDate)).slice(0, 1000), truncated: invoices.length > 1000};
   }
 
   private day<T>(type: string, date: string): T[] {
@@ -1081,7 +1131,7 @@ export class TenantObject extends DurableObject<Env> {
   /** Dashboard: every kind of sender and type of data with the time it last arrived, plus the last report and cost fetches. No content. */
   private sources(config: TenantConfig) {
     const at = (value: string | null) => value ? stamp(new Date(value), config.timeZone) : null;
-    const names: Record<string, string> = {bill: 'Účty z pokladny', cash_closing: 'Uzávěrky pokladen', bottle_check: 'Kontrola lahví', reservation: 'Rezervace', web_traffic: 'Návštěvnost webu', review_summary: 'Recenze', event: 'Akce podniku', menu: 'Jídelní a nápojový lístek'};
+    const names: Record<string, string> = {bill: 'Účty z pokladny', cash_closing: 'Uzávěrky pokladen', bottle_check: 'Kontrola lahví', reservation: 'Rezervace', web_traffic: 'Návštěvnost webu', review_summary: 'Recenze', event: 'Akce podniku', menu: 'Jídelní a nápojový lístek', supplier_invoice: 'Faktury dodavatelů'};
     const report = this.sql.exec<{at: string; found: number}>('SELECT at, found FROM report_fetches ORDER BY at DESC LIMIT 1').toArray()[0];
     const cost = this.sql.exec<{at: string; error: string | null}>('SELECT at, error FROM cost_fetches ORDER BY at DESC LIMIT 1').toArray()[0];
     return {
@@ -1111,6 +1161,7 @@ export class TenantObject extends DurableObject<Env> {
       eventRanking: guestOutlook?.days.some(day => day.weak) || addDays(date, 1).endsWith('-01') ? this.eventRanking(date) : null,
       menuWeek: weekday(date) === 0 ? this.menuWeek(date) : null,
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
+      supplies: this.supplyBriefFor(config, date),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};
   }

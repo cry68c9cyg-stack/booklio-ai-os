@@ -3,6 +3,7 @@ import {addDays, localTime, weekday} from './time.ts';
 import {line, total, type DailyReport} from './daily-report.ts';
 import type {NotePoint, NotesAnalysis} from './notes.ts';
 import {weatherText, type WeatherDay} from './weather.ts';
+import {renderSupplies, type SupplyBrief} from './supplies.ts';
 
 export type Briefing = {
   businessDate: string;
@@ -76,6 +77,8 @@ export type Briefing = {
   /** Posted costs from accounting (iÚčto) against OKO1's revenue: this month so far, and the month before in its first half. */
   costs: MonthResult | null;
   costsPrevious: MonthResult | null;
+  /** Supplier invoices (Dishboard, later Pexeso): the month so far with food cost, price rises of the week, overdue invoices. `null` = none. */
+  supplies: SupplyBrief | null;
   incomplete: boolean;
 };
 export type WeekPart = {revenueCents: number; revenueDays: number; reservations: number; guests: number; noShows: number; noShowGuests: number;
@@ -524,7 +527,7 @@ export function buildBriefing(input: {
   /** Visits and sent booking forms of the same weekday over the 4 weeks before (days the website sent). */
   webUsual?: {visits: number; sent: number}[];
   eventRanking?: EventRank[] | null; menuWeek?: MenuWeek | null;
-  costs?: MonthResult | null; costsPrevious?: MonthResult | null;
+  costs?: MonthResult | null; costsPrevious?: MonthResult | null; supplies?: SupplyBrief | null;
   reviews?: ReviewSummary;
   week?: Week | null; silent?: {name: string; since: string}[];
   month?: Month | null; lastWeekRevenueCents?: number | null; forecast?: Forecast | null;
@@ -614,7 +617,7 @@ export function buildBriefing(input: {
     eventRanking: input.eventRanking ?? null,
     menuWeek: input.menuWeek ?? null,
     reviews: summarizeReviews(input.reviews),
-    costs: input.costs ?? null, costsPrevious: input.costsPrevious ?? null,
+    costs: input.costs ?? null, costsPrevious: input.costsPrevious ?? null, supplies: input.supplies ?? null,
     week: input.week ?? null,
     month: input.month ?? null,
     lastWeekRevenueCents: input.lastWeekRevenueCents ?? null,
@@ -684,6 +687,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   if (briefing.webDrop) lines.push(`⚠ Web: ${webDropText(briefing.webDrop)}.`);
   lines.push(...renderReviews(briefing.reviews));
   lines.push(...renderCosts(briefing.costs, briefing.costsPrevious));
+  lines.push(...renderSupplies(briefing.supplies));
   lines.push(...renderNotes(briefing));
   // The week in a few numbers once a week, in the message about Sunday (Monday morning).
   if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek));
