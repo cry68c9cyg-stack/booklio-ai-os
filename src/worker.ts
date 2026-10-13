@@ -61,6 +61,8 @@ const same = (a: string, b: string) => {
 const randomHex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
 const PREPARE_BUDGET_MS = 60000;
 const SESSION_MS = 30 * 86400000;
+/** A session renews itself on use, but never lives longer than a year from the SMS code that opened it. */
+const SESSION_MAX_MS = 365 * 86400000;
 /** Waits for `work` at most `ms`; errors and overruns are logged, never thrown. The work may still finish later. */
 async function withinBudget(work: Promise<unknown>, ms: number): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -228,7 +230,8 @@ export class TenantObject extends DurableObject<Env> {
   }
 
   /**
-   * Step 2: a valid code opens a 30-day session; only the token's hash is stored. Each code takes at most 5 tries,
+   * Step 2: a valid code opens a session for 30 days from the last use (validSession renews it, at most a year from
+   * the code); only the token's hash is stored. Each code takes at most 5 tries,
    * and after 10 wrong codes in an hour the venue's login is closed until the hour passes (429 says how long).
    */
   verifyLoginCode(code: unknown, scope = '', now = Date.now()): Result {
@@ -252,9 +255,18 @@ export class TenantObject extends DurableObject<Env> {
     });
   }
 
-  validSession(token: string | null): boolean {
+  /**
+   * A live session is renewed to 30 days from now (at most a year from its login), so whoever uses the dashboard or
+   * the MCP connection at least once a month stays logged in. Written at most once a day per session.
+   */
+  validSession(token: string | null, now = Date.now()): boolean {
     if (!token) return false;
-    return this.sql.exec('SELECT 1 FROM sessions WHERE token_hash=? AND expires_at > ?', sha256(token), Date.now()).toArray().length > 0;
+    const hash = sha256(token);
+    const row = this.sql.exec<{created_at: number; expires_at: number}>('SELECT created_at, expires_at FROM sessions WHERE token_hash=? AND expires_at > ?', hash, now).toArray()[0];
+    if (!row) return false;
+    const renewed = Math.min(now + SESSION_MS, row.created_at + SESSION_MAX_MS);
+    if (renewed - row.expires_at >= DAY_MS) this.sql.exec('UPDATE sessions SET expires_at=? WHERE token_hash=?', renewed, hash);
+    return true;
   }
 
   logout(token: string | null) {
@@ -1072,8 +1084,12 @@ async function dashboard(request: Request, env: Env, tenant: string, action: str
     }});
   }
   if (action === 'data' && request.method === 'GET') {
-    if (!known || !await stub.validSession(cookie(request))) return json(failure('UNAUTHORIZED', 401));
-    return json(await stub.dashboardData(new URL(request.url).searchParams.get('date') ?? undefined));
+    const token = cookie(request);
+    if (!known || !await stub.validSession(token)) return json(failure('UNAUTHORIZED', 401));
+    // The browser keeps the cookie as long as the server keeps the session: each visit renews both.
+    const response = json(await stub.dashboardData(new URL(request.url).searchParams.get('date') ?? undefined));
+    response.headers.append('set-cookie', `${SESSION_COOKIE}=${token}; Path=${path}; HttpOnly; Secure; SameSite=Strict; Max-Age=${SESSION_MS / 1000}`);
+    return response;
   }
   if (action === 'web' && request.method === 'GET') {
     if (!known || !await stub.validSession(cookie(request))) return json(failure('UNAUTHORIZED', 401));

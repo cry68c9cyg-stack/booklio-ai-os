@@ -75,7 +75,7 @@ Připojení v Claudovi (každý, kdo smí na dashboard):
 
 1. Claude → Nastavení → Konektory → Přidat vlastní konektor, adresa `https://oko1.rr7whdyyhf.workers.dev/mcp` (v Claude Code: `claude mcp add --transport http oko1 https://oko1.rr7whdyyhf.workers.dev/mcp` a pak `/mcp`).
 2. Na stránce OKO1 zkontrolovat, kam přístup půjde, zadat provozovnu `james-dean` a svoje číslo.
-3. Opsat kód z SMS. Připojení vydrží 30 dní; `POST /admin/t/james-dean/logout` (správní API) ukončí všechna připojení i přihlášení na dashboard.
+3. Opsat kód z SMS. Připojení i přihlášení na dashboard platí 30 dní od posledního použití, nejvýš rok od kódu; `POST /admin/t/james-dean/logout` (správní API) ukončí všechna připojení i přihlášení na dashboard.
 
 ## 7. Ověření
 
