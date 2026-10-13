@@ -23,7 +23,7 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   if (briefing.reservations?.today.pending) warn(`Rezervace na dnešek čekající na potvrzení: ${briefing.reservations.today.pending}`);
   if (briefing.pendingAhead) warn(`Na příštích 7 dní ${pendingAheadText(briefing.pendingAhead)}`);
   const weak = weakDays(briefing.guestOutlook);
-  if (weak.length) warn(`Slabší výhled, zvaž akci nebo kampaň: ${weakDaysText(weak)}`);
+  if (weak.length) warn(`Slabší výhled, zvaž akci nebo kampaň: ${weakDaysText(weak, briefing.eventRanking)}`);
   if (briefing.webDrop) warn(`Web: ${webDropText(briefing.webDrop)}`);
   const reviews = briefing.reviews;
   if (reviews?.low) warn(`Slabé recenze (3 ★ a méně): ${reviews.low}`);
