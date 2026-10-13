@@ -6,6 +6,7 @@
  * of the allowed phones or POST /admin/t/{tenant}/logout end the connection too.
  */
 import {AuthorizationError, OAuthError, type OAuthHelpers, type OAuthProviderOptions} from '@cloudflare/workers-oauth-provider';
+import {LOGIN_CSS} from './login-style.ts';
 import {createServer, serveMcp} from './mcp.ts';
 import type {Env, TenantObject} from './worker.ts';
 
@@ -156,13 +157,9 @@ ${view.step === 'phone' ? `<form method="post">
 :root{--bg:#f6f5f2;--card:#fff;--text:#1d1d1b;--muted:#6b6a66;--line:#e4e2dc;--accent:#0f6e5c;--warn:#b4441c;--note:#fff3c4}
 @media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1e1e1c;--text:#f1efe8;--muted:#a3a19a;--line:#33322f;--accent:#5fc2a8;--warn:#f08a5d;--note:#3d3518}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
-main{max-width:440px;margin:8vh auto;padding:16px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px}
-h1{font-size:20px;margin:0 0 12px}form{display:grid;gap:8px}input,button{font:inherit;padding:9px 12px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text)}
-button{background:var(--accent);border-color:var(--accent);color:#fff;cursor:pointer}button.secondary{background:var(--card);color:var(--text);border-color:var(--line)}
-button:disabled{opacity:.6;cursor:default}.again{margin-top:8px}.muted{color:var(--muted);font-size:14px}.warn{color:var(--warn)}
-.notice{background:var(--note);padding:12px;border-radius:8px;font-weight:600;overflow-wrap:anywhere}
+${LOGIN_CSS}
 </style></head>
-<body><main><div class="card"><h1>Připojit Clauda k OKO1</h1>${body}</div></main>${view.step === 'code' ? `<script nonce="${nonce}">${COUNTDOWN}</script>` : ''}</body></html>`, {status, headers: {
+<body><main class="login"><div class="card"><h1>Připojit Clauda k OKO1</h1>${body}</div></main>${view.step === 'code' ? `<script nonce="${nonce}">${COUNTDOWN}</script>` : ''}</body></html>`, {status, headers: {
     'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'same-origin',
     'content-security-policy': `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; base-uri 'none'; frame-ancestors 'none'`,
   }});

@@ -3,6 +3,8 @@
  * venue's recipients (the owner); the session is an HttpOnly cookie valid for this venue only.
  */
 
+import {LOGIN_CSS} from './login-style.ts';
+
 const escape = (value: string) => value.replace(/[&<>"']/g, char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[char]!);
 
 export function dashboardHtml(tenant: string, nonce: string): string {
@@ -14,8 +16,8 @@ export function dashboardHtml(tenant: string, nonce: string): string {
 <meta name="robots" content="noindex, nofollow">
 <title>OKO1</title>
 <style nonce="${nonce}">
-:root{--bg:#f6f5f2;--card:#fff;--text:#1d1d1b;--muted:#6b6a66;--line:#e4e2dc;--accent:#0f6e5c;--warn:#b4441c;--bar:#9cc9bd;--plan:#1d1d1b}
-@media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1e1e1c;--text:#f1efe8;--muted:#a3a19a;--line:#33322f;--accent:#5fc2a8;--warn:#f08a5d;--bar:#2f6f60;--plan:#f1efe8}}
+:root{--bg:#f6f5f2;--card:#fff;--text:#1d1d1b;--muted:#6b6a66;--line:#e4e2dc;--accent:#0f6e5c;--warn:#b4441c;--note:#fff3c4;--bar:#9cc9bd;--plan:#1d1d1b}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1e1e1c;--text:#f1efe8;--muted:#a3a19a;--line:#33322f;--accent:#5fc2a8;--warn:#f08a5d;--note:#3d3518;--bar:#2f6f60;--plan:#f1efe8}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:1000px;margin:0 auto;padding:16px}
 header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:12px}
@@ -31,19 +33,32 @@ nav{display:flex;gap:6px;align-items:center}
 svg{width:100%;height:auto;display:block}
 pre{white-space:pre-wrap;font:13px/1.4 ui-monospace,monospace;margin:0}
 details summary{cursor:pointer;color:var(--muted)}
-#login{max-width:360px;margin:15vh auto}.pre{white-space:pre-line}
+.pre{white-space:pre-line}
 h3{font-size:14px;margin:12px 0 6px}.scroll{overflow-x:auto}
+${LOGIN_CSS}
 </style>
 </head>
 <body>
 <main>
-<section id="login" hidden>
+<section id="login" class="login" hidden>
   <div class="card">
-    <h1>OKO1</h1>
-    <p class="muted">Zadejte svoje telefonní číslo. Když má přístup, přijde na něj kód v SMS.</p>
-    <form id="phoneForm"><p><input id="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+420 …" aria-label="Telefonní číslo" required> <button class="primary" id="send">Poslat kód</button></p></form>
-    <form id="verify" hidden><p><input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" minlength="6" pattern="[0-9]{6}" placeholder="6 číslic" aria-label="Kód z SMS" required> <button class="primary">Přihlásit</button></p><p id="codeLeft" class="muted" role="timer"></p></form>
-    <p id="loginMsg" class="muted" role="status"></p>
+    <h1>Přihlásit do OKO1</h1>
+    <form id="phoneForm">
+      <label for="phone">Telefon</label><input id="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+420 …" required>
+      <button id="send">Poslat kód</button>
+      <p class="muted">Kód v SMS přijde jen na číslo, které smí na dashboard OKO1.</p>
+      <p id="phoneErr" class="warn" role="alert"></p>
+    </form>
+    <div id="codeStep" hidden>
+      <form id="verify">
+        <label for="code">Kód z SMS</label><input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" minlength="6" pattern="[0-9]{6}" required>
+        <button>Přihlásit</button>
+        <p id="loginMsg" class="muted" role="status"></p>
+        <p class="muted"><span id="codeLeft" role="timer">Platí 10 minut.</span> Přihlášení pak vydrží 30 dní.</p>
+        <p id="loginErr" class="warn" role="alert"></p>
+      </form>
+      <form id="againForm" class="again"><button class="secondary" id="again">Poslat kód znovu</button></form>
+    </div>
   </div>
 </section>
 <section id="app" hidden>
@@ -75,8 +90,8 @@ let codeUntil = 0, sendFrom = 0, countdownTimer = null;
 function countdown() {
   const now = Date.now(), left = Math.ceil((codeUntil - now) / 1000), wait = Math.ceil((sendFrom - now) / 1000);
   if (codeUntil) $('codeLeft').textContent = left > 0 ? 'Kód platí ještě ' + codeClock(left) : 'Kód vypršel, pošli nový';
-  $('send').disabled = wait > 0;
-  $('send').textContent = wait > 0 ? 'Poslat znovu za ' + codeClock(wait) : codeUntil ? 'Poslat kód znovu' : 'Poslat kód';
+  $('again').disabled = wait > 0;
+  $('again').textContent = wait > 0 ? 'Poslat znovu za ' + codeClock(wait) : 'Poslat kód znovu';
   if (left <= 0 && wait <= 0) { clearInterval(countdownTimer); countdownTimer = null; }
 }
 function startCountdown(body) {
@@ -86,25 +101,30 @@ function startCountdown(body) {
   if (!countdownTimer) countdownTimer = setInterval(countdown, 1000);
   countdown();
 }
-$('phoneForm').onsubmit = async e => {
-  e.preventDefault();
-  $('send').disabled = true;
+// Sending the code and sending it again: the same request, after it the code step with the countdown.
+async function sendCode(button, error) {
+  button.disabled = true;
+  error.textContent = '';
   const r = await post('/login', {phone: $('phone').value});
   const body = await r.json().catch(() => ({}));
   if (r.ok || r.status === 429) {
     // Too soon after the last code: only the countdown, the code already sent still works.
-    $('loginMsg').textContent = r.ok ? 'Pokud má číslo přístup, kód je na cestě.' : body.error === 'TOO_MANY' ? 'Moc pokusů, další kód půjde poslat za ' + inTime(body.retryAfter) + '.' : '';
-    $('verify').hidden = false;
+    $('loginMsg').textContent = r.ok ? 'Pokud má číslo přístup, kód je na cestě.' : '';
+    $('loginErr').textContent = body.error === 'TOO_MANY' ? 'Moc pokusů, další kód půjde poslat za ' + inTime(body.retryAfter) + '.' : '';
+    $('phoneForm').hidden = true;
+    $('codeStep').hidden = false;
     startCountdown(body);
     if (r.ok) $('code').focus();
-  } else { $('loginMsg').textContent = 'Kód se nepodařilo poslat.'; $('send').disabled = false; }
-};
+  } else { error.textContent = 'Kód se nepodařilo poslat.'; button.disabled = false; }
+}
+$('phoneForm').onsubmit = e => { e.preventDefault(); return sendCode($('send'), $('phoneErr')); };
+$('againForm').onsubmit = e => { e.preventDefault(); return sendCode($('again'), $('loginErr')); };
 $('verify').onsubmit = async e => {
   e.preventDefault();
   const r = await post('/verify', {code: $('code').value.trim()});
   const body = await r.json().catch(() => ({}));
   if (r.ok) { clearInterval(countdownTimer); $('login').hidden = true; load(); }
-  else $('loginMsg').textContent = r.status === 429 ? 'Moc chybných kódů, přihlášení se otevře za ' + inTime(Number(body.retryAfter) || 3600) + '.' : 'Kód nesedí nebo vypršel.';
+  else $('loginErr').textContent = r.status === 429 ? 'Moc chybných kódů, přihlášení se otevře za ' + inTime(Number(body.retryAfter) || 3600) + '.' : 'Kód nesedí nebo vypršel.';
 };
 $('logout').onclick = async () => { await post('/logout'); location.reload(); };
 $('date').onchange = () => load($('date').value);

@@ -337,7 +337,7 @@ try {
     Date: FakeDate, setInterval: fn => intervals.push(fn), clearInterval() {},
     fetch: async url => url.endsWith('/login') ? {ok: true, status: 200, json: async () => ({sent: true, expiresIn: 600, retryAfter: 60})} : {ok: false, status: 401, json: async () => ({})}});
   await loginElements.phoneForm.onsubmit({preventDefault() {}});
-  const loginShown = () => [loginElements.codeLeft.textContent, loginElements.send.disabled, loginElements.send.textContent];
+  const loginShown = () => [loginElements.codeLeft.textContent, loginElements.again.disabled, loginElements.again.textContent];
   assert.deepEqual(loginShown(), ['Kód platí ještě 10:00', true, 'Poslat znovu za 1:00']);
   assert.equal(loginElements.loginMsg.textContent, 'Pokud má číslo přístup, kód je na cestě.');
   fakeNow += 18000; intervals[0]();
