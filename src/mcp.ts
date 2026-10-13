@@ -114,6 +114,37 @@ export function createServer(context: ToolContext): McpServer {
     return menu ? result(menu) : failed('Lístek zatím do OKO1 nedorazil.');
   });
 
+  tool('odhad_a_vyhled', 'Odhad tržby a výhled', 'Výhled jako v ranní zprávě za provozní den „datum“ (zpráva je ráno po něm, výhled začíná následujícím dnem): rezervace a plán tržby na následující den, ' +
+    'odhad tržby na 7 dní, tento a příští měsíc (po dnech se svátky, počasím MET Norway, akcemi a rezervacemi a s tím, o kolik je zvedly nebo snížily), přesnost odhadu za 28 dní a akce následujícího dne. ' +
+    'Jen pro poslední den (dnešní ranní zprávu) navíc rezervace čekající na potvrzení na dalších 7 dní a hosté, které čekat po částech dne (6–17, 17–22, 22–6 h). ' +
+    'Na dnešní výhled tedy datum = včera. Jen počty, částky v haléřích.', {datum: zod.string().describe('Provozní den ranní zprávy RRRR-MM-DD (výhled od dne po něm).')},
+  async ({datum}: {datum: string}) => {
+    if (!isDate(datum)) return badDate;
+    const outlook = await context.venue.posOutlook(datum);
+    return outlook ? result(outlook) : failed('Provozovna není v OKO1 nastavená.');
+  });
+  tool('tyden_mesic_trendy', 'Týden, měsíc a trendy', 'K provoznímu dni: posledních 7 dní proti 7 předtím (tržba, rezervace, hosté, nedorazili, storna, odkud a jak dopředu se rezervuje, web, recenze, akce), ' +
+    'měsíc od 1. dne proti minulému a 12 týdnů trendů s chybou odhadu. Jen počty, částky v haléřích.', {datum: date},
+  async ({datum}: {datum: string}) => {
+    if (!isDate(datum)) return badDate;
+    const trends = await context.venue.posTrends(datum);
+    return trends ? result(trends) : failed('Provozovna není v OKO1 nastavená.');
+  });
+  tool('souhrn_obdobi', 'Souhrn za období', 'Součty za libovolné období (nejvýš 400 dní): tržba a dny s tržbou, potvrzené rezervace a hosté, nedorazili, storna, zdroje rezervací, ' +
+    'jak dopředu se rezervuje, návštěvy webu a jejich původ, odeslané formuláře, nové recenze a průměr hvězdiček, akce podniku s hosty a tržbou proti obvyklému dni. Jen počty, částky v haléřích.',
+  {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
+    const bad = badRange(od, until);
+    if (bad) return bad;
+    const period = await context.venue.posPeriod(od, until);
+    return period ? result(period) : failed('Provozovna není v OKO1 nastavená.');
+  });
+  tool('k_vyrizeni', 'Seznam k vyřízení', 'Seznam k vyřízení za provozní den jako na dashboardu (s tím, co už je „Vyřízeno“) a kdy naposledy poslal data každý zdroj (pokladna, web, report manažerů, náklady).',
+    {datum: date}, async ({datum}: {datum: string}) => {
+      if (!isDate(datum)) return badDate;
+      const todo = await context.venue.posTodo(datum);
+      return todo ? result(todo) : failed('Provozovna není v OKO1 nastavená.');
+    });
+
   // Web živě.
   tool('web_rezervace', 'Rezervace na webu', 'Rezervace z webu živě, se jmény, kontakty, poznámkami a stoly (p4 = stůl 4 v přízemí, kA = box A v klubu). ' +
     'Stav: nova (čeká na obsluhu), potvrzena, odmitnuta, propadla, zrusena_hostem, zrusena_obsluhou. Prostor: diner, bar, klub. prichod: dorazil, nedorazil, null.',
