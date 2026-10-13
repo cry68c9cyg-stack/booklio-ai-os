@@ -1,7 +1,7 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
-import {buildBriefing, type Briefing, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
+import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
 import {menuChanges, menuOverview} from './menu.ts';
@@ -300,7 +300,7 @@ export class TenantObject extends DurableObject<Env> {
     const stored = this.sql.exec<{text: string}>('SELECT text FROM briefings WHERE business_date=?', day).toArray()[0];
     const todo = this.todoFor(day, briefing);
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
-      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), sources: this.sources(config), menu: this.menuCard(config, day), supplies: this.suppliesCard(config, day)});
+      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day)});
   }
 
   /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
@@ -390,6 +390,11 @@ export class TenantObject extends DurableObject<Env> {
     if (!this.config()) return null;
     this.revenueMemo = new Map();
     try { return {from, to, ...this.weekPart(from, to), events: this.eventReviews(from, to)}; } finally { this.revenueMemo = null; }
+  }
+
+  /** MCP: the events of the half year up to a day, ranked by the guests they drew against usual same weekdays, with revenue. */
+  posEvents(date: string) {
+    return this.config() ? {to: date, from: addDays(date, -181), events: this.eventRanking(date)} : null;
   }
 
   /** MCP: the to-do list of a day as the dashboard shows it (with "Vyřízeno") and when each source last sent data. */
@@ -689,8 +694,9 @@ export class TenantObject extends DurableObject<Env> {
   }
 
   private dayRevenueUncached(date: string): number | null {
-    const bills = this.day<Bill>('bill', date).filter(bill => bill.status === 'closed');
-    if (bills.length) return bills.reduce((sum, bill) => sum + bill.totalCents, 0);
+    const bills = this.sql.exec<{count: number; total: number | null}>(`SELECT count(*) AS count, SUM(json_extract(json, '$.totalCents')) AS total
+      FROM records WHERE type='bill' AND business_date=? AND json_extract(json, '$.status') = 'closed'`, date).toArray()[0];
+    if (bills.count) return bills.total ?? 0;
     const reported = this.sql.exec<{total: number | null}>("SELECT SUM(amount_cents) AS total FROM report_lines WHERE business_date=? AND kind='revenue_section'", date).toArray()[0]?.total;
     if (reported !== null && reported !== undefined) return reported;
     return this.sql.exec<{revenue_cents: number}>('SELECT revenue_cents FROM history WHERE business_date=?', date).toArray()[0]?.revenue_cents ?? null;
@@ -778,10 +784,7 @@ export class TenantObject extends DurableObject<Env> {
       const revenue = this.dayRevenue(date);
       if (revenue === null) continue;
       part.revenueCents += revenue; part.revenueDays++;
-      const bills = this.day<Bill>('bill', date).filter(bill => bill.status === 'closed');
-      const rows = bills.length ? bills.map(bill => ({key: bill.section, amountCents: bill.totalCents}))
-        : this.sql.exec<{key: string; amount_cents: number}>("SELECT key, amount_cents FROM report_lines WHERE business_date=? AND kind='revenue_section'", date).toArray()
-          .map(row => ({key: row.key, amountCents: row.amount_cents}));
+      const rows = this.sectionRows(date);
       // A day known only from the imported history has its total but no sections.
       if (!rows.length) split = false;
       for (const row of rows) sections.set(row.key, (sections.get(row.key) ?? 0) + row.amountCents);
@@ -953,8 +956,66 @@ export class TenantObject extends DurableObject<Env> {
       addDays(date, -182 - 56), date, RAIN_MM).toArray().map(row => row.date));
     const rainRatios = [...rainy].filter(day => day >= addDays(date, -182) && !holidayName(day) && !eventDates.has(day))
       .map(day => against(day, other => !rainy.has(other) && !holidayName(other) && !eventDates.has(other))).filter((value): value is number => value !== null);
-    return forecast({today, bases, seasonal, monthActual: {cents, days, missing}, bookings, weather, accuracy, events, eventFactor: eventFactor(ratios),
+    const result = forecast({today, bases, seasonal, monthActual: {cents, days, missing}, bookings, weather, accuracy, events, eventFactor: eventFactor(ratios),
       holidays, rainFactor: rainFactor(rainRatios)});
+    // Each forecast day split by section with the shares of its weekday over the 8 weeks up to the reported day (at least 2 days with sections).
+    const config = this.config();
+    if (config) {
+      const shares = Array.from({length: 7}, (_, day) => {
+        const totals = new Map<string, number>();
+        let known = 0;
+        for (const entry of Array.from({length: 56}, (_, i) => addDays(date, -i)).filter(entry => weekday(entry) === day)) {
+          const rows = this.sectionRows(entry);
+          if (!rows.length) continue;
+          known++;
+          for (const row of rows) totals.set(row.key, (totals.get(row.key) ?? 0) + row.amountCents);
+        }
+        const sum = [...totals.values()].reduce((total, cents) => total + cents, 0);
+        return known >= 2 && totals.size > 1 && sum > 0 ? [...totals].map(([section, cents]) => ({section, share: cents / sum})) : null;
+      });
+      const order = Object.keys(config.sections);
+      for (const day of result.days) {
+        const split = shares[weekday(day.date)];
+        if (!split || !day.cents) continue;
+        const rows = split.map(row => ({section: row.section, label: Object.hasOwn(config.sections, row.section) ? config.sections[row.section] : row.section, cents: Math.round(day.cents! * row.share)}))
+          .sort((a, b) => (order.indexOf(a.section) + 1 || 99) - (order.indexOf(b.section) + 1 || 99) || a.section.localeCompare(b.section));
+        // Rounding goes to the largest section, so the parts add up to the day.
+        const largest = rows.reduce((top, row) => row.cents > top.cents ? row : top, rows[0]);
+        largest.cents += day.cents - rows.reduce((total, row) => total + row.cents, 0);
+        day.bySection = rows;
+      }
+    }
+    return result;
+  }
+
+  /** A day's revenue by section: POS bills, else the managers' report; none for a day known only from the imported history. */
+  private sectionRows(date: string): {key: string; amountCents: number}[] {
+    const bills = this.sql.exec<{key: string; amount_cents: number}>(`SELECT json_extract(json, '$.section') AS key, SUM(json_extract(json, '$.totalCents')) AS amount_cents
+      FROM records WHERE type='bill' AND business_date=? AND json_extract(json, '$.status') = 'closed' GROUP BY key`, date).toArray().map(row => ({key: row.key, amountCents: row.amount_cents}));
+    return bills.length ? bills
+      : this.sql.exec<{key: string; amount_cents: number}>("SELECT key, amount_cents FROM report_lines WHERE business_date=? AND kind='revenue_section'", date).toArray()
+        .map(row => ({key: row.key, amountCents: row.amount_cents}));
+  }
+
+  /** Events of the half year up to a day ranked by how many guests they drew against usual same weekdays (MCP, dashboard, briefing). */
+  private eventRanking(date: string): EventRank[] {
+    const outer = this.revenueMemo;
+    this.revenueMemo ??= new Map();
+    try { return rankEvents(this.eventReviews(addDays(date, -181), date)); } finally { this.revenueMemo = outer; }
+  }
+
+  /** The menu's changes over the 7 days up to a day (Monday message). */
+  private menuWeek(date: string): MenuWeek | null {
+    const rows = this.menuChangesBetween(addDays(date, -6), date, 500).rows;
+    if (!rows.length) return null;
+    // Newest first: an item priced twice in the week shows once, from its first old price to its latest one.
+    const prices = new Map<string, {name: string; oldText: string | null; newText: string | null}>();
+    for (const row of rows.filter(row => row.kind === 'price')) {
+      const seen = prices.get(row.itemId);
+      prices.set(row.itemId, seen ? {...seen, oldText: row.oldText} : {name: row.name, oldText: row.oldText, newText: row.newText});
+    }
+    return {prices: [...prices.values()],
+      added: rows.filter(row => row.kind === 'added').map(row => row.name), removed: rows.filter(row => row.kind === 'removed').map(row => row.name)};
   }
 
   /** Published events of the venue over a stretch of days, earliest first (public names and times only). */
@@ -1083,6 +1144,7 @@ export class TenantObject extends DurableObject<Env> {
   }
 
   private briefingFor(config: TenantConfig, date: string, incomplete: boolean, now = new Date()) {
+    const guestOutlook = this.guestOutlook(config, date, now);
     const planHistory = [7, 14, 21, 28].map(days => this.dayRevenue(addDays(date, -days))).filter((value): value is number => value !== null).map(revenueCents => ({revenueCents}));
     const briefing = buildBriefing({businessDate: date, config, bills: this.day<Bill>('bill', date), closings: this.day<CashClosing>('cash_closing', date),
       bottleChecks: this.day<BottleCheck>('bottle_check', date), planHistory, incomplete, report: this.report(date), notes: this.notes(date),
@@ -1094,7 +1156,10 @@ export class TenantObject extends DurableObject<Env> {
       week: weekday(date) === 0 ? this.week(date) : null, silent: this.silentSources(config, date, now),
       month: weekday(date) === 0 || addDays(date, 1).endsWith('-01') ? this.month(config, date) : null,
       lastWeekRevenueCents: this.dayRevenue(addDays(date, -7)), discountHistory: this.discountHistory(date),
-      ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast: this.forecast(date), pendingAhead: this.pendingAhead(config, date, now), events: this.todayEvents(config, addDays(date, 1)), guestOutlook: this.guestOutlook(config, date, now),
+      ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast: this.forecast(date), pendingAhead: this.pendingAhead(config, date, now), events: this.todayEvents(config, addDays(date, 1)), guestOutlook,
+      // The ranking only when it is shown: tips for weak days, and the message about a month's last day.
+      eventRanking: guestOutlook?.days.some(day => day.weak) || addDays(date, 1).endsWith('-01') ? this.eventRanking(date) : null,
+      menuWeek: weekday(date) === 0 ? this.menuWeek(date) : null,
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
       supplies: this.supplyBriefFor(config, date),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});

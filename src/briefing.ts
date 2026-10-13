@@ -52,6 +52,10 @@ export type Briefing = {
   web: {visits: number; withAction: number; lastWeekVisits: number | null; reservationsSent: number; reviewScans: number; topOrigins: {name: string; visits: number}[]} | null;
   /** The website far below its usual day (same weekday, 4 weeks): too few visits or no booking form sent. `null` = fine or unknown. */
   webDrop: {visits: number; usualVisits: number; sent: number; usualSent: number; lowVisits: boolean; noSent: boolean} | null;
+  /** Events of half a year ranked (for weak days and the message about a month's last day); `null` = not asked for. */
+  eventRanking: EventRank[] | null;
+  /** Changes of the menu over the week (Monday message); `null` = not asked for. */
+  menuWeek: MenuWeek | null;
   /** Reviews that reached the website's admin on the reported calendar day, and how many wait there. `null` = nothing sent. */
   reviews: {newCount: number; averageTenths: number | null; low: number; bySource: {name: string; newCount: number}[]; waiting: number; forManagement: number; failed: number} | null;
   /** The 7 days up to the reported day against the 7 before: sums only. `null` = not asked for. */
@@ -108,7 +112,9 @@ export type ForecastDay = {date: string; cents: number | null; guests: number; u
   /** Public events of the venue that day (names) and how much an event raises the day (1 = not known or no event). */
   events?: string[]; eventBoost?: number;
   /** A public holiday that day and how it usually changes the day (1 = no holiday or not known); rain that changes it (1 = none). */
-  holiday?: string | null; holidayFactor?: number; rainFactor?: number};
+  holiday?: string | null; holidayFactor?: number; rainFactor?: number;
+  /** The day's forecast split by section with the shares of the same weekday over 8 weeks (at least 2 days with sections). */
+  bySection?: {section: string; label: string; cents: number}[]};
 /** Revenue forecast; a part is `null` when a weekday it needs has under two weeks of revenue. */
 export type Forecast = {
   today: string;
@@ -132,6 +138,85 @@ export type Week = {from: string; to: string; current: WeekPart; previous: WeekP
   /** The week's events looked back on: guests booked that day (in the event's place) and revenue, against the same weekday without an event. */
   events?: EventReview[]};
 export type EventReview = {date: string; title: string; guests: number; usualGuests: number | null; revenueCents: number | null; usualRevenueCents: number | null};
+/**
+ * Events of half a year by name: how often, on which weekdays (0 = Sunday), guests booked in their place on average, and how much the
+ * guests and the day's revenue were against usual same weekdays without an event (1.5 = +50 %; `null` = nothing to compare with).
+ */
+export type EventRank = {title: string; count: number; weekdays: number[]; guests: number; usualGuests: number | null; guestLift: number | null; revenueLift: number | null; last: string;
+  /** The guests' lift on each weekday the event ran on (for the weak-day tip). */
+  byWeekday: {weekday: number; count: number; guestLift: number | null}[]};
+export function rankEvents(reviews: EventReview[]): EventRank[] {
+  const groups = new Map<string, EventReview[]>();
+  for (const review of reviews) {
+    const key = review.title.trim().toLocaleLowerCase('cs');
+    groups.set(key, [...(groups.get(key) ?? []), review]);
+  }
+  const ratio = (pairs: [number, number][]) => {
+    const base = pairs.reduce((sum, [, usual]) => sum + usual, 0);
+    return pairs.length && base > 0 ? Math.round(pairs.reduce((sum, [value]) => sum + value, 0) / base * 100) / 100 : null;
+  };
+  const guestRatio = (list: EventReview[]) => ratio(list.filter(review => review.usualGuests).map(review => [review.guests, review.usualGuests!]));
+  const average = (values: number[]) => Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+  return [...groups.values()].map(list => {
+    const sorted = [...list].sort((a, b) => a.date.localeCompare(b.date)), latest = sorted.at(-1)!;
+    const withUsual = list.filter(review => review.usualGuests);
+    const weekdays = [...new Set(list.map(review => weekday(review.date)))].sort((a, b) => a - b);
+    // Guests against usual over the same events, so the two numbers side by side compare like with like.
+    return {title: latest.title.trim(), count: list.length, weekdays,
+      guests: average((withUsual.length ? withUsual : list).map(review => review.guests)),
+      usualGuests: withUsual.length ? average(withUsual.map(review => review.usualGuests!)) : null,
+      guestLift: guestRatio(list),
+      revenueLift: ratio(list.filter(review => review.revenueCents !== null && review.usualRevenueCents).map(review => [review.revenueCents!, review.usualRevenueCents!])),
+      last: latest.date,
+      byWeekday: weekdays.map(day => {
+        const same = list.filter(review => weekday(review.date) === day);
+        return {weekday: day, count: same.length, guestLift: guestRatio(same)};
+      })};
+  }).sort((a, b) => (b.guestLift ?? -1) - (a.guestLift ?? -1) || (b.revenueLift ?? -1) - (a.revenueLift ?? -1) || b.count - a.count || a.title.localeCompare(b.title));
+}
+const lift = (value: number) => {
+  const percent = Math.round((value - 1) * 100);
+  return percent === 0 ? '±0 %' : `${percent > 0 ? '+' : '−'}${Math.abs(percent)} %`;
+};
+const rankValue = (rank: EventRank) => rank.guestLift ?? rank.revenueLift ?? 1;
+/** "Rock Night (4×, hosté +50 %, tržba +30 %)" */
+const rankText = (rank: EventRank) => `${rank.title} (${[`${rank.count}×`, rank.guestLift !== null ? `hosté ${lift(rank.guestLift)}` : '', rank.revenueLift !== null ? `tržba ${lift(rank.revenueLift)}` : ''].filter(Boolean).join(', ')})`;
+/** "Akce za půl roku: nejvíc táhne Rock Night (…) · Koncert (…) · nejméně Quiz (…)"; only events with something to compare (guests, else revenue). */
+export function renderEventRanking(ranking: EventRank[] | null | undefined): string[] {
+  const known = (ranking ?? []).filter(rank => rank.guestLift !== null || rank.revenueLift !== null);
+  const top = known.filter(rank => rankValue(rank) > 1).slice(0, 3);
+  const worst = known.filter(rank => rankValue(rank) < 1).sort((a, b) => rankValue(a) - rankValue(b))[0];
+  if (!top.length && !worst) return [];
+  return [`Akce za půl roku: ${[top.length ? `nejvíc táhne ${top.map(rankText).join(' · ')}` : 'žádná nepřivedla víc než obvyklý den', worst ? `nejméně ${rankText(worst)}` : ''].filter(Boolean).join(' · ')}`];
+}
+const weekdayIn = ['v neděli', 'v pondělí', 'v úterý', 've středu', 've čtvrtek', 'v pátek', 'v sobotu'];
+/** The event that brought the most guests on the day's weekday (at least twice there, at least +10 % against usual), as a tip for a weak day. */
+export function eventTip(ranking: EventRank[] | null | undefined, date: string): string {
+  const day = weekday(date);
+  const best = (ranking ?? []).map(rank => ({rank, there: rank.byWeekday.find(entry => entry.weekday === day)}))
+    .filter(({there}) => there && there.count >= 2 && there.guestLift !== null && there.guestLift >= 1.1)
+    .sort((a, b) => b.there!.guestLift! - a.there!.guestLift!)[0];
+  return best ? `, ${weekdayIn[day]} nejvíc táhla akce ${best.rank.title} (hosté ${lift(best.there!.guestLift!)})` : '';
+}
+
+/** Sections of a forecast day in whole thousands of crowns that add up to the day's rounded amount; sections under 1 000 Kč left out. */
+export function sectionThousands(cents: number, rows: {label: string; cents: number}[]): {label: string; cents: number}[] {
+  const step = 100000, rounded = rows.map(row => ({label: row.label, cents: Math.round(row.cents / step) * step}));
+  if (!rounded.length) return [];
+  const largest = rounded.reduce((top, row) => row.cents > top.cents ? row : top, rounded[0]);
+  largest.cents += Math.round(cents / step) * step - rounded.reduce((sum, row) => sum + row.cents, 0);
+  return rounded.filter(row => row.cents > 0);
+}
+
+/** Changes of the menu over the week (Monday message): new prices, new items and removed items. */
+export type MenuWeek = {prices: {name: string; oldText: string | null; newText: string | null}[]; added: string[]; removed: string[]};
+export function renderMenuWeek(week: MenuWeek | null | undefined): string[] {
+  if (!week || !(week.prices.length + week.added.length + week.removed.length)) return [];
+  const names = (list: string[]) => list.slice(0, 3).join(', ') + (list.length > 3 ? ` a další ${list.length - 3}` : '');
+  const parts = [week.prices.length ? `nová cena ${week.prices.length}× (${names(week.prices.map(row => `${row.name} ${row.oldText ?? '?'} → ${row.newText ?? '?'}`))})` : '',
+    week.added.length ? `nově ${names(week.added)}` : '', week.removed.length ? `zrušeno ${names(week.removed)}` : ''].filter(Boolean);
+  return [`Lístek za týden: ${parts.join(' · ')}`];
+}
 /** Parts of the day for the shifts: day 6–17 h, evening 17–22 h, night 22–6 h (local time of the booking's start). */
 export const DAY_PARTS = [{key: 'day', name: 'přes den'}, {key: 'evening', name: 'večer'}, {key: 'night', name: 'noc'}] as const;
 export type DayPart = typeof DAY_PARTS[number]['key'];
@@ -167,8 +252,8 @@ export function weakDays(outlook: Briefing['guestOutlook'] | undefined): GuestOu
   return (outlook?.days ?? []).filter(day => day.weak);
 }
 /** "so 18. 10. zatím 12 hostů (obvykle touhle dobou 30, −60 %)" */
-export const weakDaysText = (days: GuestOutlookDay[]) => days.map(day =>
-  `${weekdayShort[weekday(day.date)]} ${shortDate(day.date)} zatím ${day.booked} ${guestsWord(day.booked)} (obvykle touhle dobou ${day.usual}, ${change(day.booked, day.usual!).slice(2, -1)})`).join(' · ');
+export const weakDaysText = (days: GuestOutlookDay[], ranking?: EventRank[] | null) => days.map(day =>
+  `${weekdayShort[weekday(day.date)]} ${shortDate(day.date)} zatím ${day.booked} ${guestsWord(day.booked)} (obvykle touhle dobou ${day.usual}, ${change(day.booked, day.usual!).slice(2, -1)})${eventTip(ranking, day.date)}`).join(' · ');
 
 /** The website broke down: visits under half of the usual (at least 30 usually), or no booking form sent when at least 3 usually are. */
 export const WEB_DROP_MIN_VISITS = 30;
@@ -441,6 +526,7 @@ export function buildBriefing(input: {
   web?: WebTraffic; webLastWeek?: WebTraffic;
   /** Visits and sent booking forms of the same weekday over the 4 weeks before (days the website sent). */
   webUsual?: {visits: number; sent: number}[];
+  eventRanking?: EventRank[] | null; menuWeek?: MenuWeek | null;
   costs?: MonthResult | null; costsPrevious?: MonthResult | null; supplies?: SupplyBrief | null;
   reviews?: ReviewSummary;
   week?: Week | null; silent?: {name: string; since: string}[];
@@ -528,6 +614,8 @@ export function buildBriefing(input: {
     reservations: summarizeReservations(input.config, input.reservations ?? [], input.reservationsToday ?? []),
     web: summarizeWeb(input.web, input.webLastWeek),
     webDrop: webDrop(input.web, input.webUsual),
+    eventRanking: input.eventRanking ?? null,
+    menuWeek: input.menuWeek ?? null,
     reviews: summarizeReviews(input.reviews),
     costs: input.costs ?? null, costsPrevious: input.costsPrevious ?? null, supplies: input.supplies ?? null,
     week: input.week ?? null,
@@ -591,7 +679,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderEvents(briefing.events));
   lines.push(...renderGuestOutlook(briefing.guestOutlook));
   const weak = weakDays(briefing.guestOutlook);
-  if (weak.length) lines.push(`⚠ Slabší výhled: ${weakDaysText(weak)}`);
+  if (weak.length) lines.push(`⚠ Slabší výhled: ${weakDaysText(weak, briefing.eventRanking)}`);
   if (briefing.pendingAhead) lines.push(`Na příštích 7 dní ${pendingAheadText(briefing.pendingAhead)}`);
   if (noShowAlarm(briefing.noShows)) lines.push(`⚠ No-show: ${noShowText(briefing.noShows!)}`);
   lines.push(...renderForecast(briefing.forecast));
@@ -602,9 +690,11 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderSupplies(briefing.supplies));
   lines.push(...renderNotes(briefing));
   // The week in a few numbers once a week, in the message about Sunday (Monday morning).
-  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week));
+  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek));
   // The month so far once a week, and the whole month in the message about its last day (the 1st in the morning).
   lines.push(...renderMonth(briefing.month));
+  // Which events draw guests, once a month in the message about its last day.
+  if (addDays(briefing.businessDate, 1).endsWith('-01')) lines.push(...renderEventRanking(briefing.eventRanking));
   return lines.join('\n');
 }
 
@@ -807,7 +897,7 @@ export function renderForecast(forecast: Briefing['forecast']): string[] {
   const parts: string[] = [];
   const next = forecast.days?.[1];
   if (forecast.tomorrow.cents !== null) parts.push(`zítra (${weekdayShort[weekday(forecast.tomorrow.date)]} ${shortDate(forecast.tomorrow.date)}) ${thousands(forecast.tomorrow.cents)}`
-    + bracket(next) + (next?.weatherText ? `, ${next.weatherText}` : ''));
+    + bracket(next) + (next?.weatherText ? `, ${next.weatherText}` : '') + (next?.bySection?.length ? ` (${sectionThousands(next.cents ?? 0, next.bySection).map(row => `${row.label} ${crowns(row.cents)}`).join(', ')})` : ''));
   if (forecast.week.cents !== null) parts.push(`7 dní od dneška ${thousands(forecast.week.cents)}`);
   const month = forecast.month, missing = month.elapsedDays - month.actualDays;
   if (month.totalCents !== null) parts.push(`${monthName(month.month)} celkem ${thousands(month.totalCents)}`

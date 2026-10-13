@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, guestOutlookDay, median, weakDays, webDrop, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, rankEvents, renderEventRanking, eventTip, renderMenuWeek, sectionThousands, guestOutlookDay, median, weakDays, webDrop, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
@@ -565,6 +565,54 @@ test('events looked back on in the weekly summary', () => {
     {date: '2026-10-11', title: 'Brunch', guests: 1, usualGuests: null, revenueCents: 500000, usualRevenueCents: null},
   ]), ['Akce za týden: pá 9. 10. Rock Night – 120 hostů z rezervací (obvykle 80, +50 %), tržba 150 000 Kč (obvykle 100 000 Kč)'
     + ' · so 10. 10. Quiz – 30 hostů z rezervací (obvykle 40, −25 %) · ne 11. 10. Brunch – 1 host z rezervací, tržba 5 000 Kč']);
+});
+
+test('events of half a year ranked by guests drawn, the line at the month end, the tip for a weak day, the menu of the week', () => {
+  const review = (date: string, title: string, guests: number, usualGuests: number | null, revenueCents: number | null = null, usualRevenueCents: number | null = null) =>
+    ({date, title, guests, usualGuests, revenueCents, usualRevenueCents});
+  const ranking = rankEvents([
+    review('2026-09-12', 'Rock Night', 90, 60, 15000000, 10000000), review('2026-10-10', 'rock night ', 120, 80, 12000000, 10000000),
+    review('2026-10-07', 'Quiz', 30, 40), review('2026-10-01', 'Koncert', 50, 40), review('2026-10-02', 'Brunch', 10, null),
+    review('2026-09-05', 'Swing', 20, 40)]);
+  assert.deepEqual(ranking.map(rank => [rank.title, rank.count, rank.weekdays, rank.guests, rank.usualGuests, rank.guestLift, rank.revenueLift, rank.last]), [
+    ['rock night', 2, [6], 105, 70, 1.5, 1.35, '2026-10-10'], ['Koncert', 1, [4], 50, 40, 1.25, null, '2026-10-01'], ['Quiz', 1, [3], 30, 40, 0.75, null, '2026-10-07'],
+    ['Swing', 1, [6], 20, 40, 0.5, null, '2026-09-05'], ['Brunch', 1, [5], 10, null, null, null, '2026-10-02']], 'one name whatever the case, the latest spelling, nothing to compare last');
+  assert.deepEqual(renderEventRanking(ranking), ['Akce za půl roku: nejvíc táhne rock night (2×, hosté +50 %, tržba +35 %) · Koncert (1×, hosté +25 %) · nejméně Swing (1×, hosté −50 %)']);
+  assert.deepEqual(renderEventRanking(rankEvents([review('2026-10-07', 'Quiz', 30, 40), review('2026-10-08', 'Jam', 40, 40)])),
+    ['Akce za půl roku: žádná nepřivedla víc než obvyklý den · nejméně Quiz (1×, hosté −25 %)'], 'no "nejvíc" when nothing drew more; ±0 % is neither');
+  assert.match(renderEventRanking(rankEvents([review('2026-10-08', 'Jam', 201, 200), review('2026-10-07', 'Quiz', 30, 20)]))[0], /^Akce za půl roku: nejvíc táhne Quiz \(1×, hosté \+50 %\)$/, 'a lift that rounds to ±0 % is neither');
+  // The tip takes the lift on the weak day's weekday only, from at least two events there.
+  const mixed = rankEvents([review('2026-10-02', 'Party', 80, 50), review('2026-10-09', 'Party', 80, 50), review('2026-10-03', 'Party', 30, 50), review('2026-10-10', 'Party', 30, 50),
+    review('2026-09-26', 'Party', 30, 50)]);
+  assert.deepEqual(mixed[0].byWeekday, [{weekday: 5, count: 2, guestLift: 1.6}, {weekday: 6, count: 3, guestLift: 0.6}]);
+  assert.equal(eventTip(mixed, '2026-10-17'), '', 'Saturdays drew fewer');
+  assert.equal(eventTip(mixed, '2026-10-16'), ', v pátek nejvíc táhla akce Party (hosté +60 %)');
+  assert.equal(eventTip(rankEvents([review('2026-10-09', 'Once', 80, 50)]), '2026-10-16'), '', 'one event is not enough for a tip');
+  assert.deepEqual(renderEventRanking([]), []);
+  assert.equal(eventTip(ranking, '2026-10-17'), ', v sobotu nejvíc táhla akce rock night (hosté +50 %)');
+  assert.equal(eventTip(ranking, '2026-10-14'), '', 'Quiz on Wednesdays drew fewer');
+  const parts = (day: number, evening: number, night: number) => ({day, evening, night});
+  const usual = [{final: parts(0, 30, 0), early: parts(0, 20, 0)}, {final: parts(0, 30, 0), early: parts(0, 20, 0)}];
+  const input = {businessDate: '2026-10-31', config, bills: [], closings: [], planHistory: [], incomplete: false, eventRanking: ranking,
+    guestOutlook: {days: [guestOutlookDay('2026-11-07', parts(0, 12, 0), usual)]}};
+  const text = renderBriefing('Test', buildBriefing(input));
+  assert.match(text, /\n⚠ Slabší výhled: so 7\. 11\. zatím 12 hostů \(obvykle touhle dobou 20, −40 %\), v sobotu nejvíc táhla akce rock night \(hosté \+50 %\)(\n|$)/);
+  assert.match(text, /\nAkce za půl roku: nejvíc táhne rock night/, 'the last day of the month');
+  assert.doesNotMatch(renderBriefing('Test', buildBriefing({...input, businessDate: '2026-10-30'})), /Akce za půl roku/);
+  assert.ok(todoList(buildBriefing(input)).some(item => item.text.endsWith('v sobotu nejvíc táhla akce rock night (hosté +50 %)')));
+  assert.deepEqual(renderMenuWeek({prices: [{name: 'Burger', oldText: '289 Kč', newText: '309 Kč'}], added: ['Shake', 'Fries', 'Wings', 'Ribs'], removed: []}),
+    ['Lístek za týden: nová cena 1× (Burger 289 Kč → 309 Kč) · nově Shake, Fries, Wings a další 1']);
+  assert.deepEqual(renderMenuWeek({prices: [], added: [], removed: []}), []);
+  assert.deepEqual(renderMenuWeek(null), []);
+  const monday = buildBriefing({businessDate: '2026-10-11', config, bills: [], closings: [], planHistory: [], incomplete: false, menuWeek: {prices: [], added: [], removed: ['Quesadilla']}});
+  assert.match(renderBriefing('Test', monday), /\nLístek za týden: zrušeno Quesadilla(\n|$)/);
+});
+
+test('forecast by section: tomorrow\'s amount split in the morning line', () => {
+  const result = forecast({today: '2026-10-14', bases: Array(7).fill(10000000), seasonal: {}, monthActual: {cents: 0, days: 0}});
+  result.days![1].bySection = [{section: 'diner', label: 'Diner', cents: 3333333}, {section: 'bar', label: 'Bar', cents: 3333333}, {section: 'club', label: 'Klub', cents: 3333334}];
+  assert.match(renderForecast(result)[0], /^Odhad tržby: zítra \(čt 15\. 10\.\) 100 000 Kč \(Diner 34 000 Kč, Bar 33 000 Kč, Klub 33 000 Kč\) · 7 dní/, 'the parts add up to the rounded day');
+  assert.deepEqual(sectionThousands(10000000, [{label: 'Diner', cents: 9960000}, {label: 'Bar', cents: 40000}]), [{label: 'Diner', cents: 10000000}], 'under 1 000 Kč left out');
 });
 
 test('the same local clock time days before, across the end of summer time', () => {
