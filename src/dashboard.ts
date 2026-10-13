@@ -306,6 +306,7 @@ function menuCard(m) {
   const range = c => c.minCents === c.maxCents ? kc(c.minCents) : kc(c.minCents) + ' – ' + kc(c.maxCents);
   let h = '<div class="card"><h2>Jídelní a nápojový lístek</h2><div class="muted">' + m.items + (m.items === 1 ? ' položka' : m.items >= 2 && m.items <= 4 ? ' položky' : ' položek') + ' · ' + m.parts.map(p => esc(p.name.toLowerCase()) + ' ' + p.items).join(', ') + ' · z webu, naposledy ' + esc(m.received) + '</div>';
   h += '<h3>Změny za 30 dní</h3>' + (m.changes.length ? '<ul>' + m.changes.map(c => '<li>' + esc(short(c.date)) + ' <b>' + esc(c.name) + '</b>: ' + changeText(c) + '</li>').join('') + '</ul>' + (m.changesTotal > m.changes.length ? '<div class="muted">… a další ' + (m.changesTotal - m.changes.length) + '</div>' : '') : '<span class="muted">beze změn</span>');
+  if (m.problems && m.problems.length) h += '<div class="warn">' + m.problems.map(esc).join('<br>') + '</div>';
   const pc = m.priceCheck;
   h += '<h3>Ceny k prověření</h3>' + (pc.findings.length ? '<ul>' + pc.findings.map(f => '<li>' + (f.name ? '<b>' + esc(f.name) + '</b> ' + esc(f.priceText) : '<b>' + esc(f.category) + '</b>') +
     (f.name ? ' (' + esc(f.category) + ')' : '') + ': ' + esc(f.text) + '</li>').join('') + '</ul>' + (pc.total > pc.findings.length ? '<div class="muted">… a další ' + (pc.total - pc.findings.length) + '</div>' : '') : '<span class="muted">nic nápadného</span>');
@@ -326,6 +327,14 @@ function menuCard(m) {
     const pct = p => p === null ? '–' : (p > 0 ? '+' : '') + Math.round(p / 10) + ' %';
     h += '<h3>Změny cen jako pokus</h3><ul>' + m.experiments.map(e => '<li>' + esc(short(e.date)) + ' <b>' + esc(e.name) + '</b> ' + esc(e.oldText || '?') + ' → ' + esc(e.newText || '?') + ': ' +
       (e.status === 'no_history' ? '<span class="muted">málo prodejů před změnou</span>' : e.status === 'waiting' ? '<span class="muted">čeká na 7 dní prodeje</span>' : 'kusy za den ' + pct(e.quantityPermille) + ', tržba za den ' + pct(e.revenuePermille) + (e.status === 'running' ? ' <span class="muted">(zatím ' + e.after.days + ' dní)</span>' : '')) + '</li>').join('') + '</ul>';
+  }
+  const t = m.trend;
+  if (t && t.categories.length) {
+    const month = s => Number(s.slice(5)) + '/' + s.slice(2, 4);
+    const pct = p => p === null ? '' : (p > 0 ? '+' : '') + String(p / 10).replace('.', ',') + ' %';
+    h += '<details><summary>Vývoj cen po měsících</summary><div class="scroll"><table><tr><th>Kategorie</th>' + t.months.map(x => '<th class="n">' + esc(month(x)) + '</th>').join('') + '<th class="n">Změna</th></tr>' +
+      t.categories.map(c => '<tr><td>' + esc(c.name) + '</td>' + c.values.map(v => '<td class="n">' + (v === null ? '<span class="muted">–</span>' : kc(v)) + '</td>').join('') + '<td class="n">' + pct(c.changePermille) + '</td></tr>').join('') +
+      '</table></div>' + (t.months.length < 2 ? '<div class="muted">průměrná cena kategorie; další měsíce přibydou s dalšími lístky</div>' : '') + '</details>';
   }
   for (const p of m.parts) {
     h += '<details><summary>' + esc(p.name) + ' (' + p.items + ')</summary><div class="scroll"><table><tr><th>Kategorie</th><th class="n">Položek</th><th class="n">Cena od – do</th><th class="n">Průměr</th></tr>' +

@@ -823,6 +823,43 @@ try {
   const exportText = await exported.text();
   assert.ok(exportText.includes('"w1"') && !exportText.includes('Testovaci') && !exportText.includes('777000111') && !exportText.includes('Synteticky'));
 
+  // The menu's trend starts with the month of the menu; a day with changes has its line in the message (not Sunday's, that has the week).
+  const trendBoard = await (await jdBoard('GET', '/data', undefined, jdCookie)).json();
+  assert.deepEqual([trendBoard.menu.trend.months.length, trendBoard.menu.trend.categories.find(row => row.name === 'Burgery').values], [1, [24200]]);
+  const menuDayBrief = await (await call('GET', `/admin/t/james-dean/briefing?date=${today}`)).json();
+  if (new Date(today + 'T12:00:00Z').getUTCDay() !== 0) assert.match(menuDayBrief.text, /\nLístek se změnil: nová cena 2× .+ · nově Apple Pie · zrušeno Vodka X(\n|$)/);
+  // A menu without most of its items is held (a broken website?): the old one stays and the to-do list says so; a refused menu too.
+  assert.deepEqual(await (await jdIngest('batch-menu-held', [menu(5, [secondMenu.items[0]])])).json(), {batchId: 'batch-menu-held', accepted: 1, stale: 0});
+  assert.equal((await mcp('listek')).data.menu.items.length, 4, 'the old menu stays');
+  assert.equal((await jdIngest('batch-menu-bad', [menu(6, [{...secondMenu.items[0], part: 'club'}])])).status, 400);
+  const heldBoard = await (await jdBoard('GET', '/data', undefined, jdCookie)).json();
+  // Five menus refused: the four broken ones the contract tests sent earlier and this one.
+  assert.deepEqual(heldBoard.menu.problems.map(text => text.replace(/\(\w+\)/, '(…)')), ['Web poslal lístek bez 3 z 4 položek; OKO1 drží předchozí lístek a nový převezme ráno po 24 hodinách, jestli ho web mezitím neopraví.',
+    'Lístek z webu OKO1 5× odmítlo (…); platí poslední přijatý lístek.']);
+  assert.ok(heldBoard.todo.some(item => item.text.startsWith('Web poslal lístek bez 3 z 4 položek')));
+  // The same menu again is stale; a newer one still without the items replaces the held one, its 24 hours run from the first.
+  assert.deepEqual(await (await jdIngest('batch-menu-held-again', [menu(5, [secondMenu.items[0]])])).json(), {batchId: 'batch-menu-held-again', accepted: 0, stale: 1});
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(await (await jdIngest('batch-menu-held-7', [menu(7, [secondMenu.items[1]])])).json(), {batchId: 'batch-menu-held-7', accepted: 1, stale: 0});
+  // Nobody fixed it within 24 hours: the morning run takes the newest over, with its changes, from the business day of the release.
+  await call('POST', '/admin/t/james-dean/tick', {at: new Date(Date.now() + 24 * 3600000 - 10).toISOString()});
+  const released = (await mcp('listek')).data;
+  assert.deepEqual(released.menu.items.map(item => item.id), [secondMenu.items[1].id]);
+  const releaseLines = [];
+  for (const day of [today, addDays(today, 1), addDays(today, 2)]) {
+    const text = (await (await call('GET', `/admin/t/james-dean/briefing?date=${day}`)).json()).text;
+    if (/\nLístek (se změnil|za týden): [^\n]*zrušeno Apple Pie, Espresso, Classic/.test(text)) releaseLines.push(day);
+  }
+  assert.equal(releaseLines.length, 1);
+  assert.ok(releaseLines[0] > today, 'the removed items count from the day of the release');
+  // A website that fixes the menu within 24 hours: the full one replaces the held one and nothing is reported.
+  assert.equal((await (await jdIngest('batch-menu-8', [menu(8, secondMenu.items)])).json()).accepted, 1);
+  assert.equal((await (await jdIngest('batch-menu-9', [menu(9, [secondMenu.items[0]])])).json()).accepted, 1);
+  assert.equal((await mcp('listek')).data.menu.items.length, 4);
+  assert.equal((await (await jdIngest('batch-menu-10', [menu(10, secondMenu.items)])).json()).accepted, 1);
+  const fixedBoard = await (await jdBoard('GET', '/data', undefined, jdCookie)).json();
+  assert.ok(!fixedBoard.menu.problems.some(text => text.startsWith('Web poslal')));
+
   // Logging everybody out ends the MCP connection too: the access token and its refresh stop working.
   assert.deepEqual(await (await call('POST', '/admin/t/james-dean/logout', {})).json(), {ended: 2});
   assert.equal((await local('/mcp', {method: 'POST', headers: {...mcpHeaders, authorization: 'Bearer ' + tokens.access_token}, body: rpc(3, 'tools/list')})).status, 401);

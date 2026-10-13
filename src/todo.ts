@@ -38,6 +38,7 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   const mismatches = briefing.priceMismatches ?? [];
   if (mismatches.length) warn(`Cena v pokladně nesedí s lístkem: ${mismatches.slice(0, 3).map(mismatchText).join(', ')}${mismatches.length > 3 ? ` a další ${mismatches.length - 3}` : ''}`,
     Math.round(mismatches.reduce((sum, row) => sum + row.quantity * Math.abs(row.posCents - row.menuCents), 0)));
+  for (const text of briefing.menuProblems ?? []) warn(text);
   if (briefing.bottleCheckMissing) warn('Ranní kontrola lahví chybí.');
   for (const row of briefing.bottles?.losses ?? []) warn(`Manko ${row.name}: −${row.lossMl} ml (${crowns(row.lossCents)})`, row.lossCents);
   for (const point of briefing.notes?.points ?? []) items.push({level: point.kind === 'incident' || point.kind === 'problem' ? 'warn' : 'info', text: point.text, amountCents: point.amountCents});
