@@ -4,6 +4,7 @@ import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
 import {buildBriefing, type Briefing, eventFactor, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
+import {menuChanges, menuOverview} from './menu.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
 import {addDays, businessDate, isDate, localTime, weekday} from './time.ts';
@@ -12,7 +13,7 @@ import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
 import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
 import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
-import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Reservation, type ReviewSummary, type TenantConfig, type WebTraffic} from './validate.ts';
+import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
 import {dashboardWeb} from './web-views.ts';
 import {WEATHER_AGENT, WEATHER_URL, weatherDays, type WeatherDay} from './weather.ts';
@@ -114,6 +115,10 @@ export class TenantObject extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS forecast_log(for_date TEXT NOT NULL, horizon INTEGER NOT NULL, cents INTEGER NOT NULL, made_on TEXT NOT NULL, PRIMARY KEY(for_date, horizon));
       -- Weather forecast for the venue's location per local day (MET Norway), refreshed at most every 3 hours.
       CREATE TABLE IF NOT EXISTS weather(date TEXT PRIMARY KEY, json TEXT NOT NULL, fetched_at TEXT NOT NULL);
+      -- Every change of the menu (src/menu.ts): the price of an item on any day, for prices, food cost and experiments. Base price in haléře.
+      CREATE TABLE IF NOT EXISTS menu_changes(at TEXT NOT NULL, business_date TEXT NOT NULL, menu_id TEXT NOT NULL, item_id TEXT NOT NULL, name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('added','removed','price')), old_cents INTEGER, new_cents INTEGER, old_text TEXT, new_text TEXT);
+      CREATE INDEX IF NOT EXISTS menu_changes_item ON menu_changes(item_id, at);
     `));
     // Wrong codes for unknown venues are counted per venue name in the shared stand-in (see `loginStub`).
     if (!this.sql.exec<{name: string}>('PRAGMA table_info(login_failures)').toArray().some(column => column.name === 'scope')) {
@@ -278,7 +283,7 @@ export class TenantObject extends DurableObject<Env> {
       // "… a další 3" is not an item of its own: no switch.
       .map(item => item.text.startsWith('… a další') ? {...item, key: null, done: false} : {...item, key: todoKey(item.text), done: done.has(todoKey(item.text))});
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
-      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), sources: this.sources(config)});
+      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), sources: this.sources(config), menu: this.menuCard(config, day)});
   }
 
   /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
@@ -392,6 +397,7 @@ export class TenantObject extends DurableObject<Env> {
       let accepted = 0, stale = 0;
       // A booking first sent with counts only takes its guest details (12 Oct 2026) and the time it was made at the same version (resent once).
       for (const record of batch.records) {
+        const before = record.type === 'menu' ? this.menu(record.id) : null;
         const changed = this.sql.exec(`INSERT INTO records(type, id, version, business_date, register_id, json, installation_id, received_at) VALUES(?,?,?,?,?,?,?,?)
           ON CONFLICT(type, id) DO UPDATE SET version=excluded.version, business_date=excluded.business_date, register_id=excluded.register_id,
           json=excluded.json, installation_id=excluded.installation_id, received_at=excluded.received_at WHERE excluded.version > records.version
@@ -400,6 +406,13 @@ export class TenantObject extends DurableObject<Env> {
             AND (instr(excluded.json, '"guest":') > 0 OR instr(records.json, '"guest":') = 0))`,
         record.type, record.id, record.version, record.businessDate, 'registerId' in record ? record.registerId : '', JSON.stringify(record), batch.installationId, now).rowsWritten;
         if (changed) accepted++; else stale++;
+        // The first menu is the starting point; from then on every new item, removed item and new price is kept.
+        if (changed && before && record.type === 'menu') {
+          for (const change of menuChanges(before, record)) {
+            this.sql.exec('INSERT INTO menu_changes VALUES(?,?,?,?,?,?,?,?,?,?)', now, record.businessDate, record.id, change.itemId, change.name, change.kind,
+              change.oldCents, change.newCents, change.oldText, change.newText);
+          }
+        }
       }
       const result = {batchId: batch.batchId, accepted, stale};
       this.sql.exec('INSERT INTO batches VALUES(?,?,?,?,?)', batch.batchId, batch.installationId, payloadHash, JSON.stringify(result), now);
@@ -479,6 +492,40 @@ export class TenantObject extends DurableObject<Env> {
     } catch (error) {
       this.sql.exec("INSERT OR REPLACE INTO report_notes VALUES(?, 'failed', NULL, ?, ?)", date, String(error).slice(0, 200), now);
     }
+  }
+
+  /** The latest menu from one sender (`id`), or the latest of any sender. */
+  private menu(id?: string): Menu | null {
+    const row = this.sql.exec<{json: string}>(`SELECT json FROM records WHERE type='menu'${id ? ' AND id=?' : ''} ORDER BY received_at DESC LIMIT 1`, ...(id ? [id] : [])).toArray()[0];
+    return row ? JSON.parse(row.json) as Menu : null;
+  }
+
+  /** Changes of the menu between two days (inclusive), newest first, and how many there are in all. */
+  private menuChangesBetween(from: string, to: string, limit: number) {
+    const total = this.sql.exec<{count: number}>('SELECT count(*) AS count FROM menu_changes WHERE business_date BETWEEN ? AND ?', from, to).toArray()[0].count;
+    const rows = this.sql.exec<{business_date: string; item_id: string; name: string; kind: string; old_cents: number | null; new_cents: number | null; old_text: string | null; new_text: string | null}>(
+      'SELECT * FROM menu_changes WHERE business_date BETWEEN ? AND ? ORDER BY at DESC, rowid DESC LIMIT ?', from, to, limit).toArray()
+      .map(row => ({date: row.business_date, itemId: row.item_id, name: row.name, kind: row.kind, oldCents: row.old_cents, newCents: row.new_cents, oldText: row.old_text, newText: row.new_text}));
+    return {total, rows};
+  }
+
+  /** Dashboard: the menu by part and category, when it last arrived, and its changes over the 30 days up to the shown day and the day starting after it. */
+  private menuCard(config: TenantConfig, day: string) {
+    const menu = this.menu();
+    if (!menu) return null;
+    const received = this.sql.exec<{at: string}>("SELECT max(received_at) AS at FROM records WHERE type='menu'").toArray()[0].at;
+    const changes = this.menuChangesBetween(addDays(day, -29), addDays(day, 1), 30);
+    return {...menuOverview(menu), received: stamp(new Date(received), config.timeZone), changes: changes.rows, changesTotal: changes.total};
+  }
+
+  /** MCP: the whole current menu with every item and price, and its changes over the last year. */
+  posMenu() {
+    const config = this.config(), menu = this.menu();
+    if (!config || !menu) return null;
+    // Changes are dated by the Prague calendar day the menu was sent (docs/ingest-v1.md), not by the business day.
+    const today = localTime(new Date(), config.timeZone).date;
+    const changes = this.menuChangesBetween(addDays(today, -365), today, 2000);
+    return {menu, changes: changes.rows, changesTotal: changes.total};
   }
 
   private day<T>(type: string, date: string): T[] {
@@ -793,7 +840,7 @@ export class TenantObject extends DurableObject<Env> {
   /** Dashboard: every kind of sender and type of data with the time it last arrived, plus the last report and cost fetches. No content. */
   private sources(config: TenantConfig) {
     const at = (value: string | null) => value ? stamp(new Date(value), config.timeZone) : null;
-    const names: Record<string, string> = {bill: 'Účty z pokladny', cash_closing: 'Uzávěrky pokladen', bottle_check: 'Kontrola lahví', reservation: 'Rezervace', web_traffic: 'Návštěvnost webu', review_summary: 'Recenze', event: 'Akce podniku'};
+    const names: Record<string, string> = {bill: 'Účty z pokladny', cash_closing: 'Uzávěrky pokladen', bottle_check: 'Kontrola lahví', reservation: 'Rezervace', web_traffic: 'Návštěvnost webu', review_summary: 'Recenze', event: 'Akce podniku', menu: 'Jídelní a nápojový lístek'};
     const report = this.sql.exec<{at: string; found: number}>('SELECT at, found FROM report_fetches ORDER BY at DESC LIMIT 1').toArray()[0];
     const cost = this.sql.exec<{at: string; error: string | null}>('SELECT at, error FROM cost_fetches ORDER BY at DESC LIMIT 1').toArray()[0];
     return {

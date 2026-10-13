@@ -107,6 +107,12 @@ export function createServer(context: ToolContext): McpServer {
     });
   tool('ucty', 'Účty dne', 'Účty z pokladny za provozní den (uzavřené i stornované): položky, platby, slevy, storna, stůl, číšník. Částky v haléřích. Dokud neběží pokladna, bývá prázdné.', {datum: date},
     async ({datum}: {datum: string}) => isDate(datum) ? result(await context.venue.posBills(datum)) : badDate);
+  tool('listek', 'Jídelní a nápojový lístek', 'Celý aktuální jídelní a nápojový lístek z webu (jídlo, koktejly, nápoje): položky po kategoriích, popis, objem, ceny v haléřích ' +
+    '(pricesCents, první je základní, další jsou větší porce) a změny lístku za poslední rok (nové a zrušené položky, změny cen). Podklad pro ceny, food cost a výdělek po položkách.', {},
+  async () => {
+    const menu = await context.venue.posMenu();
+    return menu ? result(menu) : failed('Lístek zatím do OKO1 nedorazil.');
+  });
 
   // Web živě.
   tool('web_rezervace', 'Rezervace na webu', 'Rezervace z webu živě, se jmény, kontakty, poznámkami a stoly (p4 = stůl 4 v přízemí, kA = box A v klubu). ' +
