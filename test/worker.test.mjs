@@ -542,7 +542,7 @@ try {
   const menuMonday = await (await call('GET', `/admin/t/james-dean/briefing?date=${menuSunday}`)).json();
   assert.deepEqual([menuMonday.briefing.menuWeek.prices.length, menuMonday.briefing.menuWeek.added, menuMonday.briefing.menuWeek.removed], [2, ['Apple Pie'], ['Vodka X']]);
   assert.match(menuMonday.text, /\nLístek za týden: nová cena 2× \(.+ → .+\) · nově Apple Pie · zrušeno Vodka X(\n|$)/);
-  assert.match(menuMonday.text, /\nNa webu doplnit v lístku: popis nebo složení 2× \(Texas Burger, Apple Pie\)(\n|$)/);
+  assert.match(menuMonday.text, /\nNa webu opravit v lístku: chybí popis nebo složení 2× \(Texas Burger, Apple Pie\)(\n|$)/);
   assert.ok(menuMonday.briefing.menuGaps.total === 2 && !(await (await call('GET', `/admin/t/james-dean/briefing?date=${addDays(menuSunday, -1)}`)).json()).briefing.menuGaps, 'Mondays only');
   const local = (path, init = {}) => mf.dispatchFetch('http://localhost' + path, init);
 

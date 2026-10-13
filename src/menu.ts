@@ -212,17 +212,18 @@ export function repricing(menu: Menu, input: RepricingInput, sold: Map<string, {
   };
 }
 
-/** Something the website's menu should say and does not (or says twice differently), for the website's admin to fix. */
+/** Something the website's menu should say and does not (or one item at two prices), for the website's admin to fix. */
 export type MenuGap = {kind: 'description' | 'volume' | 'price'; part: MenuItem['part']; category: string; group: string | null; itemId: string; name: string; text: string};
-export const GAP_NAMES: Record<MenuGap['kind'], string> = {description: 'bez popisu', volume: 'bez objemu', price: 'dvě ceny'};
-/** Sides, sauces and extras need no description; coffee and tea are served in their cup, so no volume. */
-const NO_DESCRIPTION = /\b(priloh|omack|dresink|priplat|extra)/;
-const NO_VOLUME = /\b(kav|caj|horke|coffee|tea\b)/;
+/** Sides, sauces and extras need no description; coffee and hot tea are served in their cup, so no volume (iced tea has one). */
+const NO_DESCRIPTION = /\b(prilohy?|omacky?|dresinky?|priplatky?|extras?)\b/;
+const NO_VOLUME = /\b(kava|kavy|caj|caje|horke napoje|coffee|tea)\b/;
+const ICED = /\bledov/;
+const quote = (text: string, max = 80) => text.length > max ? `${text.slice(0, text.lastIndexOf(' ', max) > 40 ? text.lastIndexOf(' ', max) : max)} …` : text;
 
 /**
  * What to fix in the menu on the website: a dish or cocktail without a description (guests ask what is in it; a
  * cocktail lists its ingredients), a drink without its volume, and the same item (name, volume and description) at
- * two prices. Where an item of the same name elsewhere has a description, the finding says where to copy it from.
+ * two prices within one category. Where an item of the same name elsewhere has a description, it says where to copy it from.
  */
 export function menuGaps(menu: Menu): MenuGap[] {
   const found: MenuGap[] = [];
@@ -234,22 +235,24 @@ export function menuGaps(menu: Menu): MenuGap[] {
     // "Dorty – dle nabídky" changes every day: nothing fixed to describe.
     if (!item.description?.trim() && !/\bdle (denni )?nabidky\b/.test(nameKey(item.name)) && (item.part === 'cocktails' || (item.part === 'food' && !NO_DESCRIPTION.test(category)))) {
       const twin = menu.items.find(other => other !== item && other.description?.trim() && nameKey(other.name) === nameKey(item.name));
-      gap(item, 'description', `${item.part === 'cocktails' ? 'chybí složení' : 'chybí popis'}${twin ? ` (je u ${where(twin)}: „${twin.description!.trim().slice(0, 80)}“)` : ''}`);
+      gap(item, 'description', `${item.part === 'cocktails' ? 'chybí složení' : 'chybí popis'}${twin ? ` (převzít z ${where(twin)}: „${quote(twin.description!.trim())}“)` : ''}`);
     }
-    if (item.part === 'drinks' && item.volumeMl === null && !item.volume?.trim() && !NO_VOLUME.test(category)) gap(item, 'volume', 'chybí objem');
+    if (item.part === 'drinks' && item.volumeMl === null && !item.volume?.trim() && (!NO_VOLUME.test(category) || ICED.test(category))) gap(item, 'volume', 'chybí objem');
   }
-  // The same item twice (same name, volume and description) with other prices: one of them is a typo.
+  // The same item twice in one category (same name, volume and description) at other prices: one of them is a typo.
+  // Another category (an XXL jug for eight, a bottle) may sell the same drink at another price on purpose.
   const same = new Map<string, MenuItem[]>();
   for (const item of menu.items) {
-    const key = JSON.stringify([item.part, nameKey(item.name), item.volumeMl ?? item.volume ?? null, (item.description ?? '').trim().toLowerCase()]);
+    const key = JSON.stringify([item.part, item.category, item.group, nameKey(item.name), item.volumeMl ?? (item.volume ?? '').replace(/\s+/g, '').toLowerCase(), (item.description ?? '').trim().toLowerCase()]);
     same.set(key, [...(same.get(key) ?? []), item]);
   }
   for (const items of same.values()) {
-    if (new Set(items.map(item => item.pricesCents.join('/'))).size < 2) continue;
-    for (const item of items.slice(1)) gap(item, 'price', `stejná položka za ${priceText(items[0])} v ${where(items[0])} a za ${priceText(item)} v ${where(item)}`);
+    const prices = [...new Set(items.map(item => priceText(item)))];
+    if (prices.length < 2) continue;
+    gap(items[0], 'price', `v ${where(items[0])} dvakrát s jinou cenou: ${prices.join(' a ')}`);
   }
   const order = {price: 0, description: 1, volume: 2};
-  return found.sort((a, b) => order[a.kind] - order[b.kind] || menu.items.findIndex(item => item.id === a.itemId) - menu.items.findIndex(item => item.id === b.itemId));
+  return found.sort((a, b) => order[a.kind] - order[b.kind]);
 }
 
 export type PriceFinding = {

@@ -783,12 +783,20 @@ test('what to fix in the menu on the website: descriptions, volumes and one item
     dish('h', 'Přílohy', 'Hranolky', [8900]), dish('o', 'Omáčky', 'BBQ', [4500]), dish('d', 'Dezerty', 'Dorty - dle nabídky - 1 porce', [13000]),
     dish('m1', 'Caipirinhy', 'Mojito', [18900], {part: 'cocktails', description: 'rum, limetka, máta'}), dish('m2', 'XXL Drinky', 'Mojito', [157500], {part: 'cocktails'}),
     dish('e', 'Káva a horké nápoje', 'Espresso', [6200], {part: 'drinks'}), dish('t', 'Džusy', 'Džus', [7400], {part: 'drinks'}),
-    drink('p1', 'Plzeň', 500, 8900), drink('p2', 'Plzeň', 500, 9900), drink('p3', 'Plzeň', 300, 6500)]);
+    drink('p1', 'Plzeň', 500, 8900), drink('p2', 'Plzeň', 500, 9900), drink('p3', 'Plzeň', 300, 6500), drink('p4', 'Plzeň', 500, 8900),
+    dish('i', 'Domácí ledové čaje', 'Citrus Green Ice Tea', [7800], {part: 'drinks'})]);
   assert.deepEqual(menuGaps(menu).map(gap => [gap.kind, gap.itemId, gap.text]), [
-    ['price', 'p2', 'stejná položka za 89 Kč v Pivo a za 99 Kč v Pivo'],
+    ['price', 'p1', 'v Pivo dvakrát s jinou cenou: 89 Kč a 99 Kč'],
     ['description', 'b2', 'chybí popis'],
-    ['description', 'm2', 'chybí složení (je u Caipirinhy: „rum, limetka, máta“)'],
-    ['volume', 't', 'chybí objem']]);
+    ['description', 'm2', 'chybí složení (převzít z Caipirinhy: „rum, limetka, máta“)'],
+    ['volume', 't', 'chybí objem'], ['volume', 'i', 'chybí objem']]);
+  // After copying the description, the XXL jug for eight is another category: not a typo.
+  const copied = menuOf([dish('m1', 'Caipirinhy', 'Mojito', [18900], {part: 'cocktails', description: 'rum, limetka, máta'}),
+    dish('m2', 'XXL Drinky', 'Mojito', [157500], {part: 'cocktails', description: 'rum, limetka, máta'})]);
+  assert.deepEqual(menuGaps(copied), []);
+  const tea = (id: string, volume: string, cents: number) => dish(id, 'Ledové čaje', 'Ice Tea', [cents], {part: 'drinks', volume});
+  assert.deepEqual(menuGaps(menuOf([tea('a', '0,3 l', 7800), tea('b', '1 l', 24500), tea('c', '0,3 l', 8800)])).map(gap => gap.text), ['v Ledové čaje dvakrát s jinou cenou: 78 Kč a 88 Kč'],
+    'sizes by their volume text are not a typo');
   assert.deepEqual(menuGaps(menuOf([dish('b1', 'Burgery', 'Classic Burger', [22500], {description: 'hovězí'})])), []);
 });
 

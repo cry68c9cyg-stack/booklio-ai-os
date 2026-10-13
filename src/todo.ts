@@ -40,7 +40,7 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
     Math.round(mismatches.reduce((sum, row) => sum + row.quantity * Math.abs(row.posCents - row.menuCents), 0)));
   for (const text of briefing.menuProblems ?? []) warn(text);
   // Monday: the menu on the website lacks something guests read (not money, so after the warnings).
-  if (briefing.menuGaps?.total) items.push({level: 'info', text: `Na webu doplnit v lístku: ${menuGapsText(briefing.menuGaps)}`, amountCents: null});
+  if (briefing.menuGaps?.total) items.push({level: 'info', text: `Na webu opravit v lístku: ${menuGapsText(briefing.menuGaps)}`, amountCents: null});
   if (briefing.bottleCheckMissing) warn('Ranní kontrola lahví chybí.');
   for (const row of briefing.bottles?.losses ?? []) warn(`Manko ${row.name}: −${row.lossMl} ml (${crowns(row.lossCents)})`, row.lossCents);
   for (const point of briefing.notes?.points ?? []) items.push({level: point.kind === 'incident' || point.kind === 'problem' ? 'warn' : 'info', text: point.text, amountCents: point.amountCents});

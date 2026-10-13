@@ -272,12 +272,12 @@ export function renderPriceCheck(check: Briefing['priceCheck']): string[] {
   if (!check?.total) return [];
   return [`Ceny k prověření: ${check.total} (${check.top.slice(0, 2).map(row => `${row.name ?? row.category} ${row.priceText} → návrh ${crowns(row.suggestedCents)}`).join(', ')}${check.total > 2 ? ', další na dashboardu' : ''})`];
 }
-/** Monday: e.g. "Na webu doplnit: složení 8× (Virgin Mule, Virgin Cosmopolitan …), popis 1× (Dorty)". */
+/** Monday: e.g. "chybí popis nebo složení 8× (Virgin Mule, Virgin Cosmopolitan …), chybí objem 1× (Džus)". */
 export const menuGapsText = (gaps: NonNullable<Briefing['menuGaps']>) => gaps.kinds.map(row =>
   `${GAP_WORDS[row.kind]} ${row.count}× (${row.names.slice(0, 2).join(', ')}${row.count > 2 ? ' …' : ''})`).join(', ');
-const GAP_WORDS: Record<MenuGap['kind'], string> = {price: 'dvě ceny', description: 'popis nebo složení', volume: 'objem'};
+const GAP_WORDS: Record<MenuGap['kind'], string> = {price: 'rozdílná cena', description: 'chybí popis nebo složení', volume: 'chybí objem'};
 export function renderMenuGaps(gaps: Briefing['menuGaps']): string[] {
-  return gaps?.total ? [`Na webu doplnit v lístku: ${menuGapsText(gaps)}`] : [];
+  return gaps?.total ? [`Na webu opravit v lístku: ${menuGapsText(gaps)}`] : [];
 }
 export function renderMenuWeek(week: MenuWeek | null | undefined, title = 'Lístek za týden'): string[] {
   if (!week || !(week.prices.length + week.added.length + week.removed.length)) return [];
