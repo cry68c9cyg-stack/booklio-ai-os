@@ -13,7 +13,7 @@ import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-repo
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
 import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
-import {counted, overdueInvoices, priceRises, supplyBrief, supplySummary} from './supplies.ts';
+import {counted, drinkMargins, duplicateInvoices, overdueInvoices, priceRises, supplyBrief, supplySummary} from './supplies.ts';
 import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
 import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
@@ -617,7 +617,8 @@ export class TenantObject extends DurableObject<Env> {
   private supplyBriefFor(config: TenantConfig, date: string) {
     const year = this.invoices(config, addDays(date, -365), date);
     const unpaid = this.invoices(config, '', '', true).filter(invoice => !year.some(other => other.id === invoice.id));
-    return supplyBrief([...year, ...unpaid], date, this.revenueBetween(date.slice(0, 8) + '01', date));
+    const payoutsCents = this.reportSums('payout', date.slice(0, 8) + '01', date).reduce((sum, row) => sum + row.amountCents, 0);
+    return supplyBrief([...year, ...unpaid], date, this.revenueBetween(date.slice(0, 8) + '01', date), {payoutsCents, menu: this.menu()});
   }
 
   /** Dashboard: the month up to the shown day, rises over its 30 days, invoices overdue the day after, and which senders are off. */
@@ -625,9 +626,14 @@ export class TenantObject extends DurableObject<Env> {
     const year = this.invoices(config, addDays(day, -365), day);
     const overdue = overdueInvoices(this.invoices(config, '', '', true), addDays(day, 1));
     if (!year.length && !overdue.length) return null;
-    return {month: supplySummary(year, day.slice(0, 8) + '01', day, this.revenueBetween(day.slice(0, 8) + '01', day)),
-      rises: priceRises(year, addDays(day, -29), day).slice(0, 15), overdue: overdue.slice(0, 15), overdueCount: overdue.length,
-      overdueCents: overdue.reduce((sum, row) => sum + row.grossCents, 0), disabled: config.disabledSources};
+    const revenue = this.revenueBetween(day.slice(0, 8) + '01', day), month = supplySummary(year, day.slice(0, 8) + '01', day, revenue);
+    const payoutsCents = this.reportSums('payout', day.slice(0, 8) + '01', day).reduce((sum, row) => sum + row.amountCents, 0);
+    const menu = this.menu(), margins = menu ? drinkMargins(menu, year, day) : null;
+    return {month, rises: priceRises(year, addDays(day, -29), day).slice(0, 15), overdue: overdue.slice(0, 15), overdueCount: overdue.length,
+      overdueCents: overdue.reduce((sum, row) => sum + row.grossCents, 0), disabled: config.disabledSources,
+      duplicates: duplicateInvoices(year.filter(invoice => invoice.businessDate >= addDays(day, -34))).slice(0, 10),
+      result: revenue.revenueDays ? {revenueCents: revenue.revenueCents, purchasesCents: month.netCents, payoutsCents, resultCents: revenue.revenueCents - month.netCents - payoutsCents} : null,
+      margins: margins ? {rows: margins.margins.slice(0, 30), paired: margins.margins.length, unpaired: margins.unpaired} : null};
   }
 
   /** MCP: purchases over any stretch of days (at most 400) with price rises in it, invoices overdue today and the invoices themselves. */
@@ -636,7 +642,9 @@ export class TenantObject extends DurableObject<Env> {
     if (!config) return null;
     const history = this.invoices(config, addDays(from, -365), to), invoices = history.filter(invoice => invoice.businessDate >= from);
     const today = businessDate(new Date(), config.timeZone, config.businessDayCutoffHour);
+    const menu = this.menu();
     return {summary: supplySummary(invoices, from, to, this.revenueBetween(from, to)), rises: priceRises(history, from, to),
+      duplicates: duplicateInvoices(invoices), drinkMargins: menu ? drinkMargins(menu, history, to) : null,
       overdue: overdueInvoices(this.invoices(config, '', '', true), today), disabledSources: config.disabledSources,
       invoices: invoices.sort((a, b) => b.businessDate.localeCompare(a.businessDate)).slice(0, 1000), truncated: invoices.length > 1000};
   }

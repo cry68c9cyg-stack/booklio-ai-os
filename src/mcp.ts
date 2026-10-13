@@ -115,7 +115,7 @@ export function createServer(context: ToolContext): McpServer {
   });
 
   tool('naklady_dodavatele', 'Náklady a dodavatelé', 'Faktury dodavatelů za období (nejvýš 400 dní, zatím z Dishboardu, později z Pexesa): nákupy bez DPH po druzích (jídlo, nápoje, ostatní), kategoriích a dodavatelích, ' +
-    'food cost (jídlo a nápoje bez DPH k tržbám s DPH týchž dní, v promile), zdražení položek od 5 % proti předchozímu nákupu, faktury dnes po splatnosti a samotné faktury s položkami a cenami za jednotku. Částky v haléřích.',
+    'food cost (jídlo a nápoje bez DPH k tržbám s DPH týchž dní, v promile), zdražení položek od 5 % proti předchozímu nákupu, faktury dnes po splatnosti, možné duplicity (stejný dodavatel, den a částka), marže nápojů z lístku proti poslednímu nákupu (párování podle názvu) a samotné faktury s položkami a cenami za jednotku. Částky v haléřích.',
   {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
     const bad = badRange(od, until);
     if (bad) return bad;

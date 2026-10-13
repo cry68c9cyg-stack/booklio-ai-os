@@ -691,6 +691,7 @@ try {
   assert.deepEqual([supplies.summary.invoices, supplies.summary.netCents, supplies.summary.byKind], [1, 51590, [{kind: 'food', name: 'jídlo', netCents: 51590}]]);
   assert.deepEqual(supplies.rises.map(rise => [rise.name, rise.oldCents, rise.newCents, rise.permille, rise.extraCents]), [['Borůvky 125 g', 4070, 5159, 268, 10890]]);
   assert.deepEqual(supplies.overdue.map(row => [row.number, row.days]), [['2026-118', 1]]);
+  assert.deepEqual([supplies.duplicates, supplies.drinkMargins.margins, supplies.drinkMargins.unpaired], [[], [], 0], 'no drink on the menu has a poured volume');
   // The switch: a sender in disabledSources is left out everywhere, its data stays stored.
   assert.equal((await call('PUT', '/admin/t/james-dean/config', {...jdConfig, disabledSources: ['dishboard']})).status, 200);
   const off = (await mcp('naklady_dodavatele', {od: addDays(today, -6), do: today})).data;

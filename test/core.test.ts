@@ -5,11 +5,11 @@ import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts'
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
-import {counted, overdueInvoices, priceRises, renderSupplies, supplyBrief, supplySummary, unitPrice} from '../src/supplies.ts';
+import {counted, drinkMargins, duplicateInvoices, litresPerUnit, overdueInvoices, priceRises, renderSupplies, risesBySupplier, supplyBrief, supplySummary, unitPrice} from '../src/supplies.ts';
 import {weatherDays, weatherText} from '../src/weather.ts';
 import {businessDate, sameClockDaysBefore} from '../src/time.ts';
 import {czechHolidays, easterSunday, holidayName} from '../src/holidays.ts';
-import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type SupplierInvoice, type TenantConfig, type WebTraffic} from '../src/validate.ts';
+import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Menu, type Reservation, type SupplierInvoice, type TenantConfig, type WebTraffic} from '../src/validate.ts';
 
 const config: TenantConfig = {
   name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9],
@@ -680,9 +680,46 @@ test('supplier invoices: costs by kind, food cost, price rises, overdue invoices
     'Nákupy od 1. 10. do 7. 10. (faktury, bez DPH): 1 438 Kč · jídlo 1 138 Kč · nápoje 300 Kč · food cost 14,4 % z tržeb s DPH',
     '⚠ Zdražení za 7 dní: limety / ks (Makro) 100,00 → 110,00 Kč (+10 %)',
     '⚠ Faktury po splatnosti: 1 za 990 Kč (nejstarší Makro, 990 Kč, splatná 5. 10. (3 dny))',
+    'Provozní výsledek od 1. 10.: tržby 10 000 Kč − nákupy 1 438 Kč = 8 562 Kč (hrubý odhad, bez mezd mimo kasu a režií)',
   ]);
   assert.equal(supplyBrief([], '2026-10-07', {revenueCents: 0, revenueDays: 0}), null);
   const todo = todoList({...buildBriefing({businessDate: '2026-10-07', config, bills: [], closings: [], planHistory: [], incomplete: false}), supplies: brief});
   assert.deepEqual(todo.filter(row => /Zdražení|splatnosti/.test(row.text)).map(row => [row.text.slice(0, 30), row.amountCents]),
     [['Faktura po splatnosti: Makro, ', 99000], ['Zdražení: limety / ks (Makro) ', 2000]]);
+});
+
+test('profit and margins: duplicates, rises per supplier, litres from names, drink margins and the Monday lines', () => {
+  const invoice = (id: string, businessDate: string, items: SupplierInvoice['items'], extra: Partial<SupplierInvoice> = {}): SupplierInvoice => ({type: 'supplier_invoice', id, version: 1,
+    businessDate, source: 'dishboard', supplier: 'Nápoje s.r.o.', supplierId: null, number: null, dueDate: null, paidDate: null, status: 'active',
+    netCents: items.reduce((sum, item) => sum + item.netCents, 0), grossCents: 121000, kind: 'beverage', category: null, items, ...extra});
+  const item = (name: string, unitPriceCents: number, unit: string | null = 'ks', quantity = 6) => ({name, quantity, unit, unitPriceCents, netCents: unitPriceCents * quantity, kind: null, category: null});
+  // Duplicates: same supplier, day and amount; two different invoice numbers are two real invoices.
+  const a = invoice('a', '2026-10-10', []), b = invoice('b', '2026-10-10', [], {supplier: ' nápoje S.R.O.'});
+  assert.deepEqual(duplicateInvoices([a, b]).map(row => [row.count, row.grossCents]), [[2, 121000]]);
+  assert.deepEqual(duplicateInvoices([{...a, number: '1'}, {...b, number: '2'}]), []);
+  assert.deepEqual(duplicateInvoices([a, {...b, grossCents: 1}]), []);
+  assert.deepEqual(risesBySupplier([{date: '2026-10-10', supplier: 'A', name: 'x', unit: null, oldCents: 1, newCents: 2, permille: 1000, extraCents: 300},
+    {date: '2026-10-11', supplier: 'B', name: 'y', unit: null, oldCents: 1, newCents: 2, permille: 1000, extraCents: 500},
+    {date: '2026-10-11', supplier: 'A', name: 'z', unit: null, oldCents: 1, newCents: 2, permille: 1000, extraCents: 400}]), [{supplier: 'A', items: 2, extraCents: 700}, {supplier: 'B', items: 1, extraCents: 500}]);
+  assert.deepEqual([litresPerUnit('Rum X 0,7 l', 'ks'), litresPerUnit('Pivo 50L', 'sud'), litresPerUnit('Sirup 700 ml', null), litresPerUnit('Vodka', 'l'), litresPerUnit('Limety', 'kg')], [0.7, 50, 0.7, 1, null]);
+  // Margins: price without 21 % VAT against the poured volume at the latest purchase whose name holds the drink's words.
+  const menu: Menu = {type: 'menu', id: 'menu-web', version: 1, businessDate: '2026-10-10', source: 'web', notes: [], items: [
+    {id: 'rum', part: 'drinks', category: 'Destiláty', group: 'Rum', name: 'Rum Diplomático', description: null, volume: '0,04 l', volumeMl: 40, pricesCents: [12100], tip: false},
+    {id: 'gin', part: 'drinks', category: 'Destiláty', group: 'Gin', name: 'Gin Bombay', description: null, volume: '0,04 l', volumeMl: 40, pricesCents: [9000], tip: false},
+    {id: 'burger', part: 'food', category: 'Burgery', group: null, name: 'Rum Burger', description: null, volume: null, volumeMl: 40, pricesCents: [20000], tip: false},
+  ]};
+  const purchases = [invoice('p1', '2026-09-01', [item('DIPLOMATICO RUM 0,7L', 70000)]), invoice('p2', '2026-10-05', [item('Diplomatico Rum Reserva 0,7 l', 63000)]),
+    invoice('p3', '2026-10-20', [item('Diplomatico Rum 0,7 l', 1000)])];
+  const margins = drinkMargins(menu, purchases, '2026-10-10');
+  assert.equal(margins.unpaired, 1, 'the gin has no purchase, food is never paired');
+  assert.deepEqual(margins.margins.map(row => [row.name, row.purchase.date, row.purchase.perLitreCents, row.priceNetCents, row.costCents, row.marginCents, row.marginPermille]),
+    [['Rum Diplomático', '2026-10-05', 90000, 10000, 3600, 6400, 640]], 'latest purchase up to the day, accents aside');
+  // The Monday message (about Sunday 11. 10.) has the rises per supplier and the lowest margins; the result line needs revenue.
+  const brief = supplyBrief([...purchases, a, b], '2026-10-11', {revenueCents: 5000000, revenueDays: 11}, {payoutsCents: 300000, menu})!;
+  assert.deepEqual(brief.result, {revenueCents: 5000000, purchasesCents: 63000 * 6 + 70000 * 0, payoutsCents: 300000, resultCents: 5000000 - 378000 - 300000});
+  const lines = renderSupplies(brief);
+  assert.ok(lines.includes('⚠ Možná duplicitní faktury: Nápoje s.r.o. 2× 1 210 Kč (10. 10.)'), lines.join('\n'));
+  assert.ok(lines.includes('Provozní výsledek od 1. 10.: tržby 50 000 Kč − nákupy 3 780 Kč − výplaty z kasy 3 000 Kč = 43 220 Kč (hrubý odhad, bez mezd mimo kasu a režií)'), lines.join('\n'));
+  assert.ok(lines.includes('Nejnižší marže nápojů: Rum Diplomático 0,04 l: 64 % (prodej 100 Kč bez DPH, nákup 36 Kč)'), lines.join('\n'));
+  assert.equal(supplyBrief(purchases, '2026-10-10', {revenueCents: 0, revenueDays: 0})!.weekly, null, 'weekly lines only about a Sunday');
 });

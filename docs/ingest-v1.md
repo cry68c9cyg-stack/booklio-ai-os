@@ -212,8 +212,11 @@ OKO1 z faktur počítá:
 - **nákupy** za měsíc do vykazovaného dne bez DPH po druzích, kategoriích a dodavatelích a **food cost** = jídlo a nápoje bez DPH k tržbám s DPH týchž dní (tržby bez DPH OKO1 nezná, protože jídlo a nápoje mají různé sazby);
 - **zdražení**: položka stejného dodavatele se stejným názvem (bez ohledu na velikost písmen a mezery) a jednotkou, jejíž cena za jednotku je o 5 % a víc nad předchozím nákupem; levnější další nákup zdražení ruší. Ranní zpráva a seznam k vyřízení berou 7 dní do vykazovaného dne, dashboard 30 dní, porovnává se s nákupy za rok;
 - **faktury po splatnosti**: nezaplacené, splatnost před dnem, který začíná po vykazovaném.
+- **možné duplicity**: stejný dodavatel (bez ohledu na velikost písmen a mezery), den a částka s DPH pod různými `id` za 35 dní; dvě různá čísla faktur jsou dvě skutečné faktury;
+- **provozní výsledek** měsíce do vykazovaného dne: tržby s DPH − nákupy bez DPH − výplaty z kasy podle deníku manažerů (hrubý odhad bez mezd mimo kasu a režií);
+- **marže nápojů**: nápoj z lístku (`menu`) s objemem (`volumeMl`) se spáruje s posledním nákupem do dne, jehož název obsahuje všechna slova názvu nápoje (bez diakritiky, velikosti písmen a objemu). Nákupní cena za litr = cena za jednotku / litry v jednotce (jednotka `l`, `ml`, `cl`, nebo objem v názvu, např. „0,7 l“); prodejní cena bez 21 % DPH; marže = (prodej − nákup nalitého objemu) / prodej. Párování podle názvu je odhad, dashboard ukazuje, podle kterého nákupu se počítalo.
 
-Ranní zpráva má řádek nákupů s food costem, nejvýš tři nejdražší zdražení a souhrn faktur po splatnosti; seznam k vyřízení každé zdražení (váha = o kolik víc nákup stál) a každou fakturu po splatnosti; dashboard kartu „Náklady a dodavatelé“; MCP server nástroj `naklady_dodavatele(od, do)`.
+Ranní zpráva má řádek nákupů s food costem, nejvýš tři nejdražší zdražení, souhrn faktur po splatnosti, možné duplicity a provozní výsledek měsíce; v pondělí (zpráva o neděli) navíc zdražení za týden podle dodavatelů a tři nápoje s nejnižší marží. Seznam k vyřízení má každé zdražení (váha = o kolik víc nákup stál), každou fakturu po splatnosti a každou možnou duplicitu; dashboard kartu „Náklady a dodavatelé“ (s provozním výsledkem a tabulkou marží nápojů); MCP server nástroj `naklady_dodavatele(od, do)` (i s duplicitami a maržemi nápojů).
 
 ## Kdy posílat
 

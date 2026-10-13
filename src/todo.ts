@@ -1,5 +1,5 @@
 import {weekday} from './time.ts';
-import {overdueText, riseText} from './supplies.ts';
+import {duplicateText, overdueText, riseText} from './supplies.ts';
 import {CASH_DIFFERENCE_CENTS, crowns, mismatch, noShowAlarm, noShowText, pendingAheadText, reviewDrop, reviewDropText, unusual, weakDays, weakDaysText, webDropText, type Briefing} from './briefing.ts';
 
 export type TodoItem = {level: 'warn' | 'info'; text: string; amountCents: number | null};
@@ -33,6 +33,7 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   // Supplier invoices: each price rise of the week (weighted by what it cost on that purchase) and each overdue invoice.
   for (const rise of briefing.supplies?.rises ?? []) warn(`Zdražení: ${riseText(rise)}`, rise.extraCents);
   for (const row of briefing.supplies?.overdue ?? []) warn(`Faktura po splatnosti: ${overdueText(row)}`, row.grossCents);
+  for (const row of briefing.supplies?.duplicates ?? []) warn(`Možná duplicitní faktura: ${duplicateText(row)}`, row.grossCents);
   if (briefing.bottleCheckMissing) warn('Ranní kontrola lahví chybí.');
   for (const row of briefing.bottles?.losses ?? []) warn(`Manko ${row.name}: −${row.lossMl} ml (${crowns(row.lossCents)})`, row.lossCents);
   for (const point of briefing.notes?.points ?? []) items.push({level: point.kind === 'incident' || point.kind === 'problem' ? 'warn' : 'info', text: point.text, amountCents: point.amountCents});
