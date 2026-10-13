@@ -328,6 +328,7 @@ function menuCard(m) {
     h += '<h3>Změny cen jako pokus</h3><ul>' + m.experiments.map(e => '<li>' + esc(short(e.date)) + ' <b>' + esc(e.name) + '</b> ' + esc(e.oldText || '?') + ' → ' + esc(e.newText || '?') + ': ' +
       (e.status === 'no_history' ? '<span class="muted">málo prodejů před změnou</span>' : e.status === 'waiting' ? '<span class="muted">čeká na 7 dní prodeje</span>' : 'kusy za den ' + pct(e.quantityPermille) + ', tržba za den ' + pct(e.revenuePermille) + (e.status === 'running' ? ' <span class="muted">(zatím ' + e.after.days + ' dní)</span>' : '')) + '</li>').join('') + '</ul>';
   }
+  h += '<h3>Položka v čase</h3><form id="itemForm" class="row"><input id="itemQuery" maxlength="100" placeholder="název, např. texas burger" autocomplete="off"><button>Ukázat</button></form><div id="itemBox"></div>';
   const t = m.trend;
   if (t && t.categories.length) {
     const month = s => Number(s.slice(5)) + '/' + s.slice(2, 4);
@@ -475,6 +476,42 @@ function webCard(c) {
     esc([r.zdroj, r.datum].filter(Boolean).join(', ')) + '</span><br>' + esc(r.text) + '</li>').join('') + '</ul>';
   return h + '</div>';
 }
+// One item over 26 weeks: price at the end of each week and pieces sold, as bars.
+async function loadItem(query, id) {
+  const box = $('itemBox');
+  if (!box) return;
+  const r = await fetch(base + '/item?q=' + encodeURIComponent(query) + (id ? '&id=' + encodeURIComponent(id) : '')).catch(() => null);
+  if (r && r.status === 401) { $('app').hidden = true; $('login').hidden = false; return; }
+  const t = r && r.ok ? await r.json().catch(() => null) : null;
+  if (!t) { box.innerHTML = '<p class="warn">Položku teď nejde načíst.</p>'; return; }
+  if (!t.item) { box.innerHTML = '<p class="muted">Žádná položka lístku neodpovídá.</p>'; return; }
+  const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.';
+  const most = Math.max(1, ...t.weeks.map(w => w.quantity));
+  let h = (t.matches.length > 1 ? '<div class="muted">' + t.matches.map(x => x.itemId === t.item.itemId ? '<b>' + esc(x.name) + (x.volume ? ' ' + esc(x.volume) : '') + '</b>'
+    : '<a href="#" data-item="' + esc(x.itemId) + '">' + esc(x.name) + (x.volume ? ' ' + esc(x.volume) : '') + '</a>').join(' · ') + '</div>' : '') +
+    '<div><b>' + esc(t.item.name) + '</b> ' + esc(t.item.price) + ' <span class="muted">(' + esc(t.item.category) + ')</span></div>';
+  // Bars = pieces per week, the line = price at the week's end (its own scale); SVG attributes pass the page's style policy.
+  const W = 520, H = 140, bw = W / t.weeks.length, prices = t.weeks.map(w => w.priceCents).filter(p => p !== null);
+  const low = prices.length ? Math.min(...prices) * 0.9 : 0, high = prices.length ? Math.max(...prices) * 1.05 : 1, py = p => H - 20 - (p - low) / Math.max(1, high - low) * (H - 30);
+  let bars = '', line = '', labels = '';
+  t.weeks.forEach((w, i) => {
+    const bh = Math.max(0, w.quantity) / most * (H - 30), x = i * bw;
+    bars += '<rect x="' + (x + 1) + '" y="' + (H - 20 - bh) + '" width="' + (bw - 2) + '" height="' + bh + '" fill="var(--bar)"><title>' + esc(short(w.week) + ': ' + w.quantity + ' ks, ' + kc(w.grossCents) + ', cena ' + kc(w.priceCents)) + '</title></rect>';
+    if (w.priceCents !== null) line += (line ? ' L' : 'M') + (x + 1) + ' ' + py(w.priceCents) + ' L' + (x + bw - 1) + ' ' + py(w.priceCents);
+    if (i % 4 === 0) labels += '<text x="' + x + '" y="' + (H - 6) + '" font-size="10" fill="var(--muted)">' + esc(short(w.week)) + '</text>';
+  });
+  h += '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Cena a prodej po týdnech">' + bars + '<path d="' + line + '" fill="none" stroke="var(--plan)" stroke-width="2"/>' + labels + '</svg>' +
+    '<div class="muted">sloupce = prodané kusy za týden, čára = cena</div>';
+  const changed = t.weeks.filter((w, i) => i && w.priceCents !== t.weeks[i - 1].priceCents);
+  if (changed.length) h += '<div>Změny ceny: ' + changed.map(w => esc(short(w.week)) + ' ' + kc(w.priceCents)).join(', ') + '</div>';
+  h += t.hasSales ? '' : '<div class="muted">prodej se ukáže s účty z pokladny</div>';
+  box.innerHTML = h;
+  box.querySelectorAll('a[data-item]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); loadItem(query, a.dataset.item); }));
+}
+// The search sits in the menu card, which is drawn again with each day; its submit bubbles up to the content.
+$('content').onsubmit = e => {
+  if (e.target && e.target.id === 'itemForm') { e.preventDefault(); const q = $('itemQuery').value.trim(); if (q) loadItem(q, null); }
+};
 async function loadWeb() {
   const box = $('web');
   const r = await fetch(base + '/web').catch(() => null);

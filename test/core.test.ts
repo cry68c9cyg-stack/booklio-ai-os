@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, rankEvents, renderEventRanking, eventTip, renderMenuWeek, renderMenuMonth, renderPriceCheck, renderPriceMismatches, sectionThousands, guestOutlookDay, median, weakDays, webDrop, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, rankEvents, renderEventRanking, eventTip, renderMenuWeek, renderMenuMonth, renderSlowSellers, renderPriceResults, renderPriceCheck, renderPriceMismatches, sectionThousands, guestOutlookDay, median, weakDays, webDrop, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
@@ -610,6 +610,17 @@ test('events of half a year ranked by guests drawn, the line at the month end, t
     ['Lístek v říjnu: zdraženo 4, zlevněno 1, přidáno 3 · průměrná cena proti září: Burgery +4 %, Koktejly −2 %']);
   assert.deepEqual(renderMenuMonth({month: '2026-01', up: 0, down: 0, added: 0, removed: 1, categories: []}), ['Lístek v lednu: zrušeno 1']);
   assert.deepEqual(renderMenuMonth(null), []);
+  assert.deepEqual(renderSlowSellers({month: '2026-10', items: [{name: 'Chai', quantity: 0}, {name: 'Grappa 0,04 l', quantity: 1}, ...['A', 'B', 'C', 'D'].map(name => ({name, quantity: 2}))]}),
+    ['Skoro neprodané v říjnu (kandidáti na vyřazení z lístku): Chai 0×, Grappa 0,04 l 1×, A 2×, B 2×, C 2× a další 1']);
+  assert.deepEqual(renderSlowSellers(null), []);
+  const experiment = (name: string, oldText: string, newText: string, quantityPermille: number, revenuePermille: number) => ({date: '2026-09-01', itemId: name, name, oldText, newText,
+    before: {days: 28, quantity: 100, grossCents: 1}, after: {days: 28, quantity: 90, grossCents: 1}, quantityPermille, revenuePermille, status: 'done' as const});
+  assert.deepEqual(renderPriceResults([experiment('Texas Burger', '245 Kč', '259 Kč', -80, 30), experiment('Cola', '74 Kč', '79 Kč', -150, -95), experiment('Pivo', '95 Kč', '89 Kč', 120, 50)]),
+    ['Změny cen po 4 týdnech: Texas Burger 245 Kč → 259 Kč: kusů −8 %, tržba +3 % denně (zdražení se vyplatilo); Cola 74 Kč → 79 Kč: kusů −15 %, tržba −10 % denně (tržba klesla, vyplatilo se jen při velkém food costu); Pivo 95 Kč → 89 Kč: kusů +12 %, tržba +5 % denně']);
+  // A larger size up is a rise too; a change under half a per cent shows as 0 %.
+  assert.deepEqual(renderPriceResults([experiment('Burger', '225 / 255 Kč', '225 / 269 Kč', 40, -4)]), ['Změny cen po 4 týdnech: Burger 225 / 255 Kč → 225 / 269 Kč: kusů +4 %, tržba 0 % denně']);
+  assert.deepEqual(renderPriceResults([experiment('Burger', '225 / 255 Kč', '225 / 269 Kč', 40, 25)]), ['Změny cen po 4 týdnech: Burger 225 / 255 Kč → 225 / 269 Kč: kusů +4 %, tržba +3 % denně (zdražení se vyplatilo)']);
+  assert.deepEqual(renderPriceResults([]), []);
   const monday = buildBriefing({businessDate: '2026-10-11', config, bills: [], closings: [], planHistory: [], incomplete: false, menuWeek: {prices: [], added: [], removed: ['Quesadilla']}});
   assert.match(renderBriefing('Test', monday), /\nLístek za týden: zrušeno Quesadilla(\n|$)/);
 });

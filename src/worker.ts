@@ -773,6 +773,39 @@ export class TenantObject extends DurableObject<Env> {
       })};
   }
 
+  /** Price changes whose 28 days after ended in the week up to a Sunday (Monday message): how they sold before and after. */
+  private priceResults(date: string) {
+    // Only the changes 27–33 days back can have ended their 28 days this week, so only their bills are read.
+    return this.priceExperiments(date, 2000, {from: addDays(date, -33)}).filter(entry => entry.status === 'done' && entry.revenuePermille !== null
+      && addDays(entry.date, 27) >= addDays(date, -6) && addDays(entry.date, 27) <= date);
+  }
+
+  /**
+   * Menu items that barely sold over a month (at most 2 pieces), for the message about its last day: only items on the
+   * menu the whole month (not added in it) and with a price, and only when the POS sent bills on at least 14 days of it.
+   */
+  private slowSellers(month: string, through: string) {
+    const menu = this.menu();
+    const days = this.sql.exec<{days: number}>("SELECT count(DISTINCT business_date) AS days FROM records WHERE type='bill' AND business_date BETWEEN ? AND ?", `${month}-01`, through).toArray()[0].days;
+    if (!menu || days < 14) return null;
+    const sold = new Map<string, number>();
+    let all = 0, paired = 0;
+    for (const sale of this.itemSales(`${month}-01`, through)) {
+      const pairing = pairSale(menu, sale);
+      all += sale.grossCents;
+      if (pairing) { sold.set(pairing.itemId, (sold.get(pairing.itemId) ?? 0) + sale.quantity); paired += sale.grossCents; }
+    }
+    // When the POS names do not pair well with the menu, a missing sale may only be a missing pair: no list then.
+    if (!all || paired < all * 0.9) return null;
+    // Items added since the month began (also after it) are too new; a size whose other sizes sold may only be booked under them.
+    const fresh = this.newMenuItems(`${month}-01`, '9999-12-31');
+    const soldNames = new Set(menu.items.filter(item => (sold.get(item.id) ?? 0) > 2).map(item => nameKey(item.name)));
+    const items = menu.items.filter(item => item.pricesCents[0] > 0 && !fresh.has(item.id) && (sold.get(item.id) ?? 0) <= 2 && !soldNames.has(nameKey(item.name)))
+      .map(item => ({name: item.name + (item.volume ? ` ${item.volume}` : ''), quantity: Math.round((sold.get(item.id) ?? 0) * 10) / 10}))
+      .sort((a, b) => a.quantity - b.quantity || a.name.localeCompare(b.name, 'cs'));
+    return items.length ? {month, items} : null;
+  }
+
   /** The menu over a month for the message about its last day: changes, and the average price per category against the month before. */
   private menuMonth(month: string): MenuMonth | null {
     const rows = this.menuChangesBetween(`${month}-01`, `${month}-31`, 5000).rows;
@@ -845,34 +878,18 @@ export class TenantObject extends DurableObject<Env> {
    * (not before the first POS bill) against the days after it (up to 28, until the day). One read of the bills for all
    * changes; only once the POS sends bills; newest first.
    */
-  private priceExperiments(day: string, limit: number, only?: {from: string; itemIds: string[]}) {
+  private priceExperiments(day: string, limit: number, only?: {from: string; itemIds?: string[]}) {
     const menu = this.menu();
     const first = this.sql.exec<{d: string | null}>("SELECT min(business_date) AS d FROM records WHERE type='bill'").toArray()[0].d;
     if (!menu || !first) return [];
     // `only`: the changes of some items from a day on (the price history of one item), so the bills read cover just those.
     const changes = this.sql.exec<{business_date: string; item_id: string; name: string; old_text: string | null; new_text: string | null}>(
-      `SELECT business_date, item_id, name, old_text, new_text FROM menu_changes WHERE kind='price' AND business_date BETWEEN ? AND ?${only ? ` AND item_id IN (${only.itemIds.map(() => '?').join(',')})` : ''}
+      `SELECT business_date, item_id, name, old_text, new_text FROM menu_changes WHERE kind='price' AND business_date BETWEEN ? AND ?${only?.itemIds ? ` AND item_id IN (${only.itemIds.map(() => '?').join(',')})` : ''}
         ORDER BY business_date DESC, rowid DESC LIMIT ?`,
-      only ? only.from : addDays(day, -365), day, ...(only ? only.itemIds : []), limit).toArray();
+      only ? only.from : addDays(day, -365), day, ...(only?.itemIds ?? []), limit).toArray();
     if (!changes.length) return [];
     const from = addDays(changes.map(change => change.business_date).sort()[0], -28);
-    const daily = this.sql.exec<{date: string; name: string; quantity: number; gross_cents: number}>(`
-      SELECT b.date, json_extract(i.value, '$.name') AS name, sum(json_extract(i.value, '$.quantity')) AS quantity, sum(json_extract(i.value, '$.totalCents') * b.paid) AS gross_cents
-      FROM (SELECT r.business_date AS date, r.json AS bill, coalesce(json_extract(r.json, '$.totalCents') * 1.0
-          / nullif((SELECT sum(json_extract(l.value, '$.totalCents')) FROM json_each(r.json, '$.items') l), 0), 1) AS paid
-        FROM records r WHERE r.type='bill' AND r.business_date BETWEEN ? AND ? AND json_extract(r.json, '$.status') = 'closed') b, json_each(b.bill, '$.items') i
-      GROUP BY 1, 2`, from, day).toArray();
-    // Each product name is paired once; then the windows are sums over the days.
-    const totals = new Map<string, {quantity: number; grossCents: number}>(), byItem = new Map<string, {date: string; quantity: number; grossCents: number}[]>();
-    for (const row of daily) {
-      const total = totals.get(row.name) ?? {quantity: 0, grossCents: 0};
-      totals.set(row.name, {quantity: total.quantity + row.quantity, grossCents: total.grossCents + row.gross_cents});
-    }
-    const paired = new Map([...totals].map(([name, total]) => [name, pairSale(menu, {name, ...total})?.itemId ?? null]));
-    for (const row of daily) {
-      const itemId = paired.get(row.name);
-      if (itemId) byItem.set(itemId, [...(byItem.get(itemId) ?? []), {date: row.date, quantity: row.quantity, grossCents: row.gross_cents}]);
-    }
+    const byItem = this.dailyItemSales(menu, from, day);
     const window = (itemId: string, start: string, end: string) => {
       const rows = (byItem.get(itemId) ?? []).filter(row => row.date >= start && row.date <= end);
       return {days: end < start ? 0 : Math.round((Date.parse(end) - Date.parse(start)) / 86400000) + 1,
@@ -884,6 +901,58 @@ export class TenantObject extends DurableObject<Env> {
       return priceExperiment({date: change.business_date, itemId: change.item_id, name: change.name, oldText: change.old_text, newText: change.new_text},
         window(change.item_id, beforeStart, addDays(change.business_date, -1)), after);
     });
+  }
+
+  /** Pieces and revenue per day and menu item over some days (closed bills, each product name paired with the menu once). */
+  private dailyItemSales(menu: Menu, from: string, to: string) {
+    const daily = this.sql.exec<{date: string; name: string; quantity: number; gross_cents: number}>(`
+      SELECT b.date, json_extract(i.value, '$.name') AS name, sum(json_extract(i.value, '$.quantity')) AS quantity, sum(json_extract(i.value, '$.totalCents') * b.paid) AS gross_cents
+      FROM (SELECT r.business_date AS date, r.json AS bill, coalesce(json_extract(r.json, '$.totalCents') * 1.0
+          / nullif((SELECT sum(json_extract(l.value, '$.totalCents')) FROM json_each(r.json, '$.items') l), 0), 1) AS paid
+        FROM records r WHERE r.type='bill' AND r.business_date BETWEEN ? AND ? AND json_extract(r.json, '$.status') = 'closed') b, json_each(b.bill, '$.items') i
+      GROUP BY 1, 2`, from, to).toArray();
+    const totals = new Map<string, {quantity: number; grossCents: number}>(), byItem = new Map<string, {date: string; quantity: number; grossCents: number}[]>();
+    for (const row of daily) {
+      const total = totals.get(row.name) ?? {quantity: 0, grossCents: 0};
+      totals.set(row.name, {quantity: total.quantity + row.quantity, grossCents: total.grossCents + row.gross_cents});
+    }
+    const paired = new Map([...totals].map(([name, total]) => [name, pairSale(menu, {name, ...total})?.itemId ?? null]));
+    for (const row of daily) {
+      const itemId = paired.get(row.name);
+      if (itemId) byItem.set(itemId, [...(byItem.get(itemId) ?? []), {date: row.date, quantity: row.quantity, grossCents: row.gross_cents}]);
+    }
+    return byItem;
+  }
+
+  /**
+   * Dashboard: one menu item over 26 weeks (Monday to Sunday, the last one up to today): its base price at the end of each
+   * week and the pieces and revenue sold. `query` = words of the name; `itemId` picks one of the matches (else the first).
+   */
+  posItemTrend(query: string, itemId: string | null) {
+    const config = this.config(), menu = this.menu();
+    if (!config || !menu) return null;
+    const key = nameKey(query);
+    const matches = key ? menu.items.filter(item => nameKey(`${item.name} ${item.group ?? ''}`).includes(key)).slice(0, 20) : [];
+    const item = matches.find(entry => entry.id === itemId) ?? matches[0];
+    const list = matches.map(entry => ({itemId: entry.id, name: entry.name, volume: entry.volume, price: priceText(entry)}));
+    if (!item) return {query, matches: list, item: null, weeks: []};
+    const today = businessDate(new Date(), config.timeZone, config.businessDayCutoffHour);
+    const monday = addDays(today, -((weekday(today) + 6) % 7)), first = addDays(monday, -25 * 7);
+    const changes = this.sql.exec<{business_date: string; old_cents: number | null}>("SELECT business_date, old_cents FROM menu_changes WHERE item_id=? AND kind='price' AND business_date > ? ORDER BY business_date, rowid",
+      item.id, first).toArray();
+    // Weeks that ended before the item came onto the menu have no price.
+    const added = this.sql.exec<{d: string | null}>("SELECT max(business_date) AS d FROM menu_changes WHERE item_id=? AND kind='added'", item.id).toArray()[0].d;
+    const sales = this.dailyItemSales(menu, first, today).get(item.id) ?? [];
+    const weeks = Array.from({length: 26}, (_, index) => {
+      const start = addDays(first, index * 7), end = [addDays(start, 6), today].sort()[0];
+      // The price at the end of the week: the old price of the first change after it, else today's.
+      const later = changes.find(change => change.business_date > end);
+      const rows = sales.filter(row => row.date >= start && row.date <= end);
+      return {week: start, priceCents: added && end < added ? null : later ? later.old_cents : item.pricesCents[0],
+        quantity: Math.round(rows.reduce((sum, row) => sum + row.quantity, 0) * 1000) / 1000, grossCents: Math.round(rows.reduce((sum, row) => sum + row.grossCents, 0))};
+    });
+    return {query, matches: list, item: {itemId: item.id, name: item.name, category: item.category, volume: item.volume, price: priceText(item)}, weeks,
+      hasSales: sales.length > 0};
   }
 
   /** MCP: menu engineering over some days and how the price changes of the year went. */
@@ -1478,7 +1547,8 @@ export class TenantObject extends DurableObject<Env> {
       ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast: this.forecast(date), pendingAhead: this.pendingAhead(config, date, now), events: this.todayEvents(config, addDays(date, 1)), guestOutlook,
       // The ranking only when it is shown: tips for weak days, and the message about a month's last day.
       eventRanking: guestOutlook?.days.some(day => day.weak) || addDays(date, 1).endsWith('-01') ? this.eventRanking(date) : null,
-      menuWeek: weekday(date) === 0 ? this.menuWeek(date) : null, menuMonth: addDays(date, 1).endsWith('-01') ? this.menuMonth(date.slice(0, 7)) : null, menuDay: weekday(date) === 0 ? null : this.menuWeek(date, 1), priceMismatches: this.priceMismatchesOn(date),
+      menuWeek: weekday(date) === 0 ? this.menuWeek(date) : null, menuMonth: addDays(date, 1).endsWith('-01') ? this.menuMonth(date.slice(0, 7)) : null,
+      slowSellers: addDays(date, 1).endsWith('-01') ? this.slowSellers(date.slice(0, 7), date) : null, priceResults: weekday(date) === 0 ? this.priceResults(date) : [], menuDay: weekday(date) === 0 ? null : this.menuWeek(date, 1), priceMismatches: this.priceMismatchesOn(date),
       menuProblems: this.menuProblems(now),
       priceCheck: weekday(date) === 0 ? this.priceCheckSummary() : null,
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
@@ -1648,6 +1718,13 @@ async function dashboard(request: Request, env: Env, tenant: string, action: str
   if (action === 'web' && request.method === 'GET') {
     if (!known || !await stub.validSession(cookie(request))) return json(failure('UNAUTHORIZED', 401));
     return json(ok({card: await webCard(env, tenant, stub)}));
+  }
+  // One menu item over half a year: price and sales by week (the search in the menu card).
+  if (action === 'item' && request.method === 'GET') {
+    if (!known || !await stub.validSession(cookie(request))) return json(failure('UNAUTHORIZED', 401));
+    const params = new URL(request.url).searchParams, query = (params.get('q') ?? '').slice(0, 100), id = params.get('id');
+    const trend = await stub.posItemTrend(query, id ? id.slice(0, 200) : null);
+    return json(trend ? ok(trend) : failure('NOT_FOUND', 404));
   }
   if (request.method !== 'POST' || !['login', 'verify', 'logout', 'todo'].includes(action ?? '')) return json(failure('NOT_FOUND', 404));
   // Only same-site JSON posts: a form on another site cannot send them.
