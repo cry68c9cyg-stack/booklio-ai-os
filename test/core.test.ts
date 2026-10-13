@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, rankEvents, renderEventRanking, eventTip, renderMenuWeek, renderMenuMonth, renderSlowSellers, renderPriceResults, renderPriceCheck, renderPriceMismatches, sectionThousands, guestOutlookDay, median, weakDays, webDrop, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, rankEvents, renderEventRanking, eventTip, renderMenuWeek, renderMenuMonth, renderSlowSellers, renderPriceResults, renderPriceCheck, renderPriceMismatches, sectionThousands, guestOutlookDay, median, weakDays, webDrop, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, sumMenuInterest, renderMenuInterest, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
@@ -217,6 +217,36 @@ test('website traffic: a short line against last week, top origins only with vis
     'Web: 1 250 návštěv (před týdnem 1 500, −17 %), 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0', 'Odkud: B 900 · A 5']);
   assert.deepEqual(renderWeb(summarizeWeb({...day, visits: 3, origins: []}, undefined)), ['Web: 3 návštěvy, 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0']);
   assert.deepEqual(renderWeb(summarizeWeb({...day, visits: 1, origins: []}, {...day, visits: 0})), ['Web: 1 návštěva (před týdnem 0), 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0']);
+});
+
+test('menu interest on the website: weekly sums of the days that carry it, the Monday line', () => {
+  const menu = (visits: number, abroad: number, reserved: number, languages: [string, number, number][]) =>
+    ({views: {food: visits * 2, drinks: visits}, visits, abroad, reserved, languages: languages.map(([key, v, r]) => ({key, visits: v, reserved: r}))});
+  const day = (businessDate: string, value?: ReturnType<typeof menu>) => ({businessDate, ...(value ? {menu: value} : {})});
+  const days = [day('2026-10-05', menu(100, 60, 3, [['en', 50, 2], ['cs', 40, 1], ['de', 10, 0]])), day('2026-10-05', menu(999, 0, 0, [])), day('2026-10-06'),
+    day('2026-10-07', menu(20, 10, 1, [['de', 10, 0], ['cs', 10, 1]])), day('2026-10-12', menu(1, 1, 1, []))];
+  const week = sumMenuInterest(days, '2026-10-05', '2026-10-11');
+  assert.deepEqual(week, {from: '2026-10-05', to: '2026-10-11', days: 2, visits: 120, abroad: 70, reserved: 4, food: 240, drinks: 120,
+    languages: [{key: 'cs', visits: 50, reserved: 2}, {key: 'en', visits: 50, reserved: 2}, {key: 'de', visits: 20, reserved: 0}]}, 'the first record of a day only, a day without menu not counted');
+  assert.deepEqual(renderMenuInterest({current: week, previous: sumMenuInterest([], '2026-09-28', '2026-10-04')}),
+    ['Lístek na webu za týden (2 dny s daty): otevřelo si ho 120 návštěv, 58 % ze zahraničí; jazyk webu česky 42 %, anglicky 42 %, německy 17 %; z nich rezervaci poslaly 4 (3,3 %)']);
+  const full = {...week, days: 7}, before = {...week, days: 7, visits: 100};
+  assert.match(renderMenuInterest({current: full, previous: before})[0], /^Lístek na webu za týden: otevřelo si ho 120 návštěv \(\+20 % proti minulému týdnu\), /);
+  assert.match(renderMenuInterest({current: {...full, visits: 3, abroad: 0, reserved: 0, languages: [{key: 'neznamy', visits: 3, reserved: 0}]}, previous: {...before, days: 6}})[0], /^Lístek na webu za týden: otevřely si ho 3 návštěvy, 0 % ze zahraničí; z nich rezervaci poslalo 0 \(0,0 %\)$/);
+  assert.deepEqual(renderMenuInterest({current: sumMenuInterest([day('2026-10-06')], '2026-10-05', '2026-10-11'), previous: before}), []);
+  assert.deepEqual(renderMenuInterest(null), []);
+  const config = validateConfig({name: 'Test', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9], registers: ['bar'], sections: {bar: 'Bar'}, recipients: []});
+  const sunday = (date: string) => renderBriefing('Test', buildBriefing({businessDate: date, config, bills: [], closings: [], planHistory: [], incomplete: false, menuInterest: {current: full, previous: before}}));
+  assert.match(sunday('2026-10-11'), /\nLístek na webu za týden: /);
+  // Validation: the field is optional, counts only.
+  const traffic = {type: 'web_traffic', id: 'web-2026-10-05', version: 1, businessDate: '2026-10-05', visits: 5, visitsWithAction: 0, origins: [], actions: {}, reviewScans: 0};
+  const batch = (record: unknown) => ({batchId: 'batch-0001', installationId: 'booklio-web', records: [record]});
+  assert.equal('menu' in validateBatch(batch(traffic)).records[0], false, 'stored only when sent');
+  assert.deepEqual((validateBatch(batch({...traffic, menu: menu(3, 1, 0, [['en', 3, 0]])})).records[0] as WebTraffic).menu, menu(3, 1, 0, [['en', 3, 0]]));
+  for (const bad of [{...menu(3, 1, 0, []), views: {food: 1}}, {...menu(3, 1, 0, []), visits: -1}, {...menu(3, 1, 0, []), country: 'DE'},
+    menu(3, 1, 0, Array.from({length: 11}, (_, i) => [`l${i}`, 1, 0] as [string, number, number])), menu(3, 1, 0, [['bad key', 1, 0]])]) {
+    assert.throws(() => validateBatch(batch({...traffic, menu: bad})), InputError);
+  }
 });
 
 test('reviews: counts only, one line with the average and weak ones, nothing when all is quiet, weak ones in the to-do list', () => {

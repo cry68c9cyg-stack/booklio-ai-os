@@ -109,7 +109,7 @@ Prázdný řetězec znamená totéž co `null`. Neznámé pole v `guest` dávku 
 
 Doplněno 12. 10. 2026 zpětně kompatibilně. Web posílá každou hodinu souhrn za včerejšek a dnešek (pražský kalendářní den 0:00–24:00, ne provozní den do 6:00); vyšší `version` (čas odeslání v ms) den přepíše. Jen součty, nic o jednotlivých návštěvnících ani hostech.
 
-`{type: "web_traffic", id, version, businessDate, visits, visitsWithAction, origins, actions, reviewScans}`
+`{type: "web_traffic", id, version, businessDate, visits, visitsWithAction, origins, actions, reviewScans, menu?}`
 
 | Pole | Typ | Poznámka |
 |---|---|---|
@@ -119,6 +119,19 @@ Doplněno 12. 10. 2026 zpětně kompatibilně. Web posílá každou hodinu souhr
 | `origins` | pole ≤ 50 `{key, name, visits, withAction}` | odkud návštěvy přišly (skupiny webu, např. `google`, `instagram`, `qr`), `name` je český název |
 | `actions` | objekt `{akce: počet}`, ≤ 100 klíčů | počet návštěv s danou akcí, např. `rezervace-otevrena`, `rezervace-odeslana`, `telefon` |
 | `reviewScans` | int ≥ 0 | skeny QR kódu na stole s odkazem na hodnocení na Googlu |
+| `menu` | volitelný objekt `{views, visits, abroad, reserved, languages}` | zájem o lístek na webu (doplněno 13. 10. 2026 zpětně kompatibilně, viz níže) |
+
+Pole `menu` (jen součty za den):
+
+| Pole | Typ | Poznámka |
+|---|---|---|
+| `views` | `{food, drinks}`, int ≥ 0 | kolikrát se zobrazil jídelní lístek (`food`) a nápojový lístek (`drinks`) |
+| `visits` | int ≥ 0 | návštěvy, které si otevřely jídelní nebo nápojový lístek |
+| `abroad` | int ≥ 0 | z nich návštěvy ze známé země mimo Česko |
+| `reserved` | int ≥ 0 | z nich návštěvy, které v téže návštěvě poslaly rezervaci |
+| `languages` | pole ≤ 10 `{key, visits, reserved}` | totéž podle jazyka webu (`cs`, `en`, `de`, …), nejčastější první |
+
+OKO1 musí `menu` přijímat dřív, než ho web začne posílat (neznámé pole by celou dávku odmítlo). Den bez `menu` se do zájmu o lístek nepočítá. Pondělní zpráva ukáže týden (návštěvy s lístkem proti minulému týdnu, jen když oba týdny mají 7 dní dat, podíl ze zahraničí, tři nejčastější jazyky a rezervace), dashboard kartu „Zájem o lístek na webu (12 týdnů)“ a MCP nástroj `tyden_mesic_trendy` pole `menuInterest`.
 
 Ranní zpráva ukáže den proti stejnému dni před týdnem, odeslané rezervace, skeny QR a tři nejčastější zdroje; dashboard totéž jako kartu „Návštěvnost webu“. Pondělní týdenní souhrn sečte `origins` za 7 dní (návštěvy a `withAction` podle `key`).
 

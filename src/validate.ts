@@ -62,6 +62,12 @@ export function withoutGuest<T extends IngestRecord>(record: T): T {
 export type WebTraffic = {
   type: 'web_traffic'; id: string; version: number; businessDate: string; visits: number; visitsWithAction: number;
   origins: {key: string; name: string; visits: number; withAction: number}[]; actions: Record<string, number>; reviewScans: number;
+  /** Interest in the menu that day: page views by part, visits that opened it, of them from abroad and with a sent reservation, and by language. */
+  menu?: WebMenuInterest;
+};
+export type WebMenuInterest = {
+  views: {food: number; drinks: number}; visits: number; abroad: number; reserved: number;
+  languages: {key: string; visits: number; reserved: number}[];
 };
 /**
  * Reviews that reached the website's admin (Google, TripAdvisor) on one Prague calendar day, and how many wait there:
@@ -266,7 +272,7 @@ function venueEvent(raw: Obj): VenueEvent {
 
 const COUNT_MAX = 10_000_000;
 function webTraffic(raw: Obj): WebTraffic {
-  const value = object(raw, ['type', 'id', 'version', 'businessDate', 'visits', 'visitsWithAction', 'origins', 'actions', 'reviewScans']);
+  const value = object(raw, ['type', 'id', 'version', 'businessDate', 'visits', 'visitsWithAction', 'origins', 'actions', 'reviewScans'], ['menu']);
   const actions = object(value.actions, [], Object.keys((value.actions ?? {}) as Obj));
   if (Object.keys(actions).length > 100) fail();
   return {
@@ -278,6 +284,20 @@ function webTraffic(raw: Obj): WebTraffic {
     }),
     actions: Object.fromEntries(Object.entries(actions).map(([key, count]) => [id(key), int(count, 0, COUNT_MAX)])),
     reviewScans: int(value.reviewScans, 0, COUNT_MAX),
+    ...(value.menu == null ? {} : {menu: webMenuInterest(value.menu)}),
+  };
+}
+
+function webMenuInterest(raw: unknown): WebMenuInterest {
+  const value = object(raw, ['views', 'visits', 'abroad', 'reserved', 'languages']);
+  const views = object(value.views, ['food', 'drinks']);
+  return {
+    views: {food: int(views.food, 0, COUNT_MAX), drinks: int(views.drinks, 0, COUNT_MAX)},
+    visits: int(value.visits, 0, COUNT_MAX), abroad: int(value.abroad, 0, COUNT_MAX), reserved: int(value.reserved, 0, COUNT_MAX),
+    languages: list(value.languages, 10, item => {
+      const language = object(item, ['key', 'visits', 'reserved']);
+      return {key: id(language.key), visits: int(language.visits, 0, COUNT_MAX), reserved: int(language.reserved, 0, COUNT_MAX)};
+    }),
   };
 }
 

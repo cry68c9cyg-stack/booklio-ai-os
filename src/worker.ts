@@ -1,7 +1,7 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
-import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, type MenuMonth, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
+import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, type MenuMonth, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, sumMenuInterest, type MenuInterest, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
 import {itemProfit, menuChanges, menuGaps, menuItemTax, menuMatrix, menuOverview, nameKey, PART_NAMES, pairSale, priceText, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
@@ -313,7 +313,7 @@ export class TenantObject extends DurableObject<Env> {
     const stored = this.sql.exec<{text: string}>('SELECT text FROM briefings WHERE business_date=?', day).toArray()[0];
     const todo = this.todoFor(day, briefing);
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
-      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day)});
+      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day)});
   }
 
   /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
@@ -395,7 +395,7 @@ export class TenantObject extends DurableObject<Env> {
   posTrends(date: string) {
     const config = this.config();
     if (!config) return null;
-    return {businessDate: date, week: this.week(date), month: this.month(config, date), trends: this.trends(date)};
+    return {businessDate: date, week: this.week(date), month: this.month(config, date), trends: this.trends(date), menuInterest: this.menuInterestWeeks(date)};
   }
 
   /** MCP: sums over any stretch of days (revenue, bookings, guests, no-shows, cancellations, sources, lead time, web, reviews) and its events. */
@@ -1473,6 +1473,27 @@ export class TenantObject extends DurableObject<Env> {
     });
   }
 
+  /** The website's days (web traffic records, oldest first, the first one of a day) between two days. */
+  private webDays(from: string, to: string): WebTraffic[] {
+    return this.sql.exec<{json: string}>("SELECT json FROM records WHERE type='web_traffic' AND business_date BETWEEN ? AND ? ORDER BY business_date, id", from, to).toArray()
+      .map(row => JSON.parse(row.json) as WebTraffic);
+  }
+
+  /** Interest in the menu on the website: the 7 days up to the reported day against the 7 before. */
+  private menuInterestWeek(date: string) {
+    const days = this.webDays(addDays(date, -13), date);
+    return {current: sumMenuInterest(days, addDays(date, -6), date), previous: sumMenuInterest(days, addDays(date, -13), addDays(date, -7))};
+  }
+
+  /** Interest in the menu on the website over twelve weeks up to the shown day, oldest first (weeks as in `trends`). */
+  private menuInterestWeeks(date: string): MenuInterest[] {
+    const days = this.webDays(addDays(date, -83), date);
+    return Array.from({length: 12}, (_, i) => 11 - i).map(back => {
+      const to = addDays(date, -7 * back);
+      return sumMenuInterest(days, addDays(to, -6), to);
+    });
+  }
+
   /** The 7 days up to the reported day against the 7 days before them. */
   private week(date: string): Week {
     const week: Week = {from: addDays(date, -6), to: date, current: this.weekPart(addDays(date, -6), date), previous: this.weekPart(addDays(date, -13), addDays(date, -7)),
@@ -1589,6 +1610,7 @@ export class TenantObject extends DurableObject<Env> {
       menuProblems: this.menuProblems(now),
       priceCheck: weekday(date) === 0 ? this.priceCheckSummary() : null,
       menuGaps: weekday(date) === 0 ? this.menuGapsSummary() : null,
+      menuInterest: weekday(date) === 0 ? this.menuInterestWeek(date) : null,
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
       supplies: this.supplyBriefFor(config, date),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});

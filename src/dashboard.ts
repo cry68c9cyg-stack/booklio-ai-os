@@ -220,6 +220,24 @@ function trendsCard(t) {
     rows + '</table></div><div class="muted">↑ ↓ = o víc než 5 % proti týdnu předtím; odchylka odhadu = jak daleko byla tržba od plánu z ranní zprávy (od 4 dní v týdnu)</div></div>';
 }
 
+// Interest in the menu on the website over 12 weeks (only once the website sends it): visits that opened it, page views by part, from abroad, languages and reservations.
+function menuInterestCard(weeks) {
+  if (!weeks || !weeks.some(w => w.days)) return '';
+  const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.', num = v => String(v).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ' ');
+  const share = (a, b) => b ? Math.round(a / b * 100) + ' %' : '–';
+  const language = (w, key) => share((w.languages.find(l => l.key === key) || {visits: 0}).visits, w.visits);
+  const rows = weeks.slice().reverse().map((w, i, all) => {
+    if (!w.days) return '';
+    const prev = all[i + 1], arrow = prev && prev.days === 7 && w.days === 7 ? (w.visits > prev.visits * 1.05 ? ' <span class="muted">↑</span>' : w.visits < prev.visits * 0.95 ? ' <span class="muted">↓</span>' : '') : '';
+    return '<tr><td>' + esc(short(w.from)) + '–' + esc(short(w.to)) + (w.days < 7 ? ' <span class="muted">(' + w.days + ' d)</span>' : '') + '</td>' +
+      '<td class="n">' + num(w.visits) + arrow + '</td><td class="n">' + num(w.food) + ' / ' + num(w.drinks) + '</td><td class="n">' + share(w.abroad, w.visits) + '</td>' +
+      '<td class="n">' + language(w, 'cs') + '</td><td class="n">' + language(w, 'en') + '</td><td class="n">' + language(w, 'de') + '</td>' +
+      '<td class="n">' + w.reserved + ' <span class="muted">(' + (w.visits ? (Math.round(w.reserved / w.visits * 1000) / 10).toFixed(1).replace('.', ',') : '0,0') + ' %)</span></td></tr>';
+  }).join('');
+  return '<div class="card"><h2>Zájem o lístek na webu (12 týdnů)</h2><div class="scroll"><table><tr><th>Týden</th><th class="n">Otevřelo</th><th class="n">Jídlo / nápoje</th><th class="n">Ze zahraničí</th><th class="n">česky</th><th class="n">anglicky</th><th class="n">německy</th><th class="n">Rezervace</th></tr>' +
+    rows + '</table></div><div class="muted">otevřelo = návštěvy webu, které si otevřely jídelní nebo nápojový lístek; jídlo / nápoje = kolikrát se která část zobrazila; ze zahraničí podle země návštěvy, jazyk podle jazyka webu; rezervace = z těch návštěv poslaly rezervaci; ↑ ↓ = o víc než 5 % proti týdnu předtím</div></div>';
+}
+
 // Events of the half year before the shown day, the strongest first: guests and revenue against the same weekday without an event.
 function eventsCard(ranking) {
   if (!ranking || !ranking.length) return '';
@@ -436,7 +454,7 @@ function render(data) {
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card" id="todo">' + todoCard(data.todo) + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
-  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast) + weekCard(data.week) + eventsCard(data.eventRanking) + trendsCard(data.trends) + monthCard(data.month) + suppliesCard(data.supplies) + menuCard(data.menu) + sourcesCard(data.sources);
+  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast) + weekCard(data.week) + eventsCard(data.eventRanking) + trendsCard(data.trends) + menuInterestCard(data.menuInterest) + monthCard(data.month) + suppliesCard(data.supplies) + menuCard(data.menu) + sourcesCard(data.sources);
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
   if (r) {
