@@ -4,7 +4,7 @@ import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
 import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
-import {menuChanges, menuOverview} from './menu.ts';
+import {itemProfit, menuChanges, menuOverview, pairSale, priceCheck, repricing, type ItemSale, type RepricingInput} from './menu.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
 import {czechHolidays, holidayName} from './holidays.ts';
@@ -579,7 +579,67 @@ export class TenantObject extends DurableObject<Env> {
     if (!menu) return null;
     const received = this.sql.exec<{at: string}>("SELECT max(received_at) AS at FROM records WHERE type='menu'").toArray()[0].at;
     const changes = this.menuChangesBetween(addDays(day, -29), addDays(day, 1), 30);
-    return {...menuOverview(menu), received: stamp(new Date(received), config.timeZone), changes: changes.rows, changesTotal: changes.total};
+    const findings = priceCheck(menu), sales = this.itemSales(addDays(day, -29), day);
+    const profit = sales.length ? itemProfit(menu, sales, this.menuItemCosts()) : null;
+    return {...menuOverview(menu), received: stamp(new Date(received), config.timeZone), changes: changes.rows, changesTotal: changes.total,
+      priceCheck: {findings: findings.slice(0, 10), total: findings.length},
+      profit: profit && {from: addDays(day, -29), to: day, items: profit.items.slice(0, 10), itemsTotal: profit.items.length, unpaired: profit.unpaired.slice(0, 5),
+        unpairedTotal: profit.unpaired.length, totals: profit.totals, missing: profit.missing}};
+  }
+
+  /**
+   * What the POS sold over some days per product (closed bills only), with revenue without VAT where every line has its
+   * VAT rate. A product is its POS id, or its name when the POS sends none.
+   */
+  private itemSales(from: string, to: string): ItemSale[] {
+    // `product` and not `key`: json_each has a column of that name.
+    return this.sql.exec<{product: string; product_id: string | null; name: string; quantity: number; gross_cents: number; net: number | null; without_vat: number}>(`
+      SELECT coalesce(json_extract(i.value, '$.productId'), 'name:' || json_extract(i.value, '$.name')) AS product, max(json_extract(i.value, '$.productId')) AS product_id,
+        max(json_extract(i.value, '$.name')) AS name, sum(json_extract(i.value, '$.quantity')) AS quantity, sum(json_extract(i.value, '$.totalCents')) AS gross_cents,
+        sum(json_extract(i.value, '$.totalCents') * 100.0 / (100 + json_extract(i.value, '$.vatRate'))) AS net,
+        sum(json_extract(i.value, '$.vatRate') IS NULL) AS without_vat
+      FROM records r, json_each(r.json, '$.items') i
+      WHERE r.type='bill' AND r.business_date BETWEEN ? AND ? AND json_extract(r.json, '$.status') = 'closed'
+      GROUP BY product ORDER BY gross_cents DESC`, from, to).toArray()
+      .map(row => ({key: row.product, productId: row.product_id, name: row.name, quantity: row.quantity, grossCents: row.gross_cents,
+        netCents: row.without_vat || row.net === null ? null : Math.round(row.net)}));
+  }
+
+  /**
+   * Food cost per piece of a menu item without VAT in haléře, by menu item id. Empty until the purchase prices and
+   * recipes are joined to the menu (the batch „Zisk a marže“ of the Dishboard work fills it); profit by item uses it as is.
+   */
+  private menuItemCosts(): Map<string, number> {
+    return new Map();
+  }
+
+  /** MCP: profit by menu item over some days (POS bills paired to the menu); null without a venue or a menu. */
+  posItemProfit(from: string, to: string) {
+    const menu = this.menu();
+    if (!this.config() || !menu) return null;
+    const sales = this.itemSales(from, to);
+    return {from, to, bills: sales.length > 0, ...itemProfit(menu, sales, this.menuItemCosts())};
+  }
+
+  /** MCP: virtual repricing of the menu, with the revenue of the last 30 days at the same pieces sold. */
+  posRepricing(input: RepricingInput) {
+    const config = this.config(), menu = this.menu();
+    if (!config || !menu) return null;
+    const today = businessDate(new Date(), config.timeZone, config.businessDayCutoffHour), from = addDays(today, -30), to = addDays(today, -1);
+    const sold = new Map<string, {quantity: number; grossCents: number}>();
+    for (const sale of this.itemSales(from, to)) {
+      const pairing = pairSale(menu, sale);
+      if (!pairing) continue;
+      const row = sold.get(pairing.itemId) ?? {quantity: 0, grossCents: 0};
+      sold.set(pairing.itemId, {quantity: row.quantity + sale.quantity, grossCents: row.grossCents + sale.grossCents});
+    }
+    return {salesFrom: from, salesTo: to, ...repricing(menu, input, sold)};
+  }
+
+  /** MCP: prices to look at in each category of the menu, each with a suggested price. */
+  posPriceCheck() {
+    const menu = this.menu();
+    return this.config() && menu ? {items: menu.items.length, findings: priceCheck(menu)} : null;
   }
 
   /** MCP: the whole current menu with every item and price, and its changes over the last year. */

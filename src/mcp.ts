@@ -114,6 +114,37 @@ export function createServer(context: ToolContext): McpServer {
     return menu ? result(menu) : failed('Lístek zatím do OKO1 nedorazil.');
   });
 
+  tool('vydelek_polozek', 'Výdělek po položkách', 'Co se za období (nejvýš 400 dní) prodalo po položkách lístku: účty pokladny spárované s lístkem (stejný název, u velikostí objem nebo nejbližší cena), ' +
+    'kusy, tržba s DPH a bez DPH, food cost za kus, náklad a zisk = tržba bez DPH − food cost × kusy. null znamená, že údaj chybí (seznam "missing"). "unpaired" = produkty pokladny, ' +
+    'které OKO1 v lístku nenašlo. Dokud neběží pokladna s účty, je prázdné. Částky v haléřích.', {od: from, do: to},
+  async ({od, do: until}: {od: string; do: string}) => {
+    const bad = badRange(od, until);
+    if (bad) return bad;
+    const profit = await context.venue.posItemProfit(od, until);
+    return profit ? result(profit) : failed('Lístek zatím do OKO1 nedorazil.');
+  });
+  tool('preceneni', 'Virtuální přecenění', 'Simulace nových cen lístku: vybrané položky (část, kategorie, slova z názvu) o procento nebo o částku, zaokrouhleno na krok (výchozí 5 Kč). ' +
+    'Na webu ani v pokladně se nic nemění. S prodeji za posledních 30 dní ukáže i tržbu při stejném počtu prodaných kusů. Částky v haléřích.', {
+    cast: zod.enum(['food', 'cocktails', 'drinks']).optional().describe('Část lístku: food = jídlo, cocktails = koktejly, drinks = nápoje.'),
+    kategorie: zod.string().max(100).optional().describe('Kategorie nebo její část, např. "burgery".'),
+    hledat: zod.string().max(100).optional().describe('Slova z názvu položky, např. "cheeseburger".'),
+    procenta: zod.number().min(-50).max(100).optional().describe('Změna v procentech, např. 10 = o 10 % dráž.'),
+    korun: zod.number().int().min(-500).max(500).optional().describe('Změna o pevnou částku v korunách, např. 20.'),
+    krok_korun: zod.number().int().min(1).max(100).optional().describe('Zaokrouhlit na celé násobky (výchozí 5 Kč).'),
+  }, async (args: {cast?: 'food' | 'cocktails' | 'drinks'; kategorie?: string; hledat?: string; procenta?: number; korun?: number; krok_korun?: number}) => {
+    if (args.procenta === undefined && args.korun === undefined) return failed('Zadej změnu: procenta, nebo korun.');
+    const repriced = await context.venue.posRepricing({part: args.cast, category: args.kategorie, query: args.hledat, percent: args.procenta,
+      deltaCents: args.korun === undefined ? undefined : args.korun * 100, stepCents: args.krok_korun === undefined ? undefined : args.krok_korun * 100});
+    if (!repriced) return failed('Lístek zatím do OKO1 nedorazil.');
+    return repriced.count ? result(repriced) : failed('Výběru neodpovídá žádná položka lístku.');
+  });
+  tool('kontrola_cen', 'Kontrola cen', 'Ceny lístku k prověření v každé kategorii od 4 položek: položka pod polovinou nebo nad dvojnásobkem běžné ceny kategorie (u nápojů různých objemů za litr) ' +
+    's navrženou cenou na dolním nebo horním kvartilu, a mezery v cenové řadě (od 5 položek) s cenou uprostřed. Jen k posouzení, cena může být záměr. Částky v haléřích.', {},
+  async () => {
+    const check = await context.venue.posPriceCheck();
+    return check ? result(check) : failed('Lístek zatím do OKO1 nedorazil.');
+  });
+
   tool('naklady_dodavatele', 'Náklady a dodavatelé', 'Faktury dodavatelů za období (nejvýš 400 dní, zatím z Dishboardu, později z Pexesa): nákupy bez DPH po druzích (jídlo, nápoje, ostatní), kategoriích a dodavatelích, ' +
     'food cost (jídlo a nápoje bez DPH k tržbám s DPH týchž dní, v promile), zdražení položek od 5 % proti předchozímu nákupu, faktury dnes po splatnosti a samotné faktury s položkami a cenami za jednotku. Částky v haléřích.',
   {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {

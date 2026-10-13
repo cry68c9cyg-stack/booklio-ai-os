@@ -38,7 +38,7 @@ Pokladna (Pexeso, později i jiné) posílá AI OS uzavřené účty, uzávěrky
 | `tableId`, `guests`, `waiterId`, `reservationId` | volitelné | `reservationId` z Booklio, až bude vazba |
 | `totalCents` | int | zaplaceno celkem |
 | `discountCents` | int ≥ 0 | |
-| `items[]` | `{name, quantity, totalCents, productId?, category?}` | nejvýše 500 |
+| `items[]` | `{name, quantity, totalCents, productId?, category?, vatRate?}` | nejvýše 500; `vatRate` = sazba DPH produktu v celých procentech (12, 21) z pokladny, doplněno 13. 10. 2026 zpětně kompatibilně: bez ní OKO1 nespočítá tržbu bez DPH a výdělek po položkách |
 | `payments[]` | `{method, amountCents}` | `cash`, `card`, `voucher`, `transfer`, …; nejvýše 20 |
 | `voids[]` | `{name, amountCents, reason, afterPayment, approvedBy?}` | storna položek; `afterPayment: true` = storno po zaplacení |
 
@@ -185,6 +185,8 @@ Položka `items[]`: `{id, part, category, name, pricesCents, group?, description
 | `tip` | bool | tip šéfkuchaře / doporučení |
 
 Změnou ceny se rozumí jiná kterákoli z cen položky; OKO1 zapíše starou a novou základní cenu i oba texty („225 / 255 Kč“ → „225 / 265 Kč“). První lístek je výchozí stav, změny se počítají až od dalšího. Přejmenování položky, její kategorie nebo objemu je nové `id`, tedy zrušená a nová položka, ne změna ceny. Ceny jsou s DPH; sazbu DPH (jídlo a alkohol mají různou) lístek nenese, pro výdělek po položkách ji OKO1 vezme z produktu pokladny (Pexeso). Dashboard má kartu „Jídelní a nápojový lístek“ (položky po kategoriích s cenami od–do a průměrem, změny za 30 dní), MCP server nástroj `listek` (celý lístek a změny za rok).
+
+Ceny a výdělek po položkách (13. 10. 2026, schválil MC): OKO1 páruje položky účtů pokladny s lístkem samo (stejný název bez diakritiky a objemu, u velikostí objem z názvu nebo nejbližší cena; jiný název jen tehdy, když s ním jedna položka lístku jasně sdílí nejvíc slov), takže pokladna nemusí znát id z webu. Z toho počítá prodej po položkách (kusy, tržba s DPH a podle `vatRate` bez DPH) a zisk = tržba bez DPH − food cost za kus × kusy; food cost za kus doplní nákupní ceny a receptury, do té doby je zisk `null` a odpověď říká, co chybí. Kontrola cen hledá v kategoriích od 4 položek položky pod polovinou nebo nad dvojnásobkem běžné (prostřední) ceny kategorie, u nápojů různých objemů za litr, a od 5 položek mezery v cenové řadě; ke každé navrhne cenu. Virtuální přecenění jen počítá, na webu ani v pokladně nic nemění. Dashboard má v kartě lístku „Ceny k prověření“ a „Prodej po položkách za 30 dní“ (s nespárovanými produkty pokladny), MCP server nástroje `preceneni`, `kontrola_cen` a `vydelek_polozek(od, do)`.
 
 ### Faktura dodavatele (`supplier_invoice`)
 
