@@ -11,5 +11,5 @@
 
 ## Working preferences
 
-- Po dokončení každé úlohy (nasazeno, hotovo) hned sám navrhni MC další balík několika konkrétních bodů a čekej jen na jeho „jo“; nečekej, až se zeptá „co dál“ (MC, 13. 10. 2026).
+- Každá zpráva MC, ve které nečekáš na jeho rozhodnutí (nasazeno, hotovo, odesláno, čekáme na někoho třetího), končí konkrétním návrhem další dávky několika bodů a otázkou „jo?“; nikdy nečekej, až se zeptá „co dál“ (MC, 13. 10. 2026).
 - Každé nové pravidlo od MC zapiš přes skill Task Observer sem do „Working preferences“ (a do paměti projektu) (MC, 13. 10. 2026).
