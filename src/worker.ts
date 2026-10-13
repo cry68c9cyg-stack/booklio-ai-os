@@ -4,7 +4,7 @@ import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
 import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
-import {itemProfit, menuChanges, menuMatrix, menuOverview, pairSale, priceCheck, priceExperiment, priceMismatches, repricing, type ItemSale, type RepricingInput} from './menu.ts';
+import {itemProfit, menuChanges, menuMatrix, menuOverview, pairSale, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
 import {czechHolidays, holidayName} from './holidays.ts';
@@ -583,7 +583,7 @@ export class TenantObject extends DurableObject<Env> {
     const profit = sales.length ? itemProfit(menu, sales, this.menuItemCosts()) : null;
     return {...menuOverview(menu), received: stamp(new Date(received), config.timeZone), changes: changes.rows, changesTotal: changes.total,
       priceCheck: {findings: findings.slice(0, 10), total: findings.length},
-      matrix: profit ? menuMatrix(menu, profit).map(part => ({...part, classes: part.classes.map(row => ({...row, count: row.items.length, items: row.items.slice(0, 5)}))})) : null,
+      matrix: profit ? menuMatrix(menu, profit, this.newMenuItems(addDays(day, -29), day)).map(part => ({...part, classes: part.classes.map(row => ({...row, count: row.items.length, items: row.items.slice(0, 5)}))})) : null,
       experiments: profit ? this.priceExperiments(day, 5) : null,
       profit: profit && {from: addDays(day, -29), to: day, items: profit.items.slice(0, 10), itemsTotal: profit.items.length, unpaired: profit.unpaired.slice(0, 5),
         unpairedTotal: profit.unpaired.length, totals: profit.totals, missing: profit.missing}};
@@ -648,12 +648,12 @@ export class TenantObject extends DurableObject<Env> {
       SELECT json_extract(i.value, '$.name') AS name, CAST(round(json_extract(i.value, '$.totalCents') * 1.0 / json_extract(i.value, '$.quantity')) AS INTEGER) AS unit,
         sum(json_extract(i.value, '$.quantity')) AS quantity
       FROM records r, json_each(r.json, '$.items') i
-      WHERE r.type='bill' AND r.business_date=? AND json_extract(r.json, '$.status') = 'closed' GROUP BY 1, 2`, date).toArray();
+      WHERE r.type='bill' AND r.business_date=? AND json_extract(r.json, '$.status') = 'closed' AND json_extract(i.value, '$.quantity') > 0 GROUP BY 1, 2`, date).toArray();
     if (!lines.length) return [];
-    // A price changed after the day was still right that day.
+    // Every price an item had before a change made that day or later was still right that day (all sizes, from the old text).
     const earlier = new Map<string, number[]>();
-    for (const row of this.sql.exec<{item_id: string; old_cents: number}>("SELECT item_id, old_cents FROM menu_changes WHERE kind='price' AND business_date > ?", date).toArray()) {
-      earlier.set(row.item_id, [...(earlier.get(row.item_id) ?? []), row.old_cents]);
+    for (const row of this.sql.exec<{item_id: string; old_text: string | null}>("SELECT item_id, old_text FROM menu_changes WHERE kind='price' AND business_date >= ?", date).toArray()) {
+      earlier.set(row.item_id, [...(earlier.get(row.item_id) ?? []), ...pricesOfText(row.old_text)]);
     }
     return priceMismatches(menu, lines.map(row => ({name: row.name, unitCents: row.unit, quantity: Math.round(row.quantity * 1000) / 1000})), earlier);
   }
@@ -666,28 +666,52 @@ export class TenantObject extends DurableObject<Env> {
     return {total: findings.length, top: [...findings].sort((a, b) => (a.kind === 'gap' ? 1 : 0) - (b.kind === 'gap' ? 1 : 0)).slice(0, 2)};
   }
 
-  /** Pieces and revenue of one menu item over some days (POS bills paired to the menu). */
-  private itemTotals(menu: Menu, itemId: string, from: string, to: string) {
-    let quantity = 0, grossCents = 0;
-    for (const sale of this.itemSales(from, to)) if (pairSale(menu, sale)?.itemId === itemId) { quantity += sale.quantity; grossCents += sale.grossCents; }
-    return {days: Math.max(0, Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1), quantity, grossCents};
+  /** Menu items added in `from`–`to`: too new for the matrix, which compares days of sales. */
+  private newMenuItems(from: string, to: string) {
+    return new Set(this.sql.exec<{item_id: string}>("SELECT item_id FROM menu_changes WHERE kind='added' AND business_date BETWEEN ? AND ?", from, to).toArray().map(row => row.item_id));
   }
 
   /**
    * Every price change of the year up to a day as an experiment: pieces and revenue per day 28 days before the change
-   * against the days after it (up to 28, until the day). Only once the POS sends bills; newest first.
+   * (not before the first POS bill) against the days after it (up to 28, until the day). One read of the bills for all
+   * changes; only once the POS sends bills; newest first.
    */
   private priceExperiments(day: string, limit: number) {
     const menu = this.menu();
-    if (!menu || !this.sql.exec<{n: number}>("SELECT EXISTS(SELECT 1 FROM records WHERE type='bill') AS n").toArray()[0].n) return [];
+    const first = this.sql.exec<{d: string | null}>("SELECT min(business_date) AS d FROM records WHERE type='bill'").toArray()[0].d;
+    if (!menu || !first) return [];
     const changes = this.sql.exec<{business_date: string; item_id: string; name: string; old_text: string | null; new_text: string | null}>(
       "SELECT business_date, item_id, name, old_text, new_text FROM menu_changes WHERE kind='price' AND business_date BETWEEN ? AND ? ORDER BY business_date DESC, rowid DESC LIMIT ?",
       addDays(day, -365), day, limit).toArray();
+    if (!changes.length) return [];
+    const from = addDays(changes.map(change => change.business_date).sort()[0], -28);
+    const daily = this.sql.exec<{date: string; name: string; quantity: number; gross_cents: number}>(`
+      SELECT b.date, json_extract(i.value, '$.name') AS name, sum(json_extract(i.value, '$.quantity')) AS quantity, sum(json_extract(i.value, '$.totalCents') * b.paid) AS gross_cents
+      FROM (SELECT r.business_date AS date, r.json AS bill, coalesce(json_extract(r.json, '$.totalCents') * 1.0
+          / nullif((SELECT sum(json_extract(l.value, '$.totalCents')) FROM json_each(r.json, '$.items') l), 0), 1) AS paid
+        FROM records r WHERE r.type='bill' AND r.business_date BETWEEN ? AND ? AND json_extract(r.json, '$.status') = 'closed') b, json_each(b.bill, '$.items') i
+      GROUP BY 1, 2`, from, day).toArray();
+    // Each product name is paired once; then the windows are sums over the days.
+    const totals = new Map<string, {quantity: number; grossCents: number}>(), byItem = new Map<string, {date: string; quantity: number; grossCents: number}[]>();
+    for (const row of daily) {
+      const total = totals.get(row.name) ?? {quantity: 0, grossCents: 0};
+      totals.set(row.name, {quantity: total.quantity + row.quantity, grossCents: total.grossCents + row.gross_cents});
+    }
+    const paired = new Map([...totals].map(([name, total]) => [name, pairSale(menu, {name, ...total})?.itemId ?? null]));
+    for (const row of daily) {
+      const itemId = paired.get(row.name);
+      if (itemId) byItem.set(itemId, [...(byItem.get(itemId) ?? []), {date: row.date, quantity: row.quantity, grossCents: row.gross_cents}]);
+    }
+    const window = (itemId: string, start: string, end: string) => {
+      const rows = (byItem.get(itemId) ?? []).filter(row => row.date >= start && row.date <= end);
+      return {days: end < start ? 0 : Math.round((Date.parse(end) - Date.parse(start)) / 86400000) + 1,
+        quantity: Math.round(rows.reduce((sum, row) => sum + row.quantity, 0) * 1000) / 1000, grossCents: Math.round(rows.reduce((sum, row) => sum + row.grossCents, 0))};
+    };
     return changes.map(change => {
-      const afterEnd = [addDays(change.business_date, 27), day].sort()[0];
-      const before = this.itemTotals(menu, change.item_id, addDays(change.business_date, -28), addDays(change.business_date, -1));
-      const after = afterEnd < change.business_date ? {days: 0, quantity: 0, grossCents: 0} : this.itemTotals(menu, change.item_id, change.business_date, afterEnd);
-      return priceExperiment({date: change.business_date, itemId: change.item_id, name: change.name, oldText: change.old_text, newText: change.new_text}, before, after);
+      const beforeStart = [addDays(change.business_date, -28), first].sort()[1];
+      const after = window(change.item_id, change.business_date, [addDays(change.business_date, 27), day].sort()[0]);
+      return priceExperiment({date: change.business_date, itemId: change.item_id, name: change.name, oldText: change.old_text, newText: change.new_text},
+        window(change.item_id, beforeStart, addDays(change.business_date, -1)), after);
     });
   }
 
@@ -696,7 +720,7 @@ export class TenantObject extends DurableObject<Env> {
     const menu = this.menu();
     if (!this.config() || !menu) return null;
     const sales = this.itemSales(from, to);
-    return {from, to, bills: sales.length > 0, matrix: sales.length ? menuMatrix(menu, itemProfit(menu, sales, this.menuItemCosts())) : [],
+    return {from, to, bills: sales.length > 0, matrix: sales.length ? menuMatrix(menu, itemProfit(menu, sales, this.menuItemCosts()), this.newMenuItems(from, to)) : [],
       experiments: this.priceExperiments(to, 50)};
   }
 

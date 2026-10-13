@@ -709,9 +709,10 @@ try {
   // Menu engineering: the burger that sold is a star, the rest of the food weak; the price changes of today wait for sales.
   const engineering = (await mcp('menu_engineering', {od: addDays(today, -6), do: today})).data;
   assert.deepEqual(engineering.matrix.map(part => [part.part, part.basis, part.classes.map(row => [row.kind, row.items.map(item => item.itemId)])]),
-    [['food', 'price', [['star', ['food:burgery:classic']], ['plowhorse', []], ['puzzle', []], ['dog', ['food:dezerty:pie', 'food:burgery:texas']]]]]);
+    [['food', 'price', [['star', ['food:burgery:classic']], ['plowhorse', []], ['puzzle', []], ['dog', ['food:burgery:texas']]]]]);
+  assert.deepEqual(engineering.matrix[0].newItems, ['Apple Pie'], 'added to the menu within the days: not judged');
   assert.deepEqual(engineering.experiments.map(row => [row.itemId, row.status, row.before.quantity, row.quantityPermille]).sort(),
-    [['food:burgery:classic', 'waiting', 5, -1000], ['food:burgery:texas', 'waiting', 0, null]]);
+    [['food:burgery:classic', 'no_history', 5, null], ['food:burgery:texas', 'no_history', 0, null]], 'bills only 3 days before the change');
   // Costs and suppliers: purchases without VAT, the rise against the purchase before, the overdue invoice; a cancelled one does not count.
   const supplies = (await mcp('naklady_dodavatele', {od: addDays(today, -6), do: today})).data;
   assert.deepEqual([supplies.summary.invoices, supplies.summary.netCents, supplies.summary.byKind], [1, 51590, [{kind: 'food', name: 'jídlo', netCents: 51590}]]);

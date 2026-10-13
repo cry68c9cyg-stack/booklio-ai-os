@@ -7,7 +7,7 @@ import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
 import {counted, overdueInvoices, priceRises, renderSupplies, supplyBrief, supplySummary, unitPrice} from '../src/supplies.ts';
 import {weatherDays, weatherText} from '../src/weather.ts';
-import {itemProfit, menuMatrix, nameKey, pairSale, priceCheck, priceExperiment, priceMismatches, repricing, volumeOf, type ItemSale} from '../src/menu.ts';
+import {itemProfit, menuMatrix, nameKey, pairSale, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, volumeOf, type ItemSale} from '../src/menu.ts';
 import {businessDate, sameClockDaysBefore} from '../src/time.ts';
 import {czechHolidays, easterSunday, holidayName} from '../src/holidays.ts';
 import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type Menu, type MenuItem, type SupplierInvoice, type TenantConfig, type WebTraffic} from '../src/validate.ts';
@@ -756,6 +756,8 @@ test('the POS charging another price than the menu: most pieces of the day, earl
     {name: 'Texas Burger', unitCents: 22500, quantity: 2}, {name: 'Plzeň 0,5 l', unitCents: 8950, quantity: 9}, {name: 'Tonic', unitCents: 6000, quantity: 1}], new Map());
   assert.deepEqual(rows.map(row => [row.itemId, row.posCents, row.menuCents, row.quantity]), [['b2', 22500, 24500, 2]]);
   assert.deepEqual(priceMismatches(menu, [{name: 'Texas Burger', unitCents: 22500, quantity: 2}], new Map([['b2', [22500]]])), [], 'the price before a later change was right');
+  assert.deepEqual(priceMismatches(menu, [{name: 'Texas Burger', unitCents: 17500, quantity: 9}, {name: 'Texas Burger', unitCents: 24500, quantity: 1}], new Map()), [], 'happy hour next to the menu price');
+  assert.deepEqual([pricesOfText('225 / 1 255 Kč'), pricesOfText(null), pricesOfText('cena?')], [[22500, 125500], [], []]);
   assert.equal(renderPriceMismatches(rows)[0], '⚠ Pokladna účtuje jinou cenu než lístek: Texas Burger 225 Kč (lístek 245 Kč, 2×)');
   const todo = todoList(buildBriefing({businessDate: '2026-10-08', config, bills: [], closings: [], planHistory: [], incomplete: false, priceMismatches: rows}));
   assert.ok(todo.some(item => item.text === 'Cena v pokladně nesedí s lístkem: Texas Burger 225 Kč (lístek 245 Kč, 2×)' && item.amountCents === 4000));
@@ -773,6 +775,9 @@ test('menu engineering: stars, plowhorses, puzzles and weak items by pieces and 
   const withCost = menuMatrix(menu, itemProfit(menu, [sale('A', 40, 1200000), sale('B', 50, 1000000)], new Map([['a', 25000], ['b', 5000]])))[0];
   assert.deepEqual([withCost.basis, withCost.classes.map(row => row.items.map(item => item.itemId))], ['margin', [['b'], ['a'], [], ['c', 'd']]]);
   assert.deepEqual(menuMatrix(menu, itemProfit(menu, [], new Map())), [], 'nothing sold: no matrix');
+  const fresh = menuMatrix(menu, profit, new Set(['d']))[0];
+  assert.deepEqual([fresh.newItems, fresh.classes[3].items.map(item => item.itemId)], [['D'], []], 'a new item is not judged');
+  assert.equal(menuMatrix(menu, itemProfit(menu, [sale('A', 0, 0), sale('B', 5, 100000)], new Map()))[0].averageContributionCents, 20000, 'no NaN from pieces netting to 0');
 });
 
 test('a price change as an experiment: per day before and after, waiting under 7 days', () => {
@@ -781,4 +786,6 @@ test('a price change as an experiment: per day before and after, waiting under 7
   assert.deepEqual([done.quantityPermille, done.revenuePermille, done.status], [-100, -20, 'done']);
   assert.equal(priceExperiment(change, {days: 28, quantity: 0, grossCents: 0}, {days: 10, quantity: 5, grossCents: 1000}).quantityPermille, null);
   assert.equal(priceExperiment(change, {days: 28, quantity: 28, grossCents: 1000}, {days: 3, quantity: 3, grossCents: 100}).status, 'waiting');
+  const young = priceExperiment(change, {days: 5, quantity: 5, grossCents: 1000}, {days: 28, quantity: 28, grossCents: 6000});
+  assert.deepEqual([young.status, young.quantityPermille], ['no_history', null], 'too few days of bills before the change');
 });

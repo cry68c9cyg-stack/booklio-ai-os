@@ -10,6 +10,10 @@ export type MenuChange = {itemId: string; name: string; kind: 'added' | 'removed
 /** Prices as one text, the way the menu lists them: "225 / 255 Kč". */
 export const priceText = (item: MenuItem) => item.pricesCents.map(cents => String(Math.round(cents / 100)).replace(/\B(?=(\d{3})+$)/g, ' ')).join(' / ') + ' Kč';
 
+/** The prices of a price text back in haléře ("225 / 1 255 Kč" → [22500, 125500]); none for anything else. */
+export const pricesOfText = (text: string | null) => !text || !/^[\d \u00a0/]+ Kč$/.test(text) ? []
+  : text.slice(0, -3).split('/').map(part => Number(part.replace(/[ \u00a0]/g, '')) * 100).filter(Number.isSafeInteger);
+
 /** What changed from one menu to the next, by item id. A different price of any size counts as a price change. */
 export function menuChanges(before: Menu, after: Menu): MenuChange[] {
   const old = new Map(before.items.map(item => [item.id, item]));
@@ -233,9 +237,10 @@ export type PriceMismatch = {itemId: string; name: string; posName: string; posC
   menuCents: number; quantity: number};
 
 /**
- * The POS charges a different price than the menu: per product of the day the unit price most pieces were sold at,
- * against every price of the paired menu item (and prices it had that day, `earlierCents`, when it changed later).
- * Less than 1 Kč apart counts as the same; a discount on the whole bill is not a different price.
+ * The POS charges a different price than the menu: a product of the day of which no piece was sold at any price of the
+ * paired menu item (or a price it had that day, `earlierCents`, when it changed later), shown with the unit price most
+ * pieces were sold at. Less than 1 Kč apart counts as the same, so happy hour, staff prices and extras next to the
+ * menu price raise nothing; a discount on the whole bill is not part of the line's price.
  */
 export function priceMismatches(menu: Menu, lines: {name: string; unitCents: number; quantity: number}[], earlierCents: Map<string, number[]>): PriceMismatch[] {
   const byName = new Map<string, Map<number, number>>();
@@ -249,9 +254,9 @@ export function priceMismatches(menu: Menu, lines: {name: string; unitCents: num
     const [posCents] = [...prices].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0];
     const quantity = [...prices.values()].reduce((sum, count) => sum + count, 0);
     const pairing = pairSale(menu, {name: posName, quantity: 1, grossCents: posCents}), item = pairing && items.get(pairing.itemId);
-    if (!item || posCents === 0) continue;
+    if (!item || !posCents) continue;
     const known = [...item.pricesCents, ...(earlierCents.get(item.id) ?? [])];
-    if (known.every(cents => Math.abs(cents - posCents) >= 100)) {
+    if ([...prices.keys()].every(unit => known.every(cents => Math.abs(cents - unit) >= 100))) {
       const menuCents = [...item.pricesCents].sort((a, b) => Math.abs(a - posCents) - Math.abs(b - posCents))[0];
       found.push({itemId: item.id, name: item.name, posName, posCents, menuText: priceText(item), menuCents, quantity});
     }
@@ -272,12 +277,15 @@ export const MATRIX_NAMES: Record<MatrixClass, {name: string; advice: string}> =
  * Menu engineering (Kasavana–Smith) per part of the menu over the days of `profit`: popular = at least 70 % of an equal
  * share of the pieces sold in its part; profitable = contribution per piece at least the part's average weighted by pieces.
  * Contribution is revenue without VAT − food cost per piece where every sold item of the part has both, otherwise the
- * price per piece with VAT (`basis: 'price'`) until the food cost exists. Items on the menu not sold at all are weak.
+ * price per piece with VAT (`basis: 'price'`) until the food cost exists. Items on the menu not sold at all are weak;
+ * items added within the days compared (`newItems`) are left out.
  */
-export function menuMatrix(menu: Menu, profit: ReturnType<typeof itemProfit>) {
-  const sold = new Map(profit.items.map(row => [row.itemId, row]));
+export function menuMatrix(menu: Menu, profit: ReturnType<typeof itemProfit>, newItems: Set<string> = new Set()) {
+  const sold = new Map(profit.items.filter(row => row.quantity > 0).map(row => [row.itemId, row]));
   return (Object.keys(PART_NAMES) as MenuItem['part'][]).map(part => {
-    const items = menu.items.filter(item => item.part === part && item.pricesCents[0] > 0);
+    // Items added within the days compared have had fewer days to sell: listed apart, not judged.
+    const fresh = menu.items.filter(item => item.part === part && newItems.has(item.id)).map(item => item.name);
+    const items = menu.items.filter(item => item.part === part && item.pricesCents[0] > 0 && !newItems.has(item.id));
     const rows = items.map(item => sold.get(item.id)).filter(row => row !== undefined);
     const units = rows.reduce((sum, row) => sum + row.quantity, 0);
     if (!items.length || !units) return null;
@@ -291,7 +299,7 @@ export function menuMatrix(menu: Menu, profit: ReturnType<typeof itemProfit>) {
       return {itemId: item.id, name: item.name, category: item.category, quantity, contributionCents: perPiece, kind};
     });
     return {
-      part, name: PART_NAMES[part], basis, units, averageContributionCents: Math.round(average),
+      part, name: PART_NAMES[part], basis, units, averageContributionCents: Math.round(average), newItems: fresh,
       classes: (Object.keys(MATRIX_NAMES) as MatrixClass[]).map(kind => ({kind, ...MATRIX_NAMES[kind],
         items: classified.filter(row => row.kind === kind).sort((a, b) => b.quantity - a.quantity || a.name.localeCompare(b.name))})),
     };
@@ -304,14 +312,14 @@ export type PriceExperiment = {
   before: {days: number; quantity: number; grossCents: number}; after: {days: number; quantity: number; grossCents: number};
   /** Change per day in per mille; null without sales before. */
   quantityPermille: number | null; revenuePermille: number | null;
-  /** waiting = fewer than 7 days after the change so far; done = 28 days after; running = in between. */
-  status: 'waiting' | 'running' | 'done';
+  /** no_history = fewer than 7 days of POS bills before the change; waiting = fewer than 7 days after it so far; done = 28 days after; running = in between. */
+  status: 'no_history' | 'waiting' | 'running' | 'done';
 };
 export function priceExperiment(change: {date: string; itemId: string; name: string; oldText: string | null; newText: string | null},
   before: {days: number; quantity: number; grossCents: number}, after: {days: number; quantity: number; grossCents: number}): PriceExperiment {
   const perDay = (value: number, days: number) => days ? value / days : 0;
-  const delta = (key: 'quantity' | 'grossCents') => before[key] && after.days
+  const delta = (key: 'quantity' | 'grossCents') => before.days >= 7 && before[key] > 0 && after.days
     ? Math.round((perDay(after[key], after.days) / perDay(before[key], before.days) - 1) * 1000) : null;
   return {...change, before, after, quantityPermille: delta('quantity'), revenuePermille: delta('grossCents'),
-    status: after.days < 7 ? 'waiting' : after.days < 28 ? 'running' : 'done'};
+    status: before.days < 7 ? 'no_history' : after.days < 7 ? 'waiting' : after.days < 28 ? 'running' : 'done'};
 }
