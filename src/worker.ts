@@ -84,6 +84,9 @@ function stamp(at: Date, timeZone: string): string {
 /** The median of numbers (the middle two averaged). */
 const medianOf = (values: number[]) => { const sorted = [...values].sort((a, b) => a - b), middle = Math.floor(sorted.length / 2); return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2; };
 
+/** A booking's `version` at or above this (ms, the year 2001) is the time of its last change; smaller versions are plain counters. */
+const VERSION_AS_TIME = 1e12;
+
 export class TenantObject extends DurableObject<Env> {
   private sql: SqlStorage;
 
@@ -663,13 +666,17 @@ export class TenantObject extends DurableObject<Env> {
     const part: WeekPart = {revenueCents: 0, revenueDays: 0, reservations: 0, guests: 0, noShows: 0, noShowGuests: 0, cancelled: 0, visits: null, visitDays: 0, webSent: 0, webConfirmed: 0, reviews: 0, rated: 0, starsTenths: null, origins: []};
     const origins = new Map<string, WeekPart['origins'][number]>();
     // Bookings summed in SQL: nothing of the guests is read for a count.
-    const booked = this.sql.exec<Record<'reservations' | 'guests' | 'noShows' | 'noShowGuests' | 'webConfirmed' | 'cancelled', number | null>>(`SELECT
+    // A cancellation is late when the booking last changed (`version`, ms) in the 24 hours before its start (not after it: a no-show cancelled later).
+    const booked = this.sql.exec<Record<'reservations' | 'guests' | 'noShows' | 'noShowGuests' | 'webConfirmed' | 'cancelled' | 'lateCancelled' | 'lateCancelledGuests', number | null>>(`SELECT
         SUM(status = 'confirmed') AS reservations, SUM(CASE WHEN status = 'confirmed' THEN size ELSE 0 END) AS guests,
         SUM(status = 'confirmed' AND arrival = 'no_show') AS noShows, SUM(CASE WHEN status = 'confirmed' AND arrival = 'no_show' THEN size ELSE 0 END) AS noShowGuests,
-        SUM(status = 'confirmed' AND source = 'web') AS webConfirmed, SUM(status = 'cancelled') AS cancelled
+        SUM(status = 'confirmed' AND source = 'web') AS webConfirmed, SUM(status = 'cancelled') AS cancelled,
+        SUM(status = 'cancelled' AND late) AS lateCancelled, SUM(CASE WHEN status = 'cancelled' AND late THEN size ELSE 0 END) AS lateCancelledGuests
       FROM (SELECT json_extract(json, '$.status') AS status, json_extract(json, '$.partySize') AS size, json_extract(json, '$.arrival') AS arrival,
-        json_extract(json, '$.source') AS source FROM records WHERE type='reservation' AND business_date BETWEEN ? AND ?)`, from, to).toArray()[0];
-    for (const key of ['reservations', 'guests', 'noShows', 'noShowGuests', 'webConfirmed', 'cancelled'] as const) part[key] = booked?.[key] ?? 0;
+        json_extract(json, '$.source') AS source,
+        json_extract(json, '$.version') >= ${VERSION_AS_TIME} AND json_extract(json, '$.version') - (julianday(json_extract(json, '$.startsAt')) - 2440587.5) * 86400000 BETWEEN -86400000 AND 0 AS late
+        FROM records WHERE type='reservation' AND business_date BETWEEN ? AND ?)`, from, to).toArray()[0];
+    for (const key of ['reservations', 'guests', 'noShows', 'noShowGuests', 'webConfirmed', 'cancelled', 'lateCancelled', 'lateCancelledGuests'] as const) part[key] = booked?.[key] ?? 0;
     // Where the confirmed bookings came from, and how long before their day they were made: only these fields are read.
     part.sources = this.sql.exec<{source: string | null; reservations: number; guests: number | null; noShowGuests: number | null}>(`SELECT
         json_extract(json, '$.source') AS source, count(*) AS reservations, SUM(json_extract(json, '$.partySize')) AS guests,
@@ -969,26 +976,33 @@ export class TenantObject extends DurableObject<Env> {
   private guestOutlook(config: TenantConfig, date: string, now: Date): {days: GuestOutlookDay[]} | null {
     if (date !== reportDate(now, config.timeZone, config.businessDayCutoffHour)) return null;
     const today = addDays(date, 1), empty = (): Record<DayPart, number> => ({day: 0, evening: 0, night: 0});
-    const rows = new Map<string, {part: DayPart; size: number; created: number | null}[]>();
-    for (const row of this.sql.exec<{day: string; starts: string; size: number | null; created: string | null}>(`SELECT business_date AS day,
-        json_extract(json, '$.startsAt') AS starts, json_extract(json, '$.partySize') AS size, json_extract(json, '$.createdAt') AS created
-      FROM records WHERE type='reservation' AND business_date BETWEEN ? AND ? AND json_extract(json, '$.status') = 'confirmed'`, addDays(today, -56), addDays(today, 6))) {
+    // Cancelled bookings of past days count as booked between their creation and their cancellation (the booking's last change, `version` in ms).
+    const rows = new Map<string, {part: DayPart; size: number; created: number | null; cancelled: number | null}[]>();
+    for (const row of this.sql.exec<{day: string; starts: string; size: number | null; created: string | null; status: string; version: number}>(`SELECT business_date AS day,
+        json_extract(json, '$.startsAt') AS starts, json_extract(json, '$.partySize') AS size, json_extract(json, '$.createdAt') AS created,
+        json_extract(json, '$.status') AS status, json_extract(json, '$.version') AS version
+      FROM records WHERE type='reservation' AND business_date BETWEEN ? AND ? AND (json_extract(json, '$.status') = 'confirmed'
+        OR (json_extract(json, '$.status') = 'cancelled' AND business_date < ?))`, addDays(today, -56), addDays(today, 6), today)) {
+      // A cancellation counts only with the time of booking and a version that is a time in ms (docs/ingest-v1.md); otherwise as before: left out.
+      if (row.status === 'cancelled' && (!row.created || !(row.version >= VERSION_AS_TIME))) continue;
       const list = rows.get(row.day) ?? [];
-      list.push({part: dayPart(localTime(new Date(row.starts), config.timeZone).hour), size: row.size ?? 0, created: row.created ? Date.parse(row.created) : null});
+      list.push({part: dayPart(localTime(new Date(row.starts), config.timeZone).hour), size: row.size ?? 0, created: row.created ? Date.parse(row.created) : null,
+        cancelled: row.status === 'cancelled' ? row.version : null});
       rows.set(row.day, list);
     }
     const sum = (list: {part: DayPart; size: number}[]) => list.reduce((parts, row) => { parts[row.part] += row.size; return parts; }, empty());
+    const kept = <T extends {cancelled: number | null}>(list: T[]) => list.filter(row => row.cancelled === null);
     const days = [0, 1, 2, 3, 4, 5, 6].map(ahead => {
       const day = addDays(today, ahead);
       // Past days count only when most of their guests have the time of booking (older data has none, it would show no later bookings).
       const past = [1, 2, 3, 4, 5, 6, 7, 8].map(back => ({back, list: rows.get(addDays(day, -7 * back)) ?? []}))
-        .filter(({list}) => list.length > 0 && 2 * list.filter(row => row.created !== null).reduce((guests, row) => guests + row.size, 0) >= list.reduce((guests, row) => guests + row.size, 0))
+        .filter(({list}) => kept(list).length > 0 && 2 * kept(list).filter(row => row.created !== null).reduce((guests, row) => guests + row.size, 0) >= kept(list).reduce((guests, row) => guests + row.size, 0))
         .map(({back, list}) => {
           // The same moment before that day as now is before this one (same local clock time).
           const moment = sameClockDaysBefore(now, 7 * back, config.timeZone);
-          return {final: sum(list), early: sum(list.filter(row => row.created === null || row.created <= moment))};
+          return {final: sum(kept(list)), early: sum(list.filter(row => (row.created === null || row.created <= moment) && (row.cancelled === null || row.cancelled > moment)))};
         });
-      return guestOutlookDay(day, sum(rows.get(day) ?? []), past);
+      return guestOutlookDay(day, sum(kept(rows.get(day) ?? [])), past);
     });
     return days.some(day => day.booked || day.expected) ? {days} : null;
   }
@@ -1024,6 +1038,8 @@ export class TenantObject extends DurableObject<Env> {
       bottleChecks: this.day<BottleCheck>('bottle_check', date), planHistory, incomplete, report: this.report(date), notes: this.notes(date),
       reservations: this.day<Reservation>('reservation', date), reservationsToday: this.day<Reservation>('reservation', addDays(date, 1)),
       web: this.day<WebTraffic>('web_traffic', date)[0], webLastWeek: this.day<WebTraffic>('web_traffic', addDays(date, -7))[0],
+      webUsual: [7, 14, 21, 28].map(back => this.day<WebTraffic>('web_traffic', addDays(date, -back))[0]).filter((web): web is WebTraffic => !!web)
+        .map(web => ({visits: web.visits, sent: web.actions['rezervace-odeslana'] ?? 0})),
       reviews: this.day<ReviewSummary>('review_summary', date)[0],
       week: weekday(date) === 0 ? this.week(date) : null, silent: this.silentSources(config, date, now),
       month: weekday(date) === 0 || addDays(date, 1).endsWith('-01') ? this.month(config, date) : null,

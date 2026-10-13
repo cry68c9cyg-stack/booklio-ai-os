@@ -961,9 +961,30 @@ try {
     ]),
     // Older days without the time of booking would show no later guests: left out.
     ...['2026-09-23', '2026-09-16'].map((day, i) => booking(`q${i}`, 1, day, 'diner', 10, 'confirmed', null)),
+    // Cancelled after the same moment on 7. 10. (version = time of the change): booked then, so that Wednesday lost 4 evening guests.
+    at(booking('c1', Date.parse('2026-10-07T12:00:00Z'), '2026-10-07', 'diner', 8, 'cancelled', null), '2026-10-07T18:00:00Z', '2026-09-01T10:00:00Z'),
+    // Cancelled before the moment, and one whose version is a plain counter: neither was booked then.
+    at(booking('c2', Date.parse('2026-10-06T05:00:00Z'), '2026-10-07', 'diner', 5, 'cancelled', null), '2026-10-07T18:00:00Z', '2026-09-01T10:00:00Z'),
+    at(booking('c3', 2, '2026-10-07', 'diner', 7, 'cancelled', null), '2026-10-07T18:00:00Z', '2026-09-01T10:00:00Z'),
+    // Cancelled after its start (a no-show the staff cancelled later): not a late cancellation; on an older day, so the outlook stays as is.
+    at(booking('c4', Date.parse('2026-10-05T23:00:00Z'), '2026-10-05', 'diner', 6, 'cancelled', null), '2026-10-05T18:00:00Z', '2026-09-01T10:00:00Z'),
+    // A weak Thursday: usually 12 guests booked by now, now 2.
+    ...['2026-10-08', '2026-10-01'].map((day, i) => at(booking(`t${i}`, 1, day, 'diner', 12, 'confirmed', null), `${day}T18:00:00Z`, '2026-09-01T10:00:00Z')),
+    at(booking('t2', 1, '2026-10-15', 'diner', 2, 'confirmed', null), '2026-10-15T18:00:00Z', '2026-10-01T10:00:00Z'),
   ], 'Bearer ' + token, 'outlook-venue')).status, 200);
+  // The website on Tuesdays: 100 visits and 4 sent booking forms; on 13. 10. only 20 and none.
+  const webDay = (businessDate, visits, sent) => ({type: 'web_traffic', id: `web-${businessDate}`, version: 1, businessDate, visits, visitsWithAction: 0, origins: [],
+    actions: {'rezervace-odeslana': sent}, reviewScans: 0});
+  assert.equal((await ingest('batch-o2', [...['2026-10-06', '2026-09-29', '2026-09-22', '2026-09-15'].map(day => webDay(day, 100, 4)), webDay('2026-10-13', 20, 0)],
+    'Bearer ' + token, 'outlook-venue')).status, 200);
   const outlookMorning = await (await call('POST', '/admin/t/outlook-venue/tick', {at: '2026-10-14T07:00:00Z'})).json();
-  assert.match(outlookMorning.text, /\nHosté dnes: čekej asi 24 \(zatím rezervováno 20\) · přes den 4 · večer 10 · noc 10(\n|$)/, 'a booking without its creation time counts as early, days mostly without it are left out');
+  assert.match(outlookMorning.text, /\nHosté dnes: čekej asi 20 \(zatím rezervováno 20\) · přes den 4 · večer 6 · noc 10(\n|$)/,
+    'a booking without its creation time counts as early, days mostly without it are left out, a late cancellation takes guests away (median of −4 and +4)');
+  assert.match(outlookMorning.text, /\n⚠ Slabší výhled: čt 15\. 10\. zatím 2 hosté \(obvykle touhle dobou 12, −83 %\)\n/);
+  assert.match(outlookMorning.text, /\n⚠ Web: 20 návštěv \(obvykle 100\) a žádný odeslaný rezervační formulář \(obvykle 4\), zkontroluj, že web a rezervace běží\.(\n|$)/);
+  const cancelWeek = await (await call('GET', '/admin/t/outlook-venue/briefing?date=2026-10-11')).json();
+  assert.deepEqual([cancelWeek.briefing.week.current.cancelled, cancelWeek.briefing.week.current.lateCancelled, cancelWeek.briefing.week.current.lateCancelledGuests], [4, 1, 8]);
+  assert.match(cancelWeek.text, /, zrušeno 4 \(\d+ % rezervací, z toho 1 až v posledních 24 h před začátkem, 8 hostů\)/);
   const outlookDays = (await (await call('GET', '/admin/t/outlook-venue/briefing?date=2026-10-13')).json()).briefing.guestOutlook;
   assert.equal(outlookDays, null, 'not for a day looked at later');
 

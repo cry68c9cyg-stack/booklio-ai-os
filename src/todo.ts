@@ -1,5 +1,5 @@
 import {weekday} from './time.ts';
-import {CASH_DIFFERENCE_CENTS, crowns, mismatch, noShowAlarm, noShowText, pendingAheadText, reviewDrop, reviewDropText, unusual, type Briefing} from './briefing.ts';
+import {CASH_DIFFERENCE_CENTS, crowns, mismatch, noShowAlarm, noShowText, pendingAheadText, reviewDrop, reviewDropText, unusual, weakDays, weakDaysText, webDropText, type Briefing} from './briefing.ts';
 
 export type TodoItem = {level: 'warn' | 'info'; text: string; amountCents: number | null};
 const LIMIT = 15;
@@ -22,6 +22,9 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   for (const source of briefing.silent) warn(`${source.name} neposílá data od ${source.since}`);
   if (briefing.reservations?.today.pending) warn(`Rezervace na dnešek čekající na potvrzení: ${briefing.reservations.today.pending}`);
   if (briefing.pendingAhead) warn(`Na příštích 7 dní ${pendingAheadText(briefing.pendingAhead)}`);
+  const weak = weakDays(briefing.guestOutlook);
+  if (weak.length) warn(`Slabší výhled, zvaž akci nebo kampaň: ${weakDaysText(weak)}`);
+  if (briefing.webDrop) warn(`Web: ${webDropText(briefing.webDrop)}`);
   const reviews = briefing.reviews;
   if (reviews?.low) warn(`Slabé recenze (3 ★ a méně): ${reviews.low}`);
   if (reviews?.forManagement) warn(`Recenze čekají na vedení: ${reviews.forManagement}`);

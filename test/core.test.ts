@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, guestOutlookDay, median, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, guestOutlookDay, median, weakDays, webDrop, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
@@ -8,7 +8,7 @@ import {todoList} from '../src/todo.ts';
 import {weatherDays, weatherText} from '../src/weather.ts';
 import {businessDate, sameClockDaysBefore} from '../src/time.ts';
 import {czechHolidays, easterSunday, holidayName} from '../src/holidays.ts';
-import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type TenantConfig} from '../src/validate.ts';
+import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type TenantConfig, type WebTraffic} from '../src/validate.ts';
 
 const config: TenantConfig = {
   name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9],
@@ -512,7 +512,7 @@ test('guests by part of the day: booked now + the usual later bookings, no-shows
   assert.deepEqual([median([3]), median([5, 1, 3]), median([1, 4]), median([4, 1, 2, 10])], [3, 3, 3, 3]);
   const parts = (day: number, evening: number, night: number) => ({day, evening, night});
   const past = [{final: parts(10, 40, 20), early: parts(6, 30, 20)}, {final: parts(8, 50, 30), early: parts(8, 30, 10)}, {final: parts(4, 20, 5), early: parts(6, 18, 5)}];
-  assert.deepEqual(guestOutlookDay('2026-10-14', parts(5, 40, 30), past), {date: '2026-10-14', booked: 75, expected: 85,
+  assert.deepEqual(guestOutlookDay('2026-10-14', parts(5, 40, 30), past), {date: '2026-10-14', booked: 75, expected: 85, usual: 48, weak: false,
     parts: [{key: 'day', booked: 5, expected: 5}, {key: 'evening', booked: 40, expected: 50}, {key: 'night', booked: 30, expected: 30}]}, 'medians 0, 10, 0; fewer guests later counts as 0');
   assert.deepEqual(guestOutlookDay('2026-10-14', parts(5, 40, 30), past.slice(0, 1)).expected, null, 'one past day is not usual');
   const days = [guestOutlookDay('2026-10-14', parts(5, 40, 30), past), guestOutlookDay('2026-10-15', parts(0, 0, 0), [])];
@@ -525,6 +525,35 @@ test('guests by part of the day: booked now + the usual later bookings, no-shows
   assert.deepEqual(renderGuestOutlook(few.guestOutlook), ['Hosté dnes: rezervováno 6 · večer 6'], 'no estimate without history, no no-shows from under 50 guests');
   assert.deepEqual(renderGuestOutlook(buildBriefing({businessDate: '2026-10-13', config, bills: [], closings: [], planHistory: [], incomplete: false}).guestOutlook), []);
   assert.deepEqual(renderGuestOutlook({days: [guestOutlookDay('2026-10-14', parts(0, 0, 0), [])], noShowGuests: null}), [], 'nothing on an empty day');
+});
+
+test('weak days ahead: 40 % fewer guests booked than usual by now, from 10 usual guests; late cancellations can take guests away', () => {
+  const parts = (day: number, evening: number, night: number) => ({day, evening, night});
+  const usual = [{final: parts(0, 30, 0), early: parts(0, 20, 0)}, {final: parts(0, 30, 0), early: parts(0, 20, 0)}];
+  const weak = guestOutlookDay('2026-10-17', parts(0, 12, 0), usual), fine = guestOutlookDay('2026-10-18', parts(0, 13, 0), usual);
+  assert.deepEqual([weak.usual, weak.weak, fine.weak], [20, true, false], '12 is 60 % of 20, 13 is more');
+  assert.equal(guestOutlookDay('2026-10-17', parts(0, 0, 0), [{final: parts(0, 9, 0), early: parts(0, 9, 0)}, {final: parts(0, 9, 0), early: parts(0, 9, 0)}]).weak, false, 'under 10 usual guests');
+  // Cancelled after the moment: booked then (early), gone at the end, so the day usually loses guests; never below zero.
+  assert.equal(guestOutlookDay('2026-10-17', parts(0, 5, 0), [{final: parts(0, 10, 0), early: parts(0, 20, 0)}, {final: parts(0, 10, 0), early: parts(0, 20, 0)}]).expected, 0);
+  const briefing = buildBriefing({businessDate: '2026-10-13', config, bills: [], closings: [], planHistory: [], incomplete: false,
+    guestOutlook: {days: [guestOutlookDay('2026-10-14', parts(0, 25, 0), usual), weak]}});
+  assert.match(renderBriefing('Test', briefing), /\n⚠ Slabší výhled: so 17\. 10\. zatím 12 hostů \(obvykle touhle dobou 20, −40 %\)(\n|$)/);
+  assert.ok(todoList(briefing).some(item => item.text === 'Slabší výhled, zvaž akci nebo kampaň: so 17. 10. zatím 12 hostů (obvykle touhle dobou 20, −40 %)'));
+  assert.equal(weakDays(buildBriefing({businessDate: '2026-10-13', config, bills: [], closings: [], planHistory: [], incomplete: false}).guestOutlook).length, 0);
+});
+
+test('website watch: visits under half of the usual or no booking form sent, against the same weekday of 4 weeks', () => {
+  const day = (visits: number, sent: number): WebTraffic => ({type: 'web_traffic', id: 'w', version: 1, businessDate: '2026-10-13', visits, visitsWithAction: 0, origins: [],
+    actions: {'rezervace-odeslana': sent}, reviewScans: 0});
+  const usual = [{visits: 100, sent: 5}, {visits: 120, sent: 4}, {visits: 90, sent: 6}];
+  assert.equal(webDrop(day(60, 2), usual), null, 'half of 100 or more is fine, forms were sent');
+  assert.deepEqual(webDrop(day(40, 0), usual), {visits: 40, usualVisits: 100, sent: 0, usualSent: 5, lowVisits: true, noSent: true});
+  assert.equal(webDrop(day(40, 0), usual.slice(0, 2)), null, 'needs 3 usual days');
+  assert.equal(webDrop(day(10, 0), [{visits: 20, sent: 1}, {visits: 20, sent: 2}, {visits: 25, sent: 1}]), null, 'a quiet website is not watched');
+  assert.deepEqual(webDrop(day(95, 0), usual), {visits: 95, usualVisits: 100, sent: 0, usualSent: 5, lowVisits: false, noSent: true});
+  const briefing = buildBriefing({businessDate: '2026-10-13', config, bills: [], closings: [], planHistory: [], incomplete: false, web: day(40, 0), webUsual: usual});
+  assert.match(renderBriefing('Test', briefing), /\n⚠ Web: 40 návštěv \(obvykle 100\) a žádný odeslaný rezervační formulář \(obvykle 5\), zkontroluj, že web a rezervace běží\.(\n|$)/);
+  assert.ok(todoList(briefing).some(item => item.text === 'Web: 40 návštěv (obvykle 100) a žádný odeslaný rezervační formulář (obvykle 5), zkontroluj, že web a rezervace běží'));
 });
 
 test('events looked back on in the weekly summary', () => {

@@ -75,7 +75,7 @@ Doplněno 9. 10. 2026 zpětně kompatibilně, stejně jako kontrola lahví: AI O
 
 | Pole | Typ | Poznámka |
 |---|---|---|
-| `id`, `version` | string, int ≥ 1 | `version` roste s každou změnou rezervace; smí to být čas poslední změny v ms (u rezervací bez horní meze 10¹²) |
+| `id`, `version` | string, int ≥ 1 | `version` roste s každou změnou rezervace; smí to být čas poslední změny v ms (u rezervací bez horní meze 10¹²). Když je `version` ≥ 10¹² (čas v ms), OKO1 u zrušené rezervace bere tento čas jako čas zrušení: pozdní storna do 24 h před začátkem a výhled hostů, kterým storna po stejné chvíli zase ubírají |
 | `businessDate` | `YYYY-MM-DD` | provozní den; noční klub v 0:30 patří k předchozímu dni |
 | `startsAt` | ISO čas | začátek rezervace |
 | `section` | string | středisko stejným klíčem jako u účtů (`diner`, `bar`, `club`) |

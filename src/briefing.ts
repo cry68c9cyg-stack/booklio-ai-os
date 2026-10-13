@@ -49,6 +49,8 @@ export type Briefing = {
   guestOutlook: GuestOutlook | null;
   /** The website on the reported calendar day, against the same weekday a week before. `null` = the website sent nothing. */
   web: {visits: number; withAction: number; lastWeekVisits: number | null; reservationsSent: number; reviewScans: number; topOrigins: {name: string; visits: number}[]} | null;
+  /** The website far below its usual day (same weekday, 4 weeks): too few visits or no booking form sent. `null` = fine or unknown. */
+  webDrop: {visits: number; usualVisits: number; sent: number; usualSent: number; lowVisits: boolean; noSent: boolean} | null;
   /** Reviews that reached the website's admin on the reported calendar day, and how many wait there. `null` = nothing sent. */
   reviews: {newCount: number; averageTenths: number | null; low: number; bySource: {name: string; newCount: number}[]; waiting: number; forManagement: number; failed: number} | null;
   /** The 7 days up to the reported day against the 7 before: sums only. `null` = not asked for. */
@@ -75,6 +77,8 @@ export type Briefing = {
 export type WeekPart = {revenueCents: number; revenueDays: number; reservations: number; guests: number; noShows: number; noShowGuests: number;
   /** Bookings for these days that were cancelled (by the guest or the staff); a week stored before this field has none. */
   cancelled?: number;
+  /** Of these, cancelled less than 24 hours before the booking's start (time of the last change of the booking), and their guests. */
+  lateCancelled?: number; lateCancelledGuests?: number;
   /** Confirmed bookings by how long before their day they were made (only those sent with `createdAt`). */
   lead?: {sameDay: number; upTo2: number; upTo7: number; more: number};
   /** Confirmed bookings and guests by where they came from (`web`, `obsluha`, `mcp`…), most first. */
@@ -133,7 +137,8 @@ export const dayPart = (hour: number): DayPart => hour >= 6 && hour < 17 ? 'day'
  * Confirmed guests booked now per day and part of the day, and what to expect: booked now + the usual later bookings (median over
  * the same weekday of the 8 weeks before, how many guests were booked after the same moment; at least 2 such days, else unknown).
  */
-export type GuestOutlookDay = {date: string; booked: number; expected: number | null; parts: {key: DayPart; booked: number; expected: number | null}[]};
+/** `usual` = guests the same weekday usually had booked by the same moment (median of the past days), for spotting a weak day early. */
+export type GuestOutlookDay = {date: string; booked: number; expected: number | null; usual: number | null; weak: boolean; parts: {key: DayPart; booked: number; expected: number | null}[]};
 export type GuestOutlook = {days: GuestOutlookDay[]; noShowGuests: number | null};
 /** The median of whole numbers, rounded. */
 export const median = (values: number[]) => {
@@ -142,11 +147,40 @@ export const median = (values: number[]) => {
 };
 /** One day of the outlook from guests booked now and past days' {final, booked by the same moment}, per part of the day. */
 export function guestOutlookDay(date: string, now: Record<DayPart, number>, past: {final: Record<DayPart, number>; early: Record<DayPart, number>}[]): GuestOutlookDay {
+  // Bookings cancelled after the moment count as booked then, so late cancellations can take guests away again (never below zero).
   const parts = DAY_PARTS.map(({key}) => ({key, booked: now[key],
-    expected: past.length >= 2 ? now[key] + Math.max(0, median(past.map(day => day.final[key] - day.early[key]))) : null}));
+    expected: past.length >= 2 ? Math.max(0, now[key] + median(past.map(day => day.final[key] - day.early[key]))) : null}));
   const booked = parts.reduce((sum, part) => sum + part.booked, 0);
-  return {date, booked, expected: past.length >= 2 ? parts.reduce((sum, part) => sum + part.expected!, 0) : null, parts};
+  const total = (parts: Record<DayPart, number>) => DAY_PARTS.reduce((sum, {key}) => sum + parts[key], 0);
+  const usual = past.length >= 2 ? median(past.map(day => total(day.early))) : null;
+  return {date, booked, expected: past.length >= 2 ? parts.reduce((sum, part) => sum + part.expected!, 0) : null,
+    usual, weak: usual !== null && usual >= WEAK_MIN_USUAL && booked <= usual * WEAK_SHARE, parts};
 }
+
+/** A day ahead is weak when its weekday usually has at least 10 guests booked by now and it has 40 % fewer or less. */
+export const WEAK_MIN_USUAL = 10;
+export const WEAK_SHARE = 0.6;
+export function weakDays(outlook: Briefing['guestOutlook'] | undefined): GuestOutlookDay[] {
+  return (outlook?.days ?? []).filter(day => day.weak);
+}
+/** "so 18. 10. zatím 12 hostů (obvykle touhle dobou 30, −60 %)" */
+export const weakDaysText = (days: GuestOutlookDay[]) => days.map(day =>
+  `${weekdayShort[weekday(day.date)]} ${shortDate(day.date)} zatím ${day.booked} ${guestsWord(day.booked)} (obvykle touhle dobou ${day.usual}, ${change(day.booked, day.usual!).slice(2, -1)})`).join(' · ');
+
+/** The website broke down: visits under half of the usual (at least 30 usually), or no booking form sent when at least 3 usually are. */
+export const WEB_DROP_MIN_VISITS = 30;
+export const WEB_DROP_SHARE = 0.5;
+export const WEB_DROP_MIN_SENT = 3;
+export function webDrop(day: WebTraffic | undefined, usual: {visits: number; sent: number}[] | undefined): Briefing['webDrop'] {
+  if (!day || !usual || usual.length < 3) return null;
+  const usualVisits = median(usual.map(row => row.visits)), usualSent = median(usual.map(row => row.sent)), sent = day.actions['rezervace-odeslana'] ?? 0;
+  const lowVisits = usualVisits >= WEB_DROP_MIN_VISITS && day.visits < usualVisits * WEB_DROP_SHARE, noSent = usualSent >= WEB_DROP_MIN_SENT && sent === 0;
+  return lowVisits || noSent ? {visits: day.visits, usualVisits, sent, usualSent, lowVisits, noSent} : null;
+}
+/** "40 návštěv (obvykle 150) a žádný odeslaný rezervační formulář (obvykle 6), zkontroluj, že web a rezervace běží" */
+export const webDropText = (drop: NonNullable<Briefing['webDrop']>) =>
+  [drop.lowVisits ? `${group(drop.visits)} ${visitsWord(drop.visits)} (obvykle ${group(drop.usualVisits)})` : '', drop.noSent ? `žádný odeslaný rezervační formulář (obvykle ${drop.usualSent})` : '']
+    .filter(Boolean).join(' a ') + ', zkontroluj, že web a rezervace běží';
 export type MonthResult = {
   month: string; through: string; rows: {account: string; name: string; amountCents: number}[];
   revenueCents: number; revenueDays: number; error: string | null;
@@ -402,6 +436,8 @@ export function buildBriefing(input: {
   report?: DailyReport | null; notes?: NotesAnalysis | null;
   reservations?: Reservation[]; reservationsToday?: Reservation[];
   web?: WebTraffic; webLastWeek?: WebTraffic;
+  /** Visits and sent booking forms of the same weekday over the 4 weeks before (days the website sent). */
+  webUsual?: {visits: number; sent: number}[];
   costs?: MonthResult | null; costsPrevious?: MonthResult | null;
   reviews?: ReviewSummary;
   week?: Week | null; silent?: {name: string; since: string}[];
@@ -488,6 +524,7 @@ export function buildBriefing(input: {
       : report?.notes ? {points: [], summary: null, raw: report.notes} : null,
     reservations: summarizeReservations(input.config, input.reservations ?? [], input.reservationsToday ?? []),
     web: summarizeWeb(input.web, input.webLastWeek),
+    webDrop: webDrop(input.web, input.webUsual),
     reviews: summarizeReviews(input.reviews),
     costs: input.costs ?? null, costsPrevious: input.costsPrevious ?? null,
     week: input.week ?? null,
@@ -550,10 +587,13 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderReservations(briefing.reservations, briefing.outlook));
   lines.push(...renderEvents(briefing.events));
   lines.push(...renderGuestOutlook(briefing.guestOutlook));
+  const weak = weakDays(briefing.guestOutlook);
+  if (weak.length) lines.push(`⚠ Slabší výhled: ${weakDaysText(weak)}`);
   if (briefing.pendingAhead) lines.push(`Na příštích 7 dní ${pendingAheadText(briefing.pendingAhead)}`);
   if (noShowAlarm(briefing.noShows)) lines.push(`⚠ No-show: ${noShowText(briefing.noShows!)}`);
   lines.push(...renderForecast(briefing.forecast));
   lines.push(...renderWeb(briefing.web));
+  if (briefing.webDrop) lines.push(`⚠ Web: ${webDropText(briefing.webDrop)}.`);
   lines.push(...renderReviews(briefing.reviews));
   lines.push(...renderCosts(briefing.costs, briefing.costsPrevious));
   lines.push(...renderNotes(briefing));
@@ -687,7 +727,8 @@ export function renderWeek(week: Briefing['week']): string[] {
     parts.push(`tržba ${crowns(now.revenueCents)}${notes.length ? ` (${notes.join(', ')})` : ''}`);
   }
   if (now.reservations || before.reservations) parts.push(`rezervace ${now.reservations}, ${now.guests} ${guestsWord(now.guests)}${change(now.guests, before.guests)}${now.noShowGuests ? `, ${notCame(now.noShowGuests)} ${now.noShowGuests} ${guestsWord(now.noShowGuests)} (${percent(Math.round(now.noShowGuests / now.guests * 1000))})` : ''}`
-    + (now.cancelled ? `, zrušeno ${now.cancelled} (${percent(Math.round(now.cancelled / (now.cancelled + now.reservations) * 1000))} rezervací)` : ''));
+    + (now.cancelled ? `, zrušeno ${now.cancelled} (${percent(Math.round(now.cancelled / (now.cancelled + now.reservations) * 1000))} rezervací`
+      + (now.lateCancelled ? `, z toho ${now.lateCancelled} až v posledních 24 h před začátkem, ${now.lateCancelledGuests} ${guestsWord(now.lateCancelledGuests ?? 0)}` : '') + ')' : ''));
   if (now.visits !== null) parts.push(`web ${group(now.visits)} ${visitsWord(now.visits)}${before.visits !== null && before.visitDays === now.visitDays ? change(now.visits, before.visits) : ''}`
     + (now.webSent || now.webConfirmed ? ` · rezervační formulář odeslán ${now.webSent}× · potvrzené rezervace z webu na tyto dny ${now.webConfirmed}` : ''));
   if (now.reviews) parts.push(`recenze ${now.reviews}${now.starsTenths !== null ? `, průměr ${stars(now.starsTenths)}` : ''}`);
