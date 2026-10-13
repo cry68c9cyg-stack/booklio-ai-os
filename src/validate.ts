@@ -88,8 +88,23 @@ export type Menu = {
   type: 'menu'; id: string; version: number; businessDate: string; source: string; items: MenuItem[];
   notes: {part: MenuItem['part']; category: string; text: string}[];
 };
+/** What a purchase is for: food, drinks (both make food cost) or anything else. */
+export const COST_KINDS = ['food', 'beverage', 'other'] as const;
+/** One line of a supplier invoice; prices without VAT in haléře, `unitPriceCents` per `unit` as the invoice states it. */
+export type SupplierInvoiceItem = {name: string; quantity: number; unit: string | null; unitPriceCents: number; netCents: number;
+  kind: typeof COST_KINDS[number] | null; category: string | null};
+/**
+ * A supplier invoice or receipt (decision of MC, 13. 10. 2026; interim sender Dishboard, later Pexeso). `businessDate` is
+ * the day it was issued. Business data only, nothing about guests. A higher `version` replaces it; a cancelled invoice
+ * stays with `status: cancelled`.
+ */
+export type SupplierInvoice = {
+  type: 'supplier_invoice'; id: string; version: number; businessDate: string; source: string; supplier: string; supplierId: string | null;
+  number: string | null; dueDate: string | null; paidDate: string | null; status: 'active' | 'cancelled';
+  netCents: number; grossCents: number; kind: typeof COST_KINDS[number]; category: string | null; items: SupplierInvoiceItem[];
+};
 export const RESERVATION_STATUSES = ['pending', 'confirmed', 'declined', 'expired', 'cancelled'] as const;
-export type IngestRecord = Bill | CashClosing | BottleCheck | Reservation | WebTraffic | ReviewSummary | VenueEvent | Menu;
+export type IngestRecord = Bill | CashClosing | BottleCheck | Reservation | WebTraffic | ReviewSummary | VenueEvent | Menu | SupplierInvoice;
 export type Batch = {batchId: string; installationId: string; records: IngestRecord[]};
 
 export type TenantConfig = {
@@ -109,6 +124,8 @@ export type TenantConfig = {
   web: {url: string} | null;
   /** Where the venue is, for the weather forecast (MET Norway); 4 decimals at most, as its terms ask. */
   location: {lat: number; lon: number} | null;
+  /** Senders (`source` of their records) switched off: their data stays stored but OKO1 leaves it out, e.g. `dishboard`. */
+  disabledSources: string[];
 };
 /** Websites OKO1 may read (docs/web-v1.md). Nothing else is ever fetched with a web token. */
 export const WEB_HOSTS: readonly string[] = ['jamesdean.cz'];
@@ -298,6 +315,30 @@ function menu(raw: Obj): Menu {
   };
 }
 
+function costKind(value: unknown): SupplierInvoice['kind'] {
+  if (!(COST_KINDS as readonly unknown[]).includes(value)) fail();
+  return value as SupplierInvoice['kind'];
+}
+
+function supplierInvoice(raw: Obj): SupplierInvoice {
+  const value = object(raw, ['type', 'id', 'version', 'businessDate', 'source', 'supplier', 'netCents', 'grossCents', 'kind', 'items'],
+    ['supplierId', 'number', 'dueDate', 'paidDate', 'status', 'category']);
+  if (value.status != null && value.status !== 'active' && value.status !== 'cancelled') fail();
+  return {
+    type: 'supplier_invoice', id: id(value.id), version: int(value.version, 1, Number.MAX_SAFE_INTEGER), businessDate: date(value.businessDate), source: id(value.source),
+    supplier: text(value.supplier, 200), supplierId: value.supplierId == null ? null : id(value.supplierId), number: optionalText(value.number, 60),
+    dueDate: value.dueDate == null ? null : date(value.dueDate), paidDate: value.paidDate == null ? null : date(value.paidDate),
+    status: (value.status ?? 'active') as SupplierInvoice['status'], netCents: int(value.netCents, -1e10, 1e10), grossCents: int(value.grossCents, -1e10, 1e10),
+    kind: costKind(value.kind), category: optionalText(value.category, 100),
+    items: list(value.items, 500, item => {
+      const row = object(item, ['name', 'quantity', 'unitPriceCents', 'netCents'], ['unit', 'kind', 'category']);
+      if (typeof row.quantity !== 'number' || !Number.isFinite(row.quantity) || row.quantity <= 0 || row.quantity > 1e7) fail();
+      return {name: text(row.name, 200), quantity: row.quantity as number, unit: optionalText(row.unit, 20), unitPriceCents: int(row.unitPriceCents, 0, 1e9),
+        netCents: int(row.netCents, -1e10, 1e10), kind: row.kind == null ? null : costKind(row.kind), category: optionalText(row.category, 100)};
+    }),
+  };
+}
+
 export function validateBatch(raw: unknown): Batch {
   const value = object(raw, ['batchId', 'installationId', 'records']);
   if (typeof value.batchId !== 'string' || !/^[\w-]{8,128}$/.test(value.batchId)) fail();
@@ -313,6 +354,7 @@ export function validateBatch(raw: unknown): Batch {
       if (row?.type === 'review_summary') return reviewSummary(row);
       if (row?.type === 'event') return venueEvent(row);
       if (row?.type === 'menu') return menu(row);
+      if (row?.type === 'supplier_invoice') return supplierInvoice(row);
       return fail();
     }),
   };
@@ -344,7 +386,7 @@ function website(raw: unknown): {url: string} {
 }
 
 export function validateConfig(raw: unknown): TenantConfig {
-  const value = object(raw, ['name', 'timeZone', 'businessDayCutoffHour', 'sendHours', 'registers', 'sections', 'recipients'], ['bottleCheck', 'reportsLink', 'dashboardPhones', 'web', 'location']);
+  const value = object(raw, ['name', 'timeZone', 'businessDayCutoffHour', 'sendHours', 'registers', 'sections', 'recipients'], ['bottleCheck', 'reportsLink', 'dashboardPhones', 'web', 'location', 'disabledSources']);
   const timeZone = text(value.timeZone, 60);
   try { new Intl.DateTimeFormat('en', {timeZone}); } catch { fail(); }
   const sendHours = list(value.sendHours, 6, hour => int(hour, 0, 23));
@@ -361,6 +403,7 @@ export function validateConfig(raw: unknown): TenantConfig {
     reportsLink: value.reportsLink == null || value.reportsLink === '' ? null : shareLink(value.reportsLink),
     web: value.web == null ? null : website(value.web),
     location: value.location == null ? null : coordinates(value.location),
+    disabledSources: value.disabledSources == null ? [] : list(value.disabledSources, 20, id),
   };
 }
 
