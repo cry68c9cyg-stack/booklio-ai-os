@@ -200,6 +200,25 @@ function weekCard(w) {
   return '<div class="card"><h2>Týden ' + short(w.from) + '–' + short(w.to) + '</h2><table><tr><th></th><th class="n">7 dní</th><th class="n">7 dní předtím</th></tr>' + rows.join('') + '</table>' + origins + '</div>';
 }
 
+// Twelve weeks up to the shown day, newest first: where the numbers are heading.
+function trendsCard(t) {
+  if (!t || !t.length) return '';
+  const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.', num = v => String(v).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ' ');
+  const rows = t.slice().reverse().map((w, i, all) => {
+    const prev = all[i + 1], arrow = (a, b) => b ? (a > b * 1.05 ? ' <span class="muted">↑</span>' : a < b * 0.95 ? ' <span class="muted">↓</span>' : '') : '';
+    return '<tr><td>' + short(w.from) + '–' + short(w.to) + '</td>' +
+      '<td class="n">' + (w.revenueDays ? kc(w.revenueCents) + (prev && prev.revenueDays === w.revenueDays ? arrow(w.revenueCents, prev.revenueCents) : '') + (w.revenueDays < 7 ? ' <span class="muted">(' + w.revenueDays + ' d)</span>' : '') : '–') + '</td>' +
+      '<td class="n">' + w.guests + (prev ? arrow(w.guests, prev.guests) : '') + '</td>' +
+      '<td class="n' + (w.guests && w.noShowGuests / w.guests >= 0.1 ? ' warn' : '') + '">' + (w.guests ? Math.round(w.noShowGuests / w.guests * 100) + ' %' : '–') + '</td>' +
+      '<td class="n">' + (w.visits === null ? '–' : num(w.visits)) + '</td>' +
+      '<td class="n">' + w.webSent + ' → ' + w.webConfirmed + '</td>' +
+      '<td class="n">' + w.reviews + (w.starsTenths !== null ? ' · ' + (w.starsTenths / 10).toFixed(1).replace('.', ',') + ' ★' : '') + '</td>' +
+      '<td class="n">' + (w.errorPermille === null ? '–' : Math.round(w.errorPermille / 10) + ' %') + '</td></tr>';
+  }).join('');
+  return '<div class="card"><h2>Trendy 12 týdnů</h2><div class="scroll"><table><tr><th>Týden</th><th class="n">Tržba</th><th class="n">Hosté rez.</th><th class="n">Nedorazilo</th><th class="n">Web</th><th class="n">Formuláře → rez.</th><th class="n">Recenze</th><th class="n">Odchylka odhadu</th></tr>' +
+    rows + '</table></div><div class="muted">↑ ↓ = o víc než 5 % proti týdnu předtím; odchylka odhadu = jak daleko byla tržba od plánu z ranní zprávy (od 4 dní v týdnu)</div></div>';
+}
+
 // The month up to the shown day against the same days of the month before, and the cash the cash book paid out.
 const monthNames = ['leden', 'únor', 'březen', 'duben', 'květen', 'červen', 'červenec', 'srpen', 'září', 'říjen', 'listopad', 'prosinec'];
 function monthCard(m) {
@@ -239,8 +258,10 @@ function forecastCard(f) {
   const round = c => c === null ? null : Math.round(c / 100000) * 100000;
   const days = ['ne', 'po', 'út', 'st', 'čt', 'pá', 'so'], wd = d => days[new Date(d + 'T12:00:00Z').getUTCDay()];
   const m = f.month, missing = m.elapsedDays - m.actualDays;
-  const lift = d => { const e = d.eventBoost || 1; return e > d.boost ? ' <span class="muted">(+' + Math.round((e - 1) * 100) + ' % akce)</span>' : d.boost > 1 ? ' <span class="muted">(+' + Math.round((d.boost - 1) * 100) + ' % rezervace)</span>' : ''; };
-  const week = (f.days || []).map(d => '<tr><td>' + wd(d.date) + ' ' + short(d.date) + ((d.events || []).length ? '<div class="muted">' + d.events.map(esc).join(', ') + '</div>' : '') + '</td><td class="n">' + kc(round(d.cents)) + lift(d) +
+  const by = (x, what) => ' <span class="muted">(' + (x >= 1 ? '+' : '−') + Math.round(Math.abs(x - 1) * 100) + ' % ' + what + ')</span>';
+  const lift = d => { const e = d.eventBoost || 1; return (e > d.boost ? by(e, 'akce') : d.boost > 1 ? by(d.boost, 'rezervace') : '') +
+    (d.holidayFactor !== undefined && d.holidayFactor !== 1 ? by(d.holidayFactor, 'svátek') : '') + (d.rainFactor !== undefined && d.rainFactor !== 1 ? by(d.rainFactor, 'déšť') : ''); };
+  const week = (f.days || []).map(d => '<tr><td>' + wd(d.date) + ' ' + short(d.date) + ((d.events || []).length ? '<div class="muted">' + d.events.map(esc).join(', ') + '</div>' : '') + (d.holiday ? '<div class="muted">svátek: ' + esc(d.holiday) + '</div>' : '') + '</td><td class="n">' + kc(round(d.cents)) + lift(d) +
     '</td><td class="n' + (d.boost > 1 ? ' warn' : '') + '">' + d.guests + (d.usualGuests !== null ? ' <span class="muted">/ ' + d.usualGuests + '</span>' : '') + '</td><td class="muted">' + esc(d.weatherText || '–') + '</td></tr>').join('');
   const rows = [];
   rows.push('<tr><td>7 dní od dneška <span class="muted">(' + short(f.week.from) + '–' + short(f.week.to) + ')</span></td><td class="n">' + kc(round(f.week.cents)) + '</td></tr>');
@@ -255,6 +276,8 @@ function forecastCard(f) {
     (seasons.length ? ', upravený podle loňska (' + esc(seasons.join(', ')) + ')' : '; loňská data na sezónnost zatím nejsou') +
     '. Výrazně víc potvrzených hostů než obvykle (aspoň o 10) zvýší odhad dne o polovinu toho rozdílu, nejvýš o 50 %. ' +
     (f.eventFactor && f.eventFactor.factor > 1 ? 'Den s akcí bývá o ' + Math.round((f.eventFactor.factor - 1) * 100) + ' % silnější (' + f.eventFactor.days + ' dní s akcí za půl roku); platí větší z obou úprav. ' : 'Vliv akcí se započítá od 4 dní s akcí a tržbou. ') +
+    'Státní svátek se počítá podle stejného svátku loni proti jeho dnům v týdnu (jinak podle mediánu svátků za rok) a do průměrů dnů v týdnu nevstupuje. ' +
+    (f.rainFactor ? 'Deštivý den (od 5 mm) bývá ' + (f.rainFactor.factor >= 1 ? 'o ' + Math.round((f.rainFactor.factor - 1) * 100) + ' % silnější' : 'o ' + Math.round((1 - f.rainFactor.factor) * 100) + ' % slabší') + ' (' + f.rainFactor.days + ' deštivých dní za půl roku). ' : 'Vliv deště se započítá od 6 deštivých dní s tržbou (OKO1 si počasí ukládá od října 2026). ') +
     'Počasí: MET Norway.</p></div>';
 }
 
@@ -342,7 +365,7 @@ function render(data) {
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card" id="todo">' + todoCard(data.todo) + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
-  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast) + weekCard(data.week) + monthCard(data.month) + menuCard(data.menu) + sourcesCard(data.sources);
+  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast) + weekCard(data.week) + trendsCard(data.trends) + monthCard(data.month) + menuCard(data.menu) + sourcesCard(data.sources);
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
   if (r) {

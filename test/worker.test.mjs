@@ -357,6 +357,8 @@ try {
   assert.equal(data.briefing.revenueCents, 39000000);
   assert.equal(data.days.length, 35);
   assert.equal(data.days.at(-1).date, '2026-10-09');
+  // Twelve weeks for the trends card, oldest first, the last one up to the shown day.
+  assert.deepEqual([data.trends.length, data.trends[11].from, data.trends[11].to, data.trends[11].revenueCents, data.trends[0].to], [12, '2026-10-03', '2026-10-09', 39000000, '2026-07-24']);
   assert.deepEqual([data.balances.register, data.balances.safe], [14080100, 3000000]);
   assert.deepEqual(data.todo.slice(0, 4).map(item => item.text), ['Platba nesedí s deníkem, karta: report 380 000 Kč, deník 295 000 Kč',
     'Tržba nesedí s deníkem, Bar: report 150 000 Kč, deník 100 000 Kč', 'Tržba nesedí s deníkem, Klub: report 180 000 Kč, deník 150 000 Kč',
@@ -920,6 +922,15 @@ try {
   assert.deepEqual(reviewed.briefing.week.events, [{date: '2026-10-08', title: 'Koncert 3', guests: 8, usualGuests: 5, revenueCents: 1500000, usualRevenueCents: 1000000}],
     'the event day of 10. 9. is not usual; the diner\'s guests do not count for a club event');
   assert.match(reviewed.text, /\nAkce za týden: čt 8\. 10\. Koncert 3 – 8 hostů z rezervací \(obvykle 5, \+60 %\), tržba 15 000 Kč \(obvykle 10 000 Kč\)\n/);
+
+  // Public holidays: last year's 28. 10. was closed, so this year's forecast for it is 0 Kč; the weekday averages leave holidays out.
+  assert.equal((await call('PUT', '/admin/t/holiday-venue/config', {...config, registers: []})).status, 200);
+  await call('POST', '/admin/t/holiday-venue/history', {rows: Array.from({length: 400}, (_, i) => addDays('2026-10-26', -i))
+    .map(day => ({businessDate: day, revenueCents: day === '2025-10-28' ? 0 : day === '2026-09-28' ? 300000 : 1000000}))});
+  const holidayMorning = await (await call('GET', '/admin/t/holiday-venue/briefing?date=2026-10-26')).json();
+  assert.deepEqual([holidayMorning.briefing.forecast.days[1].holiday, holidayMorning.briefing.forecast.days[1].holidayFactor, holidayMorning.briefing.forecast.days[1].cents], ['Den vzniku státu', 0, 0]);
+  assert.match(holidayMorning.text, /\nOdhad tržby: zítra \(st 28\. 10\.\) 0 Kč \(svátek Den vzniku státu, loni zavřeno\) · /);
+  assert.ok(holidayMorning.briefing.forecast.days[6].cents > 900000, 'the low 28. 9. (a holiday Monday) does not pull Mondays down');
 
   // Guests to expect today by part of the day: booked now + what the same weekday usually still got after the same moment (local start time).
   assert.equal((await call('PUT', '/admin/t/outlook-venue/config', {...config, registers: []})).status, 200);
