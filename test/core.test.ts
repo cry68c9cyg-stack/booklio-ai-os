@@ -705,6 +705,12 @@ test('POS products are paired to the menu by name, size by volume or price, and 
   assert.deepEqual(pairSale(menu, {name: 'Caesar salát s kuřetem', quantity: 1, grossCents: 21500}), {itemId: 's1', how: 'similar'});
   assert.equal(pairSale(menu, {name: 'Burger', quantity: 1, grossCents: 22500}), null, 'two burgers share the word: unpaired');
   assert.equal(pairSale(menu, {name: 'Tonic', quantity: 1, grossCents: 6000}), null);
+  assert.deepEqual([volumeOf('Víno 1/8 l'), volumeOf('Pivo 1/2 l'), nameKey('Víno 1/8 l')], [125, 500, 'vino']);
+  const burgers = menuOf([dish('c', 'Burgery', 'Cheeseburger', [21500]), dish('d', 'Burgery', 'Double bacon cheeseburger', [29500]),
+    dish('k', 'Hlavní', 'Kuře na grilu', [26500]), dish('h', 'Přílohy', 'Batátové hranolky', [8900])]);
+  assert.equal(pairSale(burgers, {name: 'Double cheeseburger', quantity: 1, grossCents: 26500}), null, 'two burgers close: unpaired');
+  assert.equal(pairSale(burgers, {name: 'Kuře na pepři', quantity: 1, grossCents: 26500}), null, 'filler words do not pair');
+  assert.equal(pairSale(burgers, {name: 'Hranolky', quantity: 1, grossCents: 6900}), null, 'half the words are not enough');
 });
 
 test('profit by item: revenue without VAT, food cost per piece and what is missing', () => {
@@ -727,6 +733,8 @@ test('virtual repricing rounds to 5 Kč, filters by part, category and name, and
   assert.deepEqual(repricing(menu, {part: 'drinks', deltaCents: 1000, stepCents: 100}, new Map()).items.map(item => item.newPricesCents), [[9900]]);
   assert.deepEqual(repricing(menu, {query: 'texas', percent: -50}, new Map()).items.map(item => item.newPricesCents), [[12500]]);
   assert.equal(repricing(menu, {query: 'pizza', percent: 5}, new Map()).count, 0);
+  const free = repricing(menuOf([dish('w', 'Voda', 'Voda z kohoutku', [0]), dish('e', 'Voda', 'Espresso', [6200])]), {deltaCents: -10000}, new Map());
+  assert.deepEqual(free.items.map(item => [item.newPricesCents, item.atMinimum ?? false]), [[[0], false], [[500], true]], 'free stays free, a price stays at one step');
 });
 
 test('price check: too cheap and too expensive in a category (per litre for sizes) and gaps in the price ladder', () => {
@@ -735,4 +743,9 @@ test('price check: too cheap and too expensive in a category (per litre for size
     drink('p1', 'Pivo 1', 300, 6500), drink('p2', 'Pivo 2', 500, 8900), drink('p3', 'Pivo 3', 500, 9500), drink('p4', 'Pivo 4', 300, 2500)]));
   assert.deepEqual(findings.map(f => [f.kind, f.itemId, f.suggestedCents]), [['cheap', 'b4', 22500], ['expensive', 'b5', 25500], ['gap', null, 16000], ['gap', null, 42500], ['cheap', 'p4', 4500]]);
   assert.match(findings[4].text, /za litr/);
+  const wine = priceCheck(menuOf([drink('v1', 'Víno 1', 100, 6000), drink('v2', 'Víno 2', 100, 7000), drink('v3', 'Víno 1 láhev', 750, 45000),
+    drink('v4', 'Víno 2 láhev', 750, 52000), drink('v5', 'Víno 3', 100, 6500), dish('t', 'Pivo', 'Voda', [0], {part: 'drinks'})]));
+  assert.deepEqual(wine, [], 'sizes are no gap and no outlier, a free item is left out');
+  const zeros = priceCheck(menuOf([0, 0, 0, 0, 0, 3000, 3500, 4000, 4500].map((cents, index) => dish(`z${index}`, 'Nealko', `N${index}`, [cents]))));
+  assert.ok(zeros.every(finding => finding.kind !== 'expensive'), 'free items do not make every price look expensive');
 });

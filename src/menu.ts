@@ -58,14 +58,19 @@ const kc = (cents: number) => String(Math.round(cents / 100)).replace(/\B(?=(\d{
  */
 export function nameKey(name: string): string {
   return name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
-    .replace(/\b\d+(?:[.,]\d+)?\s*(?:ml|cl|dl|l)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+    .replace(/\b\d+\s*\/\s*\d+\s*(?:ml|cl|dl|l)\b/g, ' ').replace(/\b\d+(?:[.,]\d+)?\s*(?:ml|cl|dl|l)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
 }
-/** A volume written in a name ("0,04 l", "330 ml", "5 cl") in millilitres, or null. */
+const UNIT_ML = {ml: 1, cl: 10, dl: 100, l: 1000};
+/** A volume written in a name ("0,04 l", "330 ml", "5 cl", "1/8 l") in millilitres, or null. */
 export function volumeOf(name: string): number | null {
-  const found = name.toLowerCase().match(/(\d+(?:[.,]\d+)?)\s*(ml|cl|dl|l)\b/);
-  if (!found) return null;
-  return Math.round(Number(found[1].replace(',', '.')) * {ml: 1, cl: 10, dl: 100, l: 1000}[found[2] as 'ml' | 'cl' | 'dl' | 'l']);
+  const lower = name.toLowerCase(), fraction = lower.match(/(\d+)\s*\/\s*(\d+)\s*(ml|cl|dl|l)\b/);
+  if (fraction) return Number(fraction[2]) ? Math.round(Number(fraction[1]) / Number(fraction[2]) * UNIT_ML[fraction[3] as keyof typeof UNIT_ML]) : null;
+  const found = lower.match(/(\d+(?:[.,]\d+)?)\s*(ml|cl|dl|l)\b/);
+  return found ? Math.round(Number(found[1].replace(',', '.')) * UNIT_ML[found[2] as keyof typeof UNIT_ML]) : null;
 }
+/** Short words that say nothing about the dish ("Kuře na grilu" and "Kuře na pepři" share only "kuře"). */
+const FILLER = new Set(['na', 'se', 'ze', 'po', 'do', 'od', 'pro', 'bez', 'and', 'with', 'the']);
+const wordsOf = (key: string) => new Set(key.split(' ').filter(word => word.length > 1 && !FILLER.has(word)));
 
 /** One product sold over some days, as the POS bills have it (sum over all bills). */
 export type ItemSale = {key: string; productId: string | null; name: string; quantity: number; grossCents: number;
@@ -76,7 +81,8 @@ export type Pairing = {itemId: string; how: 'name' | 'similar'} | null;
 /**
  * Which menu item a POS product is (OKO1 pairs them itself, the web's ids are not in the POS): the same name, and among
  * items of that name (sizes) the same volume, else the price closest to what the product sold for. A name that is not
- * the same is paired only when one menu item clearly shares the most words with it. Otherwise unpaired.
+ * the same is paired only when all words of one name are in the other, they share at least 60 % of their words and
+ * no other dish comes within 0.2 of that. Otherwise unpaired: a wrong pair is worse than none.
  */
 export function pairSale(menu: Menu, sale: Pick<ItemSale, 'name' | 'quantity' | 'grossCents'>): Pairing {
   const key = nameKey(sale.name), volume = volumeOf(sale.name), unitCents = sale.quantity ? sale.grossCents / sale.quantity : 0;
@@ -89,17 +95,17 @@ export function pairSale(menu: Menu, sale: Pick<ItemSale, 'name' | 'quantity' | 
   };
   const same = menu.items.filter(item => nameKey(item.name) === key);
   if (same.length) return {itemId: closest(same).id, how: 'name'};
-  const words = new Set(key.split(' ').filter(word => word.length > 1));
+  const words = wordsOf(key);
   if (!words.size) return null;
   const scored = menu.items.map(item => {
-    const own = new Set(nameKey(item.name).split(' ').filter(word => word.length > 1));
-    const shared = [...own].filter(word => words.has(word)).length;
-    return {item, score: own.size ? shared / new Set([...own, ...words]).size : 0};
-  }).filter(row => row.score >= 0.5).sort((a, b) => b.score - a.score);
-  if (!scored.length) return null;
-  const best = scored.filter(row => row.score === scored[0].score).map(row => row.item);
-  // Several items equally close by words are one dish in sizes only when they share the name; else it stays unpaired.
-  return new Set(best.map(item => nameKey(item.name))).size === 1 ? {itemId: closest(best).id, how: 'similar'} : null;
+    const own = wordsOf(nameKey(item.name)), shared = [...own].filter(word => words.has(word)).length;
+    const contained = own.size > 0 && (shared === own.size || shared === words.size);
+    return {item, name: nameKey(item.name), score: contained ? shared / new Set([...own, ...words]).size : 0};
+  }).filter(row => row.score > 0).sort((a, b) => b.score - a.score);
+  if (!scored.length || scored[0].score < 0.6) return null;
+  // Sizes of one dish share the name; any other dish close behind leaves the product unpaired.
+  const best = scored.filter(row => row.name === scored[0].name), rival = scored.find(row => row.name !== scored[0].name);
+  return rival && rival.score > scored[0].score - 0.2 ? null : {itemId: closest(best.map(row => row.item)).id, how: 'similar'};
 }
 
 /**
@@ -150,11 +156,13 @@ export function repricing(menu: Menu, input: RepricingInput, sold: Map<string, {
   const step = input.stepCents ?? 500, category = input.category ? nameKey(input.category) : null, query = input.query ? nameKey(input.query) : null;
   const chosen = menu.items.filter(item => (!input.part || item.part === input.part) && (!category || nameKey(item.category).includes(category))
     && (!query || nameKey(`${item.name} ${item.group ?? ''}`).includes(query)));
-  const change = (cents: number) => roundTo(cents * (1 + (input.percent ?? 0) / 100) + (input.deltaCents ?? 0), step);
+  // A free item stays free; a price that would drop under one step stays at one step and says so.
+  const raw = (cents: number) => cents * (1 + (input.percent ?? 0) / 100) + (input.deltaCents ?? 0);
+  const change = (cents: number) => cents === 0 ? 0 : roundTo(raw(cents), step);
   const items = chosen.map(item => {
-    const newPricesCents = item.pricesCents.map(change), sale = sold.get(item.id);
+    const newPricesCents = item.pricesCents.map(change), sale = sold.get(item.id), atMinimum = item.pricesCents.some(cents => cents > 0 && raw(cents) < step / 2);
     return {itemId: item.id, name: item.name, part: item.part, category: item.category, volume: item.volume, oldPricesCents: item.pricesCents, newPricesCents,
-      oldText: priceText(item), newText: priceText({...item, pricesCents: newPricesCents}),
+      oldText: priceText(item), newText: priceText({...item, pricesCents: newPricesCents}), ...(atMinimum ? {atMinimum: true} : {}),
       ...(sale ? {quantity: sale.quantity, grossCents: sale.grossCents, newGrossCents: Math.round(sale.grossCents * newPricesCents[0] / Math.max(1, item.pricesCents[0]))} : {})};
   });
   const withSales = items.filter(item => item.grossCents !== undefined);
@@ -182,14 +190,18 @@ export function priceCheck(menu: Menu, step = 500): PriceFinding[] {
   const groups = new Map<string, MenuItem[]>();
   for (const item of menu.items) groups.set(`${item.part}\u0000${item.category}`, [...(groups.get(`${item.part}\u0000${item.category}`) ?? []), item]);
   for (const items of groups.values()) {
-    if (items.length < 4) continue;
-    const {part, category} = items[0];
-    const perLitre = items.every(item => item.volumeMl) && new Set(items.map(item => item.volumeMl)).size > 1;
+    // Free items (water, tap) say nothing about the price level. Drinks in different volumes are compared per litre,
+    // only those with a volume; a ladder of prices across sizes is no gap, so per litre there is no gap check.
+    const priced = items.filter(item => item.pricesCents[0] > 0), withVolume = priced.filter(item => item.volumeMl);
+    const perLitre = withVolume.length >= 4 && new Set(withVolume.map(item => item.volumeMl)).size > 1;
+    const pool = perLitre ? withVolume : priced;
+    if (pool.length < 4) continue;
+    const {part, category} = pool[0];
     const metric = (item: MenuItem) => perLitre ? item.pricesCents[0] * 1000 / (item.volumeMl as number) : item.pricesCents[0];
     const back = (item: MenuItem, value: number) => roundTo(perLitre ? value * (item.volumeMl as number) / 1000 : value, step);
-    const sorted = items.map(metric).sort((a, b) => a - b), median = quantile(sorted, 0.5);
+    const sorted = pool.map(metric).sort((a, b) => a - b), median = quantile(sorted, 0.5);
     const unit = perLitre ? ' za litr' : '';
-    for (const item of items) {
+    for (const item of pool) {
       const value = metric(item);
       if (value < median / 2) {
         const suggested = Math.max(back(item, quantile(sorted, 0.25)), roundTo(item.pricesCents[0] + step, step));
@@ -201,8 +213,8 @@ export function priceCheck(menu: Menu, step = 500): PriceFinding[] {
           text: `přes dvojnásobek běžné ceny kategorie (${kc(median)}${unit}); jestli to není záměr, návrh ${kc(suggested)}`});
       }
     }
-    if (items.length < 5) continue;
-    const ladder = [...new Set(items.map(item => item.pricesCents[0]))].sort((a, b) => a - b);
+    if (perLitre || pool.length < 5) continue;
+    const ladder = [...new Set(pool.map(item => item.pricesCents[0]))].sort((a, b) => a - b);
     for (let index = 1; index < ladder.length; index++) {
       const low = ladder[index - 1], high = ladder[index];
       if (high >= low * 1.5 && high - low >= 5000) {

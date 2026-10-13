@@ -697,9 +697,12 @@ try {
   assert.deepEqual(sold.items.map(row => [row.itemId, row.quantity, row.grossCents, row.netCents, row.profitCents]), [['food:burgery:classic', 4, 89600, 80000, null]]);
   assert.deepEqual([sold.unpaired.map(row => row.name), sold.totals.pairedPermille, sold.missing], [['Burger', 'Tonic 0,25 l'], 481, ['food cost za kus (nákupní ceny a receptury)']]);
   assert.equal((await mcp('vydelek_polozek', {od: today, do: addDays(today, -1)})).error, true);
+  // A discount on the whole bill falls on its lines in proportion to what was paid.
+  assert.equal((await jdIngest('batch-jd-pos-2', [{...bill('jd-pos-2', 1, 20160, soldDay), discountCents: 2240, items: [{name: 'Classic Burger', productId: 'pos-classic', quantity: 1, totalCents: 22400, vatRate: 12}]}])).status, 200);
+  assert.deepEqual((await mcp('vydelek_polozek', {od: addDays(today, -6), do: today})).data.items.map(row => [row.quantity, row.grossCents, row.netCents]), [[5, 109760, 98000]]);
   const repriced = (await mcp('preceneni', {kategorie: 'Burgery', procenta: 10})).data;
   assert.deepEqual(repriced.items.map(item => [item.itemId, item.newText]), [['food:burgery:classic', '250 / 290 Kč'], ['food:burgery:texas', '285 Kč']]);
-  if (soldDay >= repriced.salesFrom) assert.deepEqual(repriced.sales, {items: 1, grossCents: 89600, newGrossCents: 99556, differenceCents: 9956});
+  if (soldDay >= repriced.salesFrom) assert.deepEqual(repriced.sales, {items: 1, grossCents: 109760, newGrossCents: 121956, differenceCents: 12196});
   assert.equal((await mcp('preceneni', {kategorie: 'Burgery'})).error, true, 'a change is needed');
   assert.equal((await mcp('preceneni', {hledat: 'pizza', procenta: 5})).error, true, 'nothing matches');
   assert.deepEqual((await mcp('kontrola_cen')).data, {items: 4, findings: []}, 'no category has 4 items');
@@ -762,7 +765,7 @@ try {
   const content = await renderCard({'/d/james-dean/data': boardData, '/d/james-dean/web': {card}}, 'content');
   // The menu card also checks prices and, with POS bills, shows what sold by item and what is not paired to the menu.
   assert.deepEqual([boardData.menu.priceCheck, boardData.menu.profit.items.map(row => [row.name, row.quantity]), boardData.menu.profit.unpaired.map(row => row.name)],
-    [{findings: [], total: 0}, [['Classic <b>Burger</b>', 4]], ['Tonic 0,25 l']], 'the shown day is yesterday: today\'s bill is not in');
+    [{findings: [], total: 0}, [['Classic <b>Burger</b>', 5]], ['Tonic 0,25 l']], 'the shown day is yesterday: today\'s bill is not in');
   assert.match(content, /Prodej po položkách za 30 dní/);
   assert.match(content, /Classic &lt;b&gt;Burger&lt;\/b&gt;/);
   // The costs card: the rise over 30 days and the invoice past its due date, supplier names escaped.

@@ -589,19 +589,21 @@ export class TenantObject extends DurableObject<Env> {
 
   /**
    * What the POS sold over some days per product (closed bills only), with revenue without VAT where every line has its
-   * VAT rate. A product is its POS id, or its name when the POS sends none.
+   * VAT rate. A product is its POS id, or its name when the POS sends none. A line's revenue is its share of what the bill
+   * was paid (`totalCents`), so a discount on the whole bill falls on its lines in proportion (docs/ingest-v1.md).
    */
   private itemSales(from: string, to: string): ItemSale[] {
-    // `product` and not `key`: json_each has a column of that name.
+    // `product` and not `key`, `bill` and not `json`: json_each has columns of those names.
     return this.sql.exec<{product: string; product_id: string | null; name: string; quantity: number; gross_cents: number; net: number | null; without_vat: number}>(`
       SELECT coalesce(json_extract(i.value, '$.productId'), 'name:' || json_extract(i.value, '$.name')) AS product, max(json_extract(i.value, '$.productId')) AS product_id,
-        max(json_extract(i.value, '$.name')) AS name, sum(json_extract(i.value, '$.quantity')) AS quantity, sum(json_extract(i.value, '$.totalCents')) AS gross_cents,
-        sum(json_extract(i.value, '$.totalCents') * 100.0 / (100 + json_extract(i.value, '$.vatRate'))) AS net,
+        max(json_extract(i.value, '$.name')) AS name, sum(json_extract(i.value, '$.quantity')) AS quantity, sum(json_extract(i.value, '$.totalCents') * b.paid) AS gross_cents,
+        sum(json_extract(i.value, '$.totalCents') * b.paid * 100.0 / (100 + json_extract(i.value, '$.vatRate'))) AS net,
         sum(json_extract(i.value, '$.vatRate') IS NULL) AS without_vat
-      FROM records r, json_each(r.json, '$.items') i
-      WHERE r.type='bill' AND r.business_date BETWEEN ? AND ? AND json_extract(r.json, '$.status') = 'closed'
+      FROM (SELECT r.json AS bill, coalesce(json_extract(r.json, '$.totalCents') * 1.0
+          / nullif((SELECT sum(json_extract(l.value, '$.totalCents')) FROM json_each(r.json, '$.items') l), 0), 1) AS paid
+        FROM records r WHERE r.type='bill' AND r.business_date BETWEEN ? AND ? AND json_extract(r.json, '$.status') = 'closed') b, json_each(b.bill, '$.items') i
       GROUP BY product ORDER BY gross_cents DESC`, from, to).toArray()
-      .map(row => ({key: row.product, productId: row.product_id, name: row.name, quantity: row.quantity, grossCents: row.gross_cents,
+      .map(row => ({key: row.product, productId: row.product_id, name: row.name, quantity: Math.round(row.quantity * 1000) / 1000, grossCents: Math.round(row.gross_cents),
         netCents: row.without_vat || row.net === null ? null : Math.round(row.net)}));
   }
 

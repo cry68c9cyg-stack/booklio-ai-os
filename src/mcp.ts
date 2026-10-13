@@ -124,7 +124,7 @@ export function createServer(context: ToolContext): McpServer {
     return profit ? result(profit) : failed('Lístek zatím do OKO1 nedorazil.');
   });
   tool('preceneni', 'Virtuální přecenění', 'Simulace nových cen lístku: vybrané položky (část, kategorie, slova z názvu) o procento nebo o částku, zaokrouhleno na krok (výchozí 5 Kč). ' +
-    'Na webu ani v pokladně se nic nemění. S prodeji za posledních 30 dní ukáže i tržbu při stejném počtu prodaných kusů. Částky v haléřích.', {
+    'Na webu ani v pokladně se nic nemění. S prodeji za posledních 30 dní ukáže i odhad tržby při stejném počtu prodaných kusů (podle změny základní ceny). atMinimum = cena by klesla pod krok a zůstala na něm. Částky v haléřích.', {
     cast: zod.enum(['food', 'cocktails', 'drinks']).optional().describe('Část lístku: food = jídlo, cocktails = koktejly, drinks = nápoje.'),
     kategorie: zod.string().max(100).optional().describe('Kategorie nebo její část, např. "burgery".'),
     hledat: zod.string().max(100).optional().describe('Slova z názvu položky, např. "cheeseburger".'),
