@@ -8,3 +8,7 @@
 - Před PR: `npm test`, `npm run check`, `npm run build`.
 - Změna kontraktu příjmu dat = aktualizovat `docs/ingest-v1.md` (nebo nová verze `v2`, pokud není zpětně kompatibilní).
 - Vlastník produktu (MC) schvaluje každou změnu přes PR.
+
+## Working preferences
+
+- Po dokončení každé úlohy (nasazeno, hotovo) hned sám navrhni MC další balík několika konkrétních bodů a čekej jen na jeho „jo“; nečekej, až se zeptá „co dál“ (MC, 13. 10. 2026).
