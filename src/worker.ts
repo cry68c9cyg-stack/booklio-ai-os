@@ -294,10 +294,7 @@ export class TenantObject extends DurableObject<Env> {
     }));
     const balances = Object.fromEntries((report?.lines ?? []).filter(line => line.kind === 'balance').map(line => [line.key, line.amountCents]));
     const stored = this.sql.exec<{text: string}>('SELECT text FROM briefings WHERE business_date=?', day).toArray()[0];
-    const done = new Set(this.sql.exec<{item_key: string}>('SELECT item_key FROM todo_done WHERE business_date=?', day).toArray().map(row => row.item_key));
-    const todo = todoList(briefing, report?.warnings ?? [])
-      // "… a další 3" is not an item of its own: no switch.
-      .map(item => item.text.startsWith('… a další') ? {...item, key: null, done: false} : {...item, key: todoKey(item.text), done: done.has(todoKey(item.text))});
+    const todo = this.todoFor(day, briefing);
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
       week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), sources: this.sources(config), menu: this.menuCard(config, day)});
   }
@@ -363,6 +360,48 @@ export class TenantObject extends DurableObject<Env> {
   posBills(date: string) {
     const bills = this.day<Bill>('bill', date).sort((a, b) => a.closedAt.localeCompare(b.closedAt));
     return {businessDate: date, count: bills.length, bills: bills.slice(0, 2000), truncated: bills.length > 2000};
+  }
+
+  /**
+   * MCP: what the morning message of a report day looked ahead to: today's bookings and plan, the revenue forecast (7 days, this and next month, with holidays,
+   * weather, events and bookings), the forecast's accuracy, today's events and, for the latest day only, the guests to expect by part of the day.
+   */
+  posOutlook(date: string) {
+    const config = this.config();
+    if (!config) return null;
+    const {briefing} = this.briefingFor(config, date, !this.ready(config, date));
+    return {businessDate: date, forecast: briefing.forecast, today: briefing.outlook, events: briefing.events,
+      guests: briefing.guestOutlook, pendingAhead: briefing.pendingAhead};
+  }
+
+  /** MCP: the 7 days up to a day against the 7 before, the month so far and twelve weeks of trends with the forecast's error. */
+  posTrends(date: string) {
+    const config = this.config();
+    if (!config) return null;
+    return {businessDate: date, week: this.week(date), month: this.month(config, date), trends: this.trends(date)};
+  }
+
+  /** MCP: sums over any stretch of days (revenue, bookings, guests, no-shows, cancellations, sources, lead time, web, reviews) and its events. */
+  posPeriod(from: string, to: string) {
+    if (!this.config()) return null;
+    this.revenueMemo = new Map();
+    try { return {from, to, ...this.weekPart(from, to), events: this.eventReviews(from, to)}; } finally { this.revenueMemo = null; }
+  }
+
+  /** MCP: the to-do list of a day as the dashboard shows it (with "Vyřízeno") and when each source last sent data. */
+  posTodo(date: string) {
+    const config = this.config();
+    if (!config) return null;
+    const {briefing} = this.briefingFor(config, date, !this.ready(config, date));
+    return {businessDate: date, todo: this.todoFor(date, briefing), sources: this.sources(config)};
+  }
+
+  /** The to-do list of a day with the "Vyřízeno" switches, as the dashboard shows it. */
+  private todoFor(day: string, briefing: Briefing) {
+    const done = new Set(this.sql.exec<{item_key: string}>('SELECT item_key FROM todo_done WHERE business_date=?', day).toArray().map(row => row.item_key));
+    return todoList(briefing, this.report(day)?.warnings ?? [])
+      // "… a další 3" is not an item of its own: no switch.
+      .map(item => item.text.startsWith('… a další') ? {...item, key: null, done: false} : {...item, key: todoKey(item.text), done: done.has(todoKey(item.text))});
   }
 
   private saveConfig(tenant: string, body: unknown): Result {
@@ -586,7 +625,17 @@ export class TenantObject extends DurableObject<Env> {
   }
 
   /** Revenue of a past day: POS data when there is any, then the managers' report, otherwise the imported history. */
+  /** While set, each day's revenue is worked out once (long periods read the same days many times). */
+  private revenueMemo: Map<string, number | null> | null = null;
+
   private dayRevenue(date: string): number | null {
+    if (this.revenueMemo?.has(date)) return this.revenueMemo.get(date)!;
+    const revenue = this.dayRevenueUncached(date);
+    this.revenueMemo?.set(date, revenue);
+    return revenue;
+  }
+
+  private dayRevenueUncached(date: string): number | null {
     const bills = this.day<Bill>('bill', date).filter(bill => bill.status === 'closed');
     if (bills.length) return bills.reduce((sum, bill) => sum + bill.totalCents, 0);
     const reported = this.sql.exec<{total: number | null}>("SELECT SUM(amount_cents) AS total FROM report_lines WHERE business_date=? AND kind='revenue_section'", date).toArray()[0]?.total;

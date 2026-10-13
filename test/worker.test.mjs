@@ -619,7 +619,7 @@ try {
     body: rpc(1, 'initialize', {protocolVersion: '2025-06-18', capabilities: {}, clientInfo: {name: 'test', version: '1'}})})).json();
   assert.equal(initialized.result.serverInfo.name, 'oko1');
   const listed = await (await local('/mcp', {method: 'POST', headers: {...mcpHeaders, authorization: 'Bearer ' + tokens.access_token}, body: rpc(2, 'tools/list')})).json();
-  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['den', 'kontrola_lahvi', 'listek', 'ranni_prehled', 'report_manazeru', 'trzby_dne', 'trzby_obdobi', 'ucty',
+  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['den', 'k_vyrizeni', 'kontrola_lahvi', 'listek', 'odhad_a_vyhled', 'ranni_prehled', 'report_manazeru', 'souhrn_obdobi', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty',
     'web_blokace_a_akce', 'web_darkove_karty', 'web_host', 'web_navstevnost', 'web_platby_lahvi', 'web_prehled', 'web_recenze', 'web_rezervace', 'web_rezervace_detail', 'web_tabulka']);
   assert.ok(listed.result.tools.every(entry => entry.annotations.readOnlyHint === true), 'read only');
 
@@ -649,6 +649,19 @@ try {
   assert.equal((await mcp('trzby_dne', {datum: '12.10.2026'})).error, true);
   assert.equal((await mcp('trzby_obdobi', {od: addDays(today, -6), do: today})).data.totalCents, 80000);
   assert.equal((await mcp('ucty', {datum: today})).data.bills[0].id, 'w1');
+  // OKO1 overviews: the forecast and outlook, the week, month and trends, sums of any period and the to-do list.
+  const outlookTool = (await mcp('odhad_a_vyhled', {datum: today})).data;
+  assert.equal(outlookTool.businessDate, today);
+  assert.ok('forecast' in outlookTool && 'today' in outlookTool && Array.isArray(outlookTool.events));
+  const trendsTool = (await mcp('tyden_mesic_trendy', {datum: today})).data;
+  assert.equal(trendsTool.trends.length, 12);
+  assert.equal(trendsTool.week.current.revenueCents, 80000);
+  const period = (await mcp('souhrn_obdobi', {od: addDays(today, -6), do: today})).data;
+  assert.deepEqual([period.revenueCents, period.revenueDays], [80000, 1]);
+  assert.equal((await mcp('souhrn_obdobi', {od: today, do: addDays(today, -1)})).error, true);
+  const todoTool = (await mcp('k_vyrizeni', {datum: today})).data;
+  assert.ok(Array.isArray(todoTool.todo) && Array.isArray(todoTool.sources.types));
+  assert.equal((await mcp('odhad_a_vyhled', {datum: 'zitra'})).error, true);
   const menuTool = (await mcp('listek')).data;
   assert.deepEqual(menuTool.menu.items.map(item => [item.id, item.pricesCents]), [['food:burgery:classic', [22500, 26500]], ['food:burgery:texas', [25900]],
     ['drinks:kava:espresso', [6200]], ['food:dezerty:pie', [14500]]]);

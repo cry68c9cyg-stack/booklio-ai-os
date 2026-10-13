@@ -58,7 +58,7 @@ Vše vyžaduje `Authorization: Bearer <ADMIN_SECRET>` (min. 32 znaků).
 
 ## MCP server
 
-`https://oko1.rr7whdyyhf.workers.dev/mcp` (Streamable HTTP, OAuth). Jen čtení: pokladna (`trzby_dne`, `trzby_obdobi`, `ranni_prehled`, `report_manazeru`, `kontrola_lahvi`, `ucty`), web živě (`web_rezervace`, `web_rezervace_detail`, `web_host`, `web_navstevnost`, `web_recenze`, `web_darkove_karty`, `web_platby_lahvi`, `web_blokace_a_akce`, `web_prehled`, `web_tabulka`) a souhrn `den`. Připojení v Claudovi: vlastní konektor s touto adresou, pak provozovna a kód z SMS na číslo, které smí na dashboard; vydrží 30 dní. Podrobnosti v [docs/web-v1.md](docs/web-v1.md).
+`https://oko1.rr7whdyyhf.workers.dev/mcp` (Streamable HTTP, OAuth). Jen čtení: pokladna (`trzby_dne`, `trzby_obdobi`, `ranni_prehled`, `report_manazeru`, `kontrola_lahvi`, `ucty`), výhledy OKO1 (`odhad_a_vyhled`, `tyden_mesic_trendy`, `souhrn_obdobi`, `k_vyrizeni`), web živě (`web_rezervace`, `web_rezervace_detail`, `web_host`, `web_navstevnost`, `web_recenze`, `web_darkove_karty`, `web_platby_lahvi`, `web_blokace_a_akce`, `web_prehled`, `web_tabulka`) a souhrn `den`. Připojení v Claudovi: vlastní konektor s touto adresou, pak provozovna a kód z SMS na číslo, které smí na dashboard; vydrží 30 dní. Podrobnosti v [docs/web-v1.md](docs/web-v1.md).
 
 Příklad konfigurace James Dean:
 
