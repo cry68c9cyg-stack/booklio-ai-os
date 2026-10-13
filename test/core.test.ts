@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, rankEvents, renderEventRanking, eventTip, renderMenuWeek, sectionThousands, guestOutlookDay, median, weakDays, webDrop, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, rankEvents, renderEventRanking, eventTip, renderMenuWeek, renderPriceCheck, renderPriceMismatches, sectionThousands, guestOutlookDay, median, weakDays, webDrop, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
 import {counted, overdueInvoices, priceRises, renderSupplies, supplyBrief, supplySummary, unitPrice} from '../src/supplies.ts';
 import {weatherDays, weatherText} from '../src/weather.ts';
-import {itemProfit, nameKey, pairSale, priceCheck, repricing, volumeOf, type ItemSale} from '../src/menu.ts';
+import {itemProfit, menuMatrix, nameKey, pairSale, priceCheck, priceExperiment, priceMismatches, repricing, volumeOf, type ItemSale} from '../src/menu.ts';
 import {businessDate, sameClockDaysBefore} from '../src/time.ts';
 import {czechHolidays, easterSunday, holidayName} from '../src/holidays.ts';
 import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type Menu, type MenuItem, type SupplierInvoice, type TenantConfig, type WebTraffic} from '../src/validate.ts';
@@ -748,4 +748,37 @@ test('price check: too cheap and too expensive in a category (per litre for size
   assert.deepEqual(wine, [], 'sizes are no gap and no outlier, a free item is left out');
   const zeros = priceCheck(menuOf([0, 0, 0, 0, 0, 3000, 3500, 4000, 4500].map((cents, index) => dish(`z${index}`, 'Nealko', `N${index}`, [cents]))));
   assert.ok(zeros.every(finding => finding.kind !== 'expensive'), 'free items do not make every price look expensive');
+});
+
+test('the POS charging another price than the menu: most pieces of the day, earlier prices count, 1 Kč tolerance', () => {
+  const menu = menuOf([dish('b1', 'Burgery', 'Classic Burger', [22500, 25500]), dish('b2', 'Burgery', 'Texas Burger', [24500]), drink('p5', 'Plzeň', 500, 8900)]);
+  const rows = priceMismatches(menu, [{name: 'Classic Burger', unitCents: 22500, quantity: 3}, {name: 'Classic Burger', unitCents: 20000, quantity: 1},
+    {name: 'Texas Burger', unitCents: 22500, quantity: 2}, {name: 'Plzeň 0,5 l', unitCents: 8950, quantity: 9}, {name: 'Tonic', unitCents: 6000, quantity: 1}], new Map());
+  assert.deepEqual(rows.map(row => [row.itemId, row.posCents, row.menuCents, row.quantity]), [['b2', 22500, 24500, 2]]);
+  assert.deepEqual(priceMismatches(menu, [{name: 'Texas Burger', unitCents: 22500, quantity: 2}], new Map([['b2', [22500]]])), [], 'the price before a later change was right');
+  assert.equal(renderPriceMismatches(rows)[0], '⚠ Pokladna účtuje jinou cenu než lístek: Texas Burger 225 Kč (lístek 245 Kč, 2×)');
+  const todo = todoList(buildBriefing({businessDate: '2026-10-08', config, bills: [], closings: [], planHistory: [], incomplete: false, priceMismatches: rows}));
+  assert.ok(todo.some(item => item.text === 'Cena v pokladně nesedí s lístkem: Texas Burger 225 Kč (lístek 245 Kč, 2×)' && item.amountCents === 4000));
+  assert.equal(renderPriceCheck({total: 3, top: priceCheck(menuOf([dish('a', 'K', 'A', [22500]), dish('b', 'K', 'B', [24500]), dish('c', 'K', 'C', [25500]), dish('d', 'K', 'D', [9900])])).slice(0, 2)})[0],
+    'Ceny k prověření: 3 (D 99 Kč → návrh 195 Kč, další na dashboardu)');
+});
+
+test('menu engineering: stars, plowhorses, puzzles and weak items by pieces and contribution', () => {
+  const menu = menuOf([dish('a', 'B', 'A', [30000]), dish('b', 'B', 'B', [20000]), dish('c', 'B', 'C', [35000]), dish('d', 'B', 'D', [15000]), dish('w', 'B', 'Voda', [0])]);
+  const sale = (name: string, quantity: number, grossCents: number): ItemSale => ({key: name, productId: null, name, quantity, grossCents, netCents: grossCents});
+  const profit = itemProfit(menu, [sale('A', 40, 1200000), sale('B', 50, 1000000), sale('C', 5, 175000), sale('D', 5, 75000)], new Map());
+  const [food] = menuMatrix(menu, profit);
+  assert.equal(food.basis, 'price');
+  assert.deepEqual(food.classes.map(row => [row.kind, row.items.map(item => item.itemId)]), [['star', ['a']], ['plowhorse', ['b']], ['puzzle', ['c']], ['dog', ['d']]]);
+  const withCost = menuMatrix(menu, itemProfit(menu, [sale('A', 40, 1200000), sale('B', 50, 1000000)], new Map([['a', 25000], ['b', 5000]])))[0];
+  assert.deepEqual([withCost.basis, withCost.classes.map(row => row.items.map(item => item.itemId))], ['margin', [['b'], ['a'], [], ['c', 'd']]]);
+  assert.deepEqual(menuMatrix(menu, itemProfit(menu, [], new Map())), [], 'nothing sold: no matrix');
+});
+
+test('a price change as an experiment: per day before and after, waiting under 7 days', () => {
+  const change = {date: '2026-10-01', itemId: 'a', name: 'A', oldText: '225 Kč', newText: '245 Kč'};
+  const done = priceExperiment(change, {days: 28, quantity: 280, grossCents: 6300000}, {days: 28, quantity: 252, grossCents: 6174000});
+  assert.deepEqual([done.quantityPermille, done.revenuePermille, done.status], [-100, -20, 'done']);
+  assert.equal(priceExperiment(change, {days: 28, quantity: 0, grossCents: 0}, {days: 10, quantity: 5, grossCents: 1000}).quantityPermille, null);
+  assert.equal(priceExperiment(change, {days: 28, quantity: 28, grossCents: 1000}, {days: 3, quantity: 3, grossCents: 100}).status, 'waiting');
 });

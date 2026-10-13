@@ -138,6 +138,15 @@ export function createServer(context: ToolContext): McpServer {
     if (!repriced) return failed('Lístek zatím do OKO1 nedorazil.');
     return repriced.count ? result(repriced) : failed('Výběru neodpovídá žádná položka lístku.');
   });
+  tool('menu_engineering', 'Menu engineering a změny cen', 'Matice obliba × výdělek za období (nejvýš 400 dní) po částech lístku: hvězdy, tahouni, hádanky a slabé kusy s doporučením, ' +
+    'výdělek za kus = tržba bez DPH − food cost, dokud food cost chybí, cena za kus s DPH (basis "price"). A každá změna ceny za rok do konce období jako pokus: kusy a tržba za den ' +
+    '28 dní před změnou proti dnům po ní (nejvýš 28), v promile; status waiting = po změně zatím méně než 7 dní. Dokud neběží pokladna s účty, je prázdné. Částky v haléřích.', {od: from, do: to},
+  async ({od, do: until}: {od: string; do: string}) => {
+    const bad = badRange(od, until);
+    if (bad) return bad;
+    const engineering = await context.venue.posMenuEngineering(od, until);
+    return engineering ? result(engineering) : failed('Lístek zatím do OKO1 nedorazil.');
+  });
   tool('kontrola_cen', 'Kontrola cen', 'Ceny lístku k prověření v každé kategorii od 4 položek: položka pod polovinou nebo nad dvojnásobkem běžné ceny kategorie (u nápojů různých objemů za litr) ' +
     's navrženou cenou na dolním nebo horním kvartilu, a mezery v cenové řadě (od 5 položek) s cenou uprostřed. Jen k posouzení, cena může být záměr. Částky v haléřích.', {},
   async () => {

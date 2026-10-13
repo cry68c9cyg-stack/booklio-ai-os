@@ -317,6 +317,15 @@ function menuCard(m) {
       (pr.missing.length ? ' · k zisku chybí: ' + esc(pr.missing.join(', ')) : '') + '</div>' +
       (pr.unpaired.length ? '<div class="muted">nespárováno: ' + pr.unpaired.map(u => esc(u.name) + ' ' + kc(u.grossCents)).join(', ') + (pr.unpairedTotal > pr.unpaired.length ? ' a další ' + (pr.unpairedTotal - pr.unpaired.length) : '') + '</div>' : '');
   }
+  if (m.matrix && m.matrix.length) {
+    h += '<h3>Obliba × výdělek za 30 dní</h3>' + m.matrix.map(part => '<details><summary>' + esc(part.name) + (part.basis === 'price' ? ' <span class="muted">(podle ceny, food cost chybí)</span>' : '') + '</summary><ul>' +
+      part.classes.filter(c => c.count).map(c => '<li><b>' + esc(c.name) + '</b> (' + c.count + '): ' + c.items.map(i => esc(i.name)).join(', ') + (c.count > c.items.length ? ' …' : '') + '<br><span class="muted">' + esc(c.advice) + '</span></li>').join('') + '</ul></details>').join('');
+  }
+  if (m.experiments && m.experiments.length) {
+    const pct = p => p === null ? '–' : (p > 0 ? '+' : '') + Math.round(p / 10) + ' %';
+    h += '<h3>Změny cen jako pokus</h3><ul>' + m.experiments.map(e => '<li>' + esc(short(e.date)) + ' <b>' + esc(e.name) + '</b> ' + esc(e.oldText || '?') + ' → ' + esc(e.newText || '?') + ': ' +
+      (e.status === 'waiting' ? '<span class="muted">čeká na 7 dní prodeje</span>' : 'kusy za den ' + pct(e.quantityPermille) + ', tržba za den ' + pct(e.revenuePermille) + (e.status === 'running' ? ' <span class="muted">(zatím ' + e.after.days + ' dní)</span>' : '')) + '</li>').join('') + '</ul>';
+  }
   for (const p of m.parts) {
     h += '<details><summary>' + esc(p.name) + ' (' + p.items + ')</summary><div class="scroll"><table><tr><th>Kategorie</th><th class="n">Položek</th><th class="n">Cena od – do</th><th class="n">Průměr</th></tr>' +
       p.categories.map(c => '<tr><td>' + esc(c.name) + '</td><td class="n">' + c.items + '</td><td class="n">' + range(c) + '</td><td class="n">' + kc(c.avgCents) + '</td></tr>').join('') + '</table></div></details>';

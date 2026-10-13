@@ -4,6 +4,7 @@ import {line, total, type DailyReport} from './daily-report.ts';
 import type {NotePoint, NotesAnalysis} from './notes.ts';
 import {weatherText, type WeatherDay} from './weather.ts';
 import {renderSupplies, type SupplyBrief} from './supplies.ts';
+import type {PriceFinding, PriceMismatch} from './menu.ts';
 
 export type Briefing = {
   businessDate: string;
@@ -56,6 +57,10 @@ export type Briefing = {
   eventRanking: EventRank[] | null;
   /** Changes of the menu over the week (Monday message); `null` = not asked for. */
   menuWeek: MenuWeek | null;
+  /** Products the POS charged that day at a price the menu did not have (src/menu.ts); a briefing stored before has none. */
+  priceMismatches?: PriceMismatch[];
+  /** Prices of the menu to look at (Monday message); `null` = not asked for. */
+  priceCheck?: {total: number; top: PriceFinding[]} | null;
   /** Reviews that reached the website's admin on the reported calendar day, and how many wait there. `null` = nothing sent. */
   reviews: {newCount: number; averageTenths: number | null; low: number; bySource: {name: string; newCount: number}[]; waiting: number; forManagement: number; failed: number} | null;
   /** The 7 days up to the reported day against the 7 before: sums only. `null` = not asked for. */
@@ -210,6 +215,17 @@ export function sectionThousands(cents: number, rows: {label: string; cents: num
 
 /** Changes of the menu over the week (Monday message): new prices, new items and removed items. */
 export type MenuWeek = {prices: {name: string; oldText: string | null; newText: string | null}[]; added: string[]; removed: string[]};
+/** One product charged at another price than the menu has, e.g. "Classic Burger 225 Kč (lístek 250 Kč, 4×)". */
+export const mismatchText = (row: PriceMismatch) => `${row.posName} ${crowns(row.posCents)} (lístek ${row.menuText}, ${row.quantity}×)`;
+export function renderPriceMismatches(rows: PriceMismatch[] | undefined): string[] {
+  if (!rows?.length) return [];
+  return [`⚠ Pokladna účtuje jinou cenu než lístek: ${rows.slice(0, 3).map(mismatchText).join(', ')}${rows.length > 3 ? ` a další ${rows.length - 3}` : ''}`];
+}
+/** Monday: how many prices of the menu are worth a look, the first two with the suggested price. */
+export function renderPriceCheck(check: Briefing['priceCheck']): string[] {
+  if (!check?.total) return [];
+  return [`Ceny k prověření: ${check.total} (${check.top.slice(0, 2).map(row => `${row.name ?? row.category} ${row.priceText} → návrh ${crowns(row.suggestedCents)}`).join(', ')}${check.total > 2 ? ', další na dashboardu' : ''})`];
+}
 export function renderMenuWeek(week: MenuWeek | null | undefined): string[] {
   if (!week || !(week.prices.length + week.added.length + week.removed.length)) return [];
   const names = (list: string[]) => list.slice(0, 3).join(', ') + (list.length > 3 ? ` a další ${list.length - 3}` : '');
@@ -526,7 +542,7 @@ export function buildBriefing(input: {
   web?: WebTraffic; webLastWeek?: WebTraffic;
   /** Visits and sent booking forms of the same weekday over the 4 weeks before (days the website sent). */
   webUsual?: {visits: number; sent: number}[];
-  eventRanking?: EventRank[] | null; menuWeek?: MenuWeek | null;
+  eventRanking?: EventRank[] | null; menuWeek?: MenuWeek | null; priceMismatches?: PriceMismatch[]; priceCheck?: Briefing['priceCheck'];
   costs?: MonthResult | null; costsPrevious?: MonthResult | null; supplies?: SupplyBrief | null;
   reviews?: ReviewSummary;
   week?: Week | null; silent?: {name: string; since: string}[];
@@ -615,7 +631,7 @@ export function buildBriefing(input: {
     web: summarizeWeb(input.web, input.webLastWeek),
     webDrop: webDrop(input.web, input.webUsual),
     eventRanking: input.eventRanking ?? null,
-    menuWeek: input.menuWeek ?? null,
+    menuWeek: input.menuWeek ?? null, priceMismatches: input.priceMismatches ?? [], priceCheck: input.priceCheck ?? null,
     reviews: summarizeReviews(input.reviews),
     costs: input.costs ?? null, costsPrevious: input.costsPrevious ?? null, supplies: input.supplies ?? null,
     week: input.week ?? null,
@@ -688,9 +704,10 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderReviews(briefing.reviews));
   lines.push(...renderCosts(briefing.costs, briefing.costsPrevious));
   lines.push(...renderSupplies(briefing.supplies));
+  lines.push(...renderPriceMismatches(briefing.priceMismatches));
   lines.push(...renderNotes(briefing));
   // The week in a few numbers once a week, in the message about Sunday (Monday morning).
-  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek));
+  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceCheck(briefing.priceCheck));
   // The month so far once a week, and the whole month in the message about its last day (the 1st in the morning).
   lines.push(...renderMonth(briefing.month));
   // Which events draw guests, once a month in the message about its last day.

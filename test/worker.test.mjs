@@ -634,7 +634,7 @@ try {
     body: rpc(1, 'initialize', {protocolVersion: '2025-06-18', capabilities: {}, clientInfo: {name: 'test', version: '1'}})})).json();
   assert.equal(initialized.result.serverInfo.name, 'oko1');
   const listed = await (await local('/mcp', {method: 'POST', headers: {...mcpHeaders, authorization: 'Bearer ' + tokens.access_token}, body: rpc(2, 'tools/list')})).json();
-  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['akce_zebricek', 'den', 'k_vyrizeni', 'kontrola_cen', 'kontrola_lahvi', 'listek', 'naklady_dodavatele', 'odhad_a_vyhled', 'preceneni', 'ranni_prehled', 'report_manazeru', 'souhrn_obdobi', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty', 'vydelek_polozek',
+  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['akce_zebricek', 'den', 'k_vyrizeni', 'kontrola_cen', 'kontrola_lahvi', 'listek', 'menu_engineering', 'naklady_dodavatele', 'odhad_a_vyhled', 'preceneni', 'ranni_prehled', 'report_manazeru', 'souhrn_obdobi', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty', 'vydelek_polozek',
     'web_blokace_a_akce', 'web_darkove_karty', 'web_host', 'web_navstevnost', 'web_platby_lahvi', 'web_prehled', 'web_recenze', 'web_rezervace', 'web_rezervace_detail', 'web_tabulka']);
   assert.ok(listed.result.tools.every(entry => entry.annotations.readOnlyHint === true), 'read only');
 
@@ -706,6 +706,12 @@ try {
   assert.equal((await mcp('preceneni', {kategorie: 'Burgery'})).error, true, 'a change is needed');
   assert.equal((await mcp('preceneni', {hledat: 'pizza', procenta: 5})).error, true, 'nothing matches');
   assert.deepEqual((await mcp('kontrola_cen')).data, {items: 4, findings: []}, 'no category has 4 items');
+  // Menu engineering: the burger that sold is a star, the rest of the food weak; the price changes of today wait for sales.
+  const engineering = (await mcp('menu_engineering', {od: addDays(today, -6), do: today})).data;
+  assert.deepEqual(engineering.matrix.map(part => [part.part, part.basis, part.classes.map(row => [row.kind, row.items.map(item => item.itemId)])]),
+    [['food', 'price', [['star', ['food:burgery:classic']], ['plowhorse', []], ['puzzle', []], ['dog', ['food:dezerty:pie', 'food:burgery:texas']]]]]);
+  assert.deepEqual(engineering.experiments.map(row => [row.itemId, row.status, row.before.quantity, row.quantityPermille]).sort(),
+    [['food:burgery:classic', 'waiting', 5, -1000], ['food:burgery:texas', 'waiting', 0, null]]);
   // Costs and suppliers: purchases without VAT, the rise against the purchase before, the overdue invoice; a cancelled one does not count.
   const supplies = (await mcp('naklady_dodavatele', {od: addDays(today, -6), do: today})).data;
   assert.deepEqual([supplies.summary.invoices, supplies.summary.netCents, supplies.summary.byKind], [1, 51590, [{kind: 'food', name: 'jídlo', netCents: 51590}]]);
@@ -767,6 +773,8 @@ try {
   assert.deepEqual([boardData.menu.priceCheck, boardData.menu.profit.items.map(row => [row.name, row.quantity]), boardData.menu.profit.unpaired.map(row => row.name)],
     [{findings: [], total: 0}, [['Classic <b>Burger</b>', 5]], ['Tonic 0,25 l']], 'the shown day is yesterday: today\'s bill is not in');
   assert.match(content, /Prodej po položkách za 30 dní/);
+  assert.deepEqual(boardData.menu.matrix.map(part => part.classes.map(row => row.count)), [[1, 0, 0, 2]]);
+  assert.match(content, /Obliba × výdělek za 30 dní/);
   assert.match(content, /Classic &lt;b&gt;Burger&lt;\/b&gt;/);
   // The costs card: the rise over 30 days and the invoice past its due date, supplier names escaped.
   assert.deepEqual(boardData.supplies.rises.map(rise => [rise.name, rise.permille]), [['Borůvky 125 g', 268]]);
