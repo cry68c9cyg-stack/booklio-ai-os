@@ -1,10 +1,10 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
-import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
+import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, type MenuMonth, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
-import {itemProfit, menuChanges, menuMatrix, menuOverview, pairSale, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
+import {itemProfit, menuChanges, menuMatrix, menuOverview, nameKey, PART_NAMES, pairSale, priceText, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
 import {czechHolidays, holidayName} from './holidays.ts';
@@ -62,6 +62,8 @@ const same = (a: string, b: string) => {
 
 const randomHex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
 const PREPARE_BUDGET_MS = 60000;
+/** Order of the price findings in the Monday line: prices far off first, an odd ending last. */
+const FINDING_RANK = {cheap: 0, expensive: 0, gap: 1, ending: 2} as const;
 /** Record types of the ingest contract; a refused batch logs only these (anything else as `other`). */
 const RECORD_TYPES = new Set(['bill', 'cash_closing', 'bottle_check', 'reservation', 'web_traffic', 'review_summary', 'event', 'menu', 'supplier_invoice']);
 const SESSION_MS = 30 * 86400000;
@@ -678,7 +680,7 @@ export class TenantObject extends DurableObject<Env> {
     const findings = priceCheck(menu), sales = this.itemSales(addDays(day, -29), day);
     const profit = sales.length ? itemProfit(menu, sales, this.menuItemCosts()) : null;
     return {...menuOverview(menu), received: stamp(new Date(received), config.timeZone), changes: changes.rows, changesTotal: changes.total,
-      priceCheck: {findings: findings.slice(0, 10), total: findings.length}, trend: this.menuTrend(), problems: this.menuProblems(new Date()),
+      priceCheck: {findings: [...findings].sort((a, b) => FINDING_RANK[a.kind] - FINDING_RANK[b.kind]).slice(0, 10), total: findings.length}, trend: this.menuTrend(), problems: this.menuProblems(new Date()),
       matrix: profit ? menuMatrix(menu, profit, this.newMenuItems(addDays(day, -29), day)).map(part => ({...part, classes: part.classes.map(row => ({...row, count: row.items.length, items: row.items.slice(0, 5)}))})) : null,
       experiments: profit ? this.priceExperiments(day, 5) : null,
       profit: profit && {from: addDays(day, -29), to: day, items: profit.items.slice(0, 10), itemsTotal: profit.items.length, unpaired: profit.unpaired.slice(0, 5),
@@ -726,14 +728,85 @@ export class TenantObject extends DurableObject<Env> {
     const config = this.config(), menu = this.menu();
     if (!config || !menu) return null;
     const today = businessDate(new Date(), config.timeZone, config.businessDayCutoffHour), from = addDays(today, -30), to = addDays(today, -1);
-    const sold = new Map<string, {quantity: number; grossCents: number}>();
+    const sold = new Map<string, {quantity: number; grossCents: number; netCents: number | null}>();
     for (const sale of this.itemSales(from, to)) {
       const pairing = pairSale(menu, sale);
       if (!pairing) continue;
-      const row = sold.get(pairing.itemId) ?? {quantity: 0, grossCents: 0};
-      sold.set(pairing.itemId, {quantity: row.quantity + sale.quantity, grossCents: row.grossCents + sale.grossCents});
+      const row = sold.get(pairing.itemId) ?? {quantity: 0, grossCents: 0, netCents: 0};
+      sold.set(pairing.itemId, {quantity: row.quantity + sale.quantity, grossCents: row.grossCents + sale.grossCents,
+        netCents: row.netCents === null || sale.netCents === null ? null : row.netCents + sale.netCents});
     }
     return {salesFrom: from, salesTo: to, ...repricing(menu, input, sold)};
+  }
+
+  /**
+   * MCP: how the price of items (words of the name) went over two years: today's prices, every change (new item, price,
+   * removed) oldest first, and for each change of price how it sold before and after (the experiment), once there are bills.
+   */
+  posPriceHistory(query: string) {
+    const config = this.config(), menu = this.menu();
+    if (!config || !menu) return null;
+    const key = nameKey(query);
+    if (!key) return {query, truncated: false, items: [], changes: []};
+    const today = businessDate(new Date(), config.timeZone, config.businessDayCutoffHour);
+    const matches = (name: string, group?: string | null) => nameKey(`${name} ${group ?? ''}`).includes(key);
+    const items = menu.items.filter(item => matches(item.name, item.group));
+    // An item found today (also by its group) brings all its changes, even under an older name; a removed one is found by name.
+    const ids = new Set([...items.map(item => item.id), ...this.sql.exec<{item_id: string; name: string}>('SELECT DISTINCT item_id, name FROM menu_changes WHERE business_date >= ?', addDays(today, -730)).toArray()
+      .filter(row => matches(row.name)).map(row => row.item_id)]);
+    const from = addDays(today, -730), list = [...ids];
+    const changes: ReturnType<typeof this.menuChangesBetween>['rows'] = [];
+    for (let index = 0; index < list.length; index += 50) {
+      const chunk = list.slice(index, index + 50);
+      changes.push(...this.sql.exec<{business_date: string; item_id: string; name: string; kind: string; old_cents: number | null; new_cents: number | null; old_text: string | null; new_text: string | null}>(
+        `SELECT * FROM menu_changes WHERE business_date >= ? AND item_id IN (${chunk.map(() => '?').join(',')})`, from, ...chunk).toArray()
+        .map(row => ({date: row.business_date, itemId: row.item_id, name: row.name, kind: row.kind, oldCents: row.old_cents, newCents: row.new_cents, oldText: row.old_text, newText: row.new_text})));
+    }
+    changes.sort((a, b) => a.date.localeCompare(b.date));
+    const priced = [...new Set(changes.filter(row => row.kind === 'price').map(row => row.itemId))];
+    const experiments = priced.length ? this.priceExperiments(addDays(today, 1), 2000, {from, itemIds: priced}) : [];
+    return {query, truncated: changes.length > 200,
+      items: items.map(item => ({itemId: item.id, name: item.name, part: item.part, category: item.category, volume: item.volume, price: priceText(item)})),
+      changes: changes.slice(-200).map(row => {
+        const experiment = row.kind === 'price' ? experiments.find(entry => entry.itemId === row.itemId && entry.date === row.date && entry.newText === row.newText) : undefined;
+        return {...row, ...(experiment ? {experiment} : {})};
+      })};
+  }
+
+  /** The menu over a month for the message about its last day: changes, and the average price per category against the month before. */
+  private menuMonth(month: string): MenuMonth | null {
+    const rows = this.menuChangesBetween(`${month}-01`, `${month}-31`, 5000).rows;
+    const prices = rows.filter(row => row.kind === 'price' && row.oldCents !== null && row.newCents !== null);
+    const last = (before: string) => this.sql.exec<{month: string | null}>('SELECT max(month) AS month FROM menu_months WHERE month <= ?', before).toArray()[0].month;
+    const now = last(month), [year, number] = month.split('-').map(Number);
+    const previous = last(number === 1 ? `${year - 1}-12` : `${year}-${String(number - 1).padStart(2, '0')}`);
+    const categories: MenuMonth['categories'] = [];
+    if (now && previous && now !== previous) {
+      const read = (which: string) => new Map(this.sql.exec<{part: string; category: string; avg_cents: number}>('SELECT part, category, avg_cents FROM menu_months WHERE month=?', which).toArray()
+        .map(row => [`${row.part}\u0000${row.category}`, row.avg_cents]));
+      const after = read(now), before = read(previous);
+      const names = [...after.keys()].map(key => key.split('\u0000')[1]);
+      for (const [key, cents] of after) {
+        const old = before.get(key), [part, name] = key.split('\u0000');
+        // A name in two parts of the menu (Ostatní) says which.
+        const label = names.filter(entry => entry === name).length > 1 ? `${name} (${PART_NAMES[part as keyof typeof PART_NAMES] ?? part})` : name;
+        if (old && cents !== old) categories.push({name: label, beforeCents: old, afterCents: cents, changePermille: Math.round((cents / old - 1) * 1000)});
+      }
+      categories.sort((a, b) => Math.abs(b.changePermille) - Math.abs(a.changePermille) || a.name.localeCompare(b.name));
+    }
+    // Like the week: an item priced more times counts once, from its first old price to its last one. The base price
+    // decides; when it stayed, the other sizes do (225 / 255 → 225 / 265 Kč is a rise); back where it was counts as neither.
+    const byItem = new Map<string, {oldCents: number; newCents: number; oldText: string | null; newText: string | null}>();
+    for (const row of prices) {
+      const seen = byItem.get(row.itemId);
+      byItem.set(row.itemId, seen ? {...seen, oldCents: row.oldCents ?? 0, oldText: row.oldText} : {oldCents: row.oldCents ?? 0, newCents: row.newCents ?? 0, oldText: row.oldText, newText: row.newText});
+    }
+    const total = (text: string | null) => pricesOfText(text).reduce((sum, cents) => sum + cents, 0);
+    const sign = (row: {oldCents: number; newCents: number; oldText: string | null; newText: string | null}) =>
+      Math.sign(row.newCents - row.oldCents) || Math.sign(total(row.newText) - total(row.oldText));
+    const moves = [...byItem.values()].map(sign);
+    const result = {month, up: moves.filter(move => move > 0).length, down: moves.filter(move => move < 0).length, added: rows.filter(row => row.kind === 'added').length, removed: rows.filter(row => row.kind === 'removed').length, categories};
+    return result.up + result.down + result.added + result.removed + categories.length ? result : null;
   }
 
   /** Products the POS charged on a day at a price the menu did not have then (to-do list and morning message). */
@@ -759,7 +832,7 @@ export class TenantObject extends DurableObject<Env> {
     const menu = this.menu();
     if (!menu) return null;
     const findings = priceCheck(menu);
-    return {total: findings.length, top: [...findings].sort((a, b) => (a.kind === 'gap' ? 1 : 0) - (b.kind === 'gap' ? 1 : 0)).slice(0, 2)};
+    return {total: findings.length, top: [...findings].sort((a, b) => FINDING_RANK[a.kind] - FINDING_RANK[b.kind]).slice(0, 2)};
   }
 
   /** Menu items added in `from`–`to`: too new for the matrix, which compares days of sales. */
@@ -772,13 +845,15 @@ export class TenantObject extends DurableObject<Env> {
    * (not before the first POS bill) against the days after it (up to 28, until the day). One read of the bills for all
    * changes; only once the POS sends bills; newest first.
    */
-  private priceExperiments(day: string, limit: number) {
+  private priceExperiments(day: string, limit: number, only?: {from: string; itemIds: string[]}) {
     const menu = this.menu();
     const first = this.sql.exec<{d: string | null}>("SELECT min(business_date) AS d FROM records WHERE type='bill'").toArray()[0].d;
     if (!menu || !first) return [];
+    // `only`: the changes of some items from a day on (the price history of one item), so the bills read cover just those.
     const changes = this.sql.exec<{business_date: string; item_id: string; name: string; old_text: string | null; new_text: string | null}>(
-      "SELECT business_date, item_id, name, old_text, new_text FROM menu_changes WHERE kind='price' AND business_date BETWEEN ? AND ? ORDER BY business_date DESC, rowid DESC LIMIT ?",
-      addDays(day, -365), day, limit).toArray();
+      `SELECT business_date, item_id, name, old_text, new_text FROM menu_changes WHERE kind='price' AND business_date BETWEEN ? AND ?${only ? ` AND item_id IN (${only.itemIds.map(() => '?').join(',')})` : ''}
+        ORDER BY business_date DESC, rowid DESC LIMIT ?`,
+      only ? only.from : addDays(day, -365), day, ...(only ? only.itemIds : []), limit).toArray();
     if (!changes.length) return [];
     const from = addDays(changes.map(change => change.business_date).sort()[0], -28);
     const daily = this.sql.exec<{date: string; name: string; quantity: number; gross_cents: number}>(`
@@ -1403,7 +1478,7 @@ export class TenantObject extends DurableObject<Env> {
       ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast: this.forecast(date), pendingAhead: this.pendingAhead(config, date, now), events: this.todayEvents(config, addDays(date, 1)), guestOutlook,
       // The ranking only when it is shown: tips for weak days, and the message about a month's last day.
       eventRanking: guestOutlook?.days.some(day => day.weak) || addDays(date, 1).endsWith('-01') ? this.eventRanking(date) : null,
-      menuWeek: weekday(date) === 0 ? this.menuWeek(date) : null, menuDay: weekday(date) === 0 ? null : this.menuWeek(date, 1), priceMismatches: this.priceMismatchesOn(date),
+      menuWeek: weekday(date) === 0 ? this.menuWeek(date) : null, menuMonth: addDays(date, 1).endsWith('-01') ? this.menuMonth(date.slice(0, 7)) : null, menuDay: weekday(date) === 0 ? null : this.menuWeek(date, 1), priceMismatches: this.priceMismatchesOn(date),
       menuProblems: this.menuProblems(now),
       priceCheck: weekday(date) === 0 ? this.priceCheckSummary() : null,
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),

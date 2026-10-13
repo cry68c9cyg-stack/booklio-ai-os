@@ -123,8 +123,10 @@ export function createServer(context: ToolContext): McpServer {
     const profit = await context.venue.posItemProfit(od, until);
     return profit ? result(profit) : failed('Lístek zatím do OKO1 nedorazil.');
   });
-  tool('preceneni', 'Virtuální přecenění', 'Simulace nových cen lístku: vybrané položky (část, kategorie, slova z názvu) o procento nebo o částku, zaokrouhleno na krok (výchozí 5 Kč). ' +
-    'Na webu ani v pokladně se nic nemění. S prodeji za posledních 30 dní ukáže i odhad tržby při stejném počtu prodaných kusů (podle změny základní ceny). atMinimum = cena by klesla pod krok a zůstala na něm. Částky v haléřích.', {
+  tool('preceneni', 'Virtuální přecenění', 'Simulace nových cen lístku: vybrané položky (část, kategorie, slova z názvu; bez výběru celý lístek) o procento nebo o částku, zaokrouhleno na krok (výchozí 5 Kč). ' +
+    'Na webu ani v pokladně se nic nemění. S prodeji za posledních 30 dní ukáže odhad tržby při stejném počtu prodaných kusů (podle změny základní ceny), změnu výdělku (profitDifferenceCents = změna tržby bez DPH, ' +
+    'food cost kusu se cenou nemění; null bez sazby DPH), o kolik promile kusů smí prodej klesnout, aby tržba nebyla nižší (breakEvenDropPermille), a tržbu při 5 a 10 % kusů méně (ifFewer). ' +
+    'atMinimum = cena by klesla pod krok a zůstala na něm. Částky v haléřích.', {
     cast: zod.enum(['food', 'cocktails', 'drinks']).optional().describe('Část lístku: food = jídlo, cocktails = koktejly, drinks = nápoje.'),
     kategorie: zod.string().max(100).optional().describe('Kategorie nebo její část, např. "burgery".'),
     hledat: zod.string().max(100).optional().describe('Slova z názvu položky, např. "cheeseburger".'),
@@ -148,8 +150,18 @@ export function createServer(context: ToolContext): McpServer {
     const engineering = await context.venue.posMenuEngineering(od, until);
     return engineering ? result(engineering) : failed('Lístek zatím do OKO1 nedorazil.');
   });
+  tool('historie_ceny', 'Historie ceny položky', 'Jak se měnila cena položek lístku za poslední dva roky: dnešní cena položek, jejichž název obsahuje hledaná slova, a každá změna od nejstarší ' +
+    '(added = nová položka, price = nová cena, removed = zrušená) s datem, starou a novou cenou. U změny ceny "experiment": kusy a tržba za den 28 dní před změnou proti dnům po ní (v promile, ' +
+    'status no_history / waiting / running / done), jakmile jsou účty z pokladny. Částky v haléřích.', {
+    hledat: zod.string().min(2).max(100).describe('Slova z názvu položky, např. "texas burger" nebo "mojito".'),
+  }, async ({hledat}: {hledat: string}) => {
+    const history = await context.venue.posPriceHistory(hledat);
+    if (!history) return failed('Lístek zatím do OKO1 nedorazil.');
+    return history.items.length || history.changes.length ? result(history) : failed('Žádná položka lístku ani její změna neodpovídá hledání.');
+  });
+
   tool('kontrola_cen', 'Kontrola cen', 'Ceny lístku k prověření v každé kategorii od 4 položek: položka pod polovinou nebo nad dvojnásobkem běžné ceny kategorie (u nápojů různých objemů za litr) ' +
-    's navrženou cenou na dolním nebo horním kvartilu, a mezery v cenové řadě (od 5 položek) s cenou uprostřed. Jen k posouzení, cena může být záměr. Částky v haléřích.', {},
+    's navrženou cenou na dolním nebo horním kvartilu, mezery v cenové řadě (od 5 položek) s cenou uprostřed a ceny s neobvyklou poslední číslicí (ending: aspoň tři čtvrtiny kategorie končí na pár číslic) s nejbližší obvyklou cenou. Jen k posouzení, cena může být záměr. Částky v haléřích.', {},
   async () => {
     const check = await context.venue.posPriceCheck();
     return check ? result(check) : failed('Lístek zatím do OKO1 nedorazil.');

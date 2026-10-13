@@ -634,7 +634,7 @@ try {
     body: rpc(1, 'initialize', {protocolVersion: '2025-06-18', capabilities: {}, clientInfo: {name: 'test', version: '1'}})})).json();
   assert.equal(initialized.result.serverInfo.name, 'oko1');
   const listed = await (await local('/mcp', {method: 'POST', headers: {...mcpHeaders, authorization: 'Bearer ' + tokens.access_token}, body: rpc(2, 'tools/list')})).json();
-  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['akce_zebricek', 'den', 'k_vyrizeni', 'kontrola_cen', 'kontrola_lahvi', 'listek', 'menu_engineering', 'naklady_dodavatele', 'odhad_a_vyhled', 'preceneni', 'ranni_prehled', 'report_manazeru', 'souhrn_obdobi', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty', 'vydelek_polozek',
+  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['akce_zebricek', 'den', 'historie_ceny', 'k_vyrizeni', 'kontrola_cen', 'kontrola_lahvi', 'listek', 'menu_engineering', 'naklady_dodavatele', 'odhad_a_vyhled', 'preceneni', 'ranni_prehled', 'report_manazeru', 'souhrn_obdobi', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty', 'vydelek_polozek',
     'web_blokace_a_akce', 'web_darkove_karty', 'web_host', 'web_navstevnost', 'web_platby_lahvi', 'web_prehled', 'web_recenze', 'web_rezervace', 'web_rezervace_detail', 'web_tabulka']);
   assert.ok(listed.result.tools.every(entry => entry.annotations.readOnlyHint === true), 'read only');
 
@@ -702,7 +702,8 @@ try {
   assert.deepEqual((await mcp('vydelek_polozek', {od: addDays(today, -6), do: today})).data.items.map(row => [row.quantity, row.grossCents, row.netCents]), [[5, 109760, 98000]]);
   const repriced = (await mcp('preceneni', {kategorie: 'Burgery', procenta: 10})).data;
   assert.deepEqual(repriced.items.map(item => [item.itemId, item.newText]), [['food:burgery:classic', '250 / 290 Kč'], ['food:burgery:texas', '285 Kč']]);
-  if (soldDay >= repriced.salesFrom) assert.deepEqual(repriced.sales, {items: 1, grossCents: 109760, newGrossCents: 121956, differenceCents: 12196});
+  if (soldDay >= repriced.salesFrom) assert.deepEqual(repriced.sales, {items: 1, grossCents: 109760, newGrossCents: 121956, differenceCents: 12196, profitDifferenceCents: 10889,
+    breakEvenDropPermille: 100, ifFewer: [{percent: 5, newGrossCents: 115858}, {percent: 10, newGrossCents: 109760}]});
   assert.equal((await mcp('preceneni', {kategorie: 'Burgery'})).error, true, 'a change is needed');
   assert.equal((await mcp('preceneni', {hledat: 'pizza', procenta: 5})).error, true, 'nothing matches');
   assert.deepEqual((await mcp('kontrola_cen')).data, {items: 4, findings: []}, 'no category has 4 items');
@@ -859,6 +860,16 @@ try {
   assert.equal((await (await jdIngest('batch-menu-10', [menu(10, secondMenu.items)])).json()).accepted, 1);
   const fixedBoard = await (await jdBoard('GET', '/data', undefined, jdCookie)).json();
   assert.ok(!fixedBoard.menu.problems.some(text => text.startsWith('Web poslal')));
+
+  // Claude reads the price history of an item; the message about the month's last day sums up the menu's month.
+  const texasHistory = (await mcp('historie_ceny', {hledat: 'texas'})).data;
+  assert.deepEqual([texasHistory.items.map(item => item.name), texasHistory.changes.map(change => [change.kind, change.oldText, change.newText])],
+    [['Texas Burger'], [['price', '245 Kč', '259 Kč']]]);
+  assert.equal((await mcp('historie_ceny', {hledat: 'pizza'})).error, true);
+  assert.ok((await mcp('historie_ceny', {hledat: 'vodka x'})).data.changes.some(change => change.kind === 'removed'), 'a removed item is found by its name');
+  const [menuYear, menuMonthNumber] = today.split('-').map(Number);
+  const menuMonthEnd = addDays(menuMonthNumber === 12 ? `${menuYear + 1}-01-01` : `${menuYear}-${String(menuMonthNumber + 1).padStart(2, '0')}-01`, -1);
+  assert.match((await (await call('GET', `/admin/t/james-dean/briefing?date=${menuMonthEnd}`)).json()).text, /\nLístek v [^\n]+: zdraženo 2, přidáno \d+, zrušeno \d+(\n|$)/);
 
   // Logging everybody out ends the MCP connection too: the access token and its refresh stop working.
   assert.deepEqual(await (await call('POST', '/admin/t/james-dean/logout', {})).json(), {ended: 2});

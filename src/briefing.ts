@@ -59,6 +59,8 @@ export type Briefing = {
   menuWeek: MenuWeek | null;
   /** Changes of the menu on the reported day (every message but Monday's, which has the week); a briefing stored before has none. */
   menuDay?: MenuWeek | null;
+  /** The menu over the month, in the message about its last day; a briefing stored before has none. */
+  menuMonth?: MenuMonth | null;
   /** A held menu or refused menu batches (src/worker.ts `menuProblems`); a briefing stored before has none. */
   menuProblems?: string[];
   /** Products the POS charged that day at a price the menu did not have (src/menu.ts); a briefing stored before has none. */
@@ -219,6 +221,23 @@ export function sectionThousands(cents: number, rows: {label: string; cents: num
 
 /** Changes of the menu over the week (Monday message): new prices, new items and removed items. */
 export type MenuWeek = {prices: {name: string; oldText: string | null; newText: string | null}[]; added: string[]; removed: string[]};
+/** Changes of the menu over a month (counts) and the categories whose average base price moved against the month before. */
+export type MenuMonth = {month: string; up: number; down: number; added: number; removed: number;
+  categories: {name: string; beforeCents: number; afterCents: number; changePermille: number}[]};
+export function renderMenuMonth(month: MenuMonth | null | undefined): string[] {
+  if (!month) return [];
+  const changes = [month.up ? `zdraženo ${month.up}` : '', month.down ? `zlevněno ${month.down}` : '', month.added ? `přidáno ${month.added}` : '', month.removed ? `zrušeno ${month.removed}` : ''].filter(Boolean);
+  const [year, number] = month.month.split('-').map(Number), before = monthName(number === 1 ? `${year - 1}-12` : `${year}-${String(number - 1).padStart(2, '0')}`);
+  const percent = (permille: number) => `${permille > 0 ? '+' : '−'}${Math.round(Math.abs(permille) / 10)} %`;
+  const moved = month.categories.filter(row => Math.abs(row.changePermille) >= 10);
+  const averages = moved.length ? `průměrná cena proti ${MONTH_DATIVE[before] ?? before}: ${moved.slice(0, 3).map(row => `${row.name} ${percent(row.changePermille)}`).join(', ')}${moved.length > 3 ? ` a další ${moved.length - 3}` : ''}` : '';
+  const parts = [changes.length ? changes.join(', ') : '', averages].filter(Boolean);
+  return parts.length ? [`Lístek ${MONTH_LOCATIVE[monthName(month.month)] ?? monthName(month.month)}: ${parts.join(' · ')}`] : [];
+}
+const MONTH_LOCATIVE: Record<string, string> = {leden: 'v lednu', únor: 'v únoru', březen: 'v březnu', duben: 'v dubnu', květen: 'v květnu', červen: 'v červnu',
+  červenec: 'v červenci', srpen: 'v srpnu', září: 'v září', říjen: 'v říjnu', listopad: 'v listopadu', prosinec: 'v prosinci'};
+const MONTH_DATIVE: Record<string, string> = {leden: 'lednu', únor: 'únoru', březen: 'březnu', duben: 'dubnu', květen: 'květnu', červen: 'červnu',
+  červenec: 'červenci', srpen: 'srpnu', září: 'září', říjen: 'říjnu', listopad: 'listopadu', prosinec: 'prosinci'};
 /** One product charged at another price than the menu has, e.g. "Classic Burger 225 Kč (lístek 250 Kč, 4×)". */
 export const mismatchText = (row: PriceMismatch) => `${row.posName} ${crowns(row.posCents)} (lístek ${row.menuText}, ${row.quantity}×)`;
 export function renderPriceMismatches(rows: PriceMismatch[] | undefined): string[] {
@@ -546,7 +565,7 @@ export function buildBriefing(input: {
   web?: WebTraffic; webLastWeek?: WebTraffic;
   /** Visits and sent booking forms of the same weekday over the 4 weeks before (days the website sent). */
   webUsual?: {visits: number; sent: number}[];
-  eventRanking?: EventRank[] | null; menuWeek?: MenuWeek | null; menuDay?: MenuWeek | null; menuProblems?: string[]; priceMismatches?: PriceMismatch[]; priceCheck?: Briefing['priceCheck'];
+  eventRanking?: EventRank[] | null; menuWeek?: MenuWeek | null; menuDay?: MenuWeek | null; menuMonth?: MenuMonth | null; menuProblems?: string[]; priceMismatches?: PriceMismatch[]; priceCheck?: Briefing['priceCheck'];
   costs?: MonthResult | null; costsPrevious?: MonthResult | null; supplies?: SupplyBrief | null;
   reviews?: ReviewSummary;
   week?: Week | null; silent?: {name: string; since: string}[];
@@ -635,7 +654,7 @@ export function buildBriefing(input: {
     web: summarizeWeb(input.web, input.webLastWeek),
     webDrop: webDrop(input.web, input.webUsual),
     eventRanking: input.eventRanking ?? null,
-    menuWeek: input.menuWeek ?? null, menuDay: input.menuDay ?? null, menuProblems: input.menuProblems ?? [], priceMismatches: input.priceMismatches ?? [], priceCheck: input.priceCheck ?? null,
+    menuWeek: input.menuWeek ?? null, menuDay: input.menuDay ?? null, menuMonth: input.menuMonth ?? null, menuProblems: input.menuProblems ?? [], priceMismatches: input.priceMismatches ?? [], priceCheck: input.priceCheck ?? null,
     reviews: summarizeReviews(input.reviews),
     costs: input.costs ?? null, costsPrevious: input.costsPrevious ?? null, supplies: input.supplies ?? null,
     week: input.week ?? null,
@@ -716,7 +735,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   // The month so far once a week, and the whole month in the message about its last day (the 1st in the morning).
   lines.push(...renderMonth(briefing.month));
   // Which events draw guests, once a month in the message about its last day.
-  if (addDays(briefing.businessDate, 1).endsWith('-01')) lines.push(...renderEventRanking(briefing.eventRanking));
+  if (addDays(briefing.businessDate, 1).endsWith('-01')) lines.push(...renderEventRanking(briefing.eventRanking), ...renderMenuMonth(briefing.menuMonth));
   return lines.join('\n');
 }
 
