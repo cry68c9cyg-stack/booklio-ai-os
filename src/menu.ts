@@ -212,6 +212,49 @@ export function repricing(menu: Menu, input: RepricingInput, sold: Map<string, {
   };
 }
 
+/** Something the website's menu should say and does not (or one item at two prices), for the website's admin to fix. */
+export type MenuGap = {kind: 'description' | 'volume' | 'price'; part: MenuItem['part']; category: string; group: string | null; itemId: string; name: string; text: string};
+/** Sides, sauces and extras need no description; coffee and hot tea are served in their cup, so no volume (iced tea has one). */
+const NO_DESCRIPTION = /\b(prilohy?|omacky?|dresinky?|priplatky?|extras?)\b/;
+const NO_VOLUME = /\b(kava|kavy|caj|caje|horke napoje|coffee|tea)\b/;
+const ICED = /\bledov/;
+const quote = (text: string, max = 80) => text.length > max ? `${text.slice(0, text.lastIndexOf(' ', max) > 40 ? text.lastIndexOf(' ', max) : max)} …` : text;
+
+/**
+ * What to fix in the menu on the website: a dish or cocktail without a description (guests ask what is in it; a
+ * cocktail lists its ingredients), a drink without its volume, and the same item (name, volume and description) at
+ * two prices within one category. Where an item of the same name elsewhere has a description, it says where to copy it from.
+ */
+export function menuGaps(menu: Menu): MenuGap[] {
+  const found: MenuGap[] = [];
+  const where = (item: MenuItem) => item.group ? `${item.category} › ${item.group}` : item.category;
+  const gap = (item: MenuItem, kind: MenuGap['kind'], text: string) =>
+    found.push({kind, part: item.part, category: item.category, group: item.group, itemId: item.id, name: item.name, text});
+  for (const item of menu.items) {
+    const category = nameKey(`${item.category} ${item.group ?? ''}`);
+    // "Dorty – dle nabídky" changes every day: nothing fixed to describe.
+    if (!item.description?.trim() && !/\bdle (denni )?nabidky\b/.test(nameKey(item.name)) && (item.part === 'cocktails' || (item.part === 'food' && !NO_DESCRIPTION.test(category)))) {
+      const twin = menu.items.find(other => other !== item && other.description?.trim() && nameKey(other.name) === nameKey(item.name));
+      gap(item, 'description', `${item.part === 'cocktails' ? 'chybí složení' : 'chybí popis'}${twin ? ` (převzít z ${where(twin)}: „${quote(twin.description!.trim())}“)` : ''}`);
+    }
+    if (item.part === 'drinks' && item.volumeMl === null && !item.volume?.trim() && (!NO_VOLUME.test(category) || ICED.test(category))) gap(item, 'volume', 'chybí objem');
+  }
+  // The same item twice in one category (same name, volume and description) at other prices: one of them is a typo.
+  // Another category (an XXL jug for eight, a bottle) may sell the same drink at another price on purpose.
+  const same = new Map<string, MenuItem[]>();
+  for (const item of menu.items) {
+    const key = JSON.stringify([item.part, item.category, item.group, nameKey(item.name), item.volumeMl ?? (item.volume ?? '').replace(/\s+/g, '').toLowerCase(), (item.description ?? '').trim().toLowerCase()]);
+    same.set(key, [...(same.get(key) ?? []), item]);
+  }
+  for (const items of same.values()) {
+    const prices = [...new Set(items.map(item => priceText(item)))];
+    if (prices.length < 2) continue;
+    gap(items[0], 'price', `v ${where(items[0])} dvakrát s jinou cenou: ${prices.join(' a ')}`);
+  }
+  const order = {price: 0, description: 1, volume: 2};
+  return found.sort((a, b) => order[a.kind] - order[b.kind]);
+}
+
 export type PriceFinding = {
   kind: 'cheap' | 'expensive' | 'gap' | 'ending'; part: MenuItem['part']; category: string; itemId: string | null; name: string | null;
   priceText: string; suggestedCents: number; text: string;

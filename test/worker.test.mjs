@@ -542,6 +542,8 @@ try {
   const menuMonday = await (await call('GET', `/admin/t/james-dean/briefing?date=${menuSunday}`)).json();
   assert.deepEqual([menuMonday.briefing.menuWeek.prices.length, menuMonday.briefing.menuWeek.added, menuMonday.briefing.menuWeek.removed], [2, ['Apple Pie'], ['Vodka X']]);
   assert.match(menuMonday.text, /\nLístek za týden: nová cena 2× \(.+ → .+\) · nově Apple Pie · zrušeno Vodka X(\n|$)/);
+  assert.match(menuMonday.text, /\nNa webu opravit v lístku: chybí popis nebo složení 2× \(Texas Burger, Apple Pie\)(\n|$)/);
+  assert.ok(menuMonday.briefing.menuGaps.total === 2 && !(await (await call('GET', `/admin/t/james-dean/briefing?date=${addDays(menuSunday, -1)}`)).json()).briefing.menuGaps, 'Mondays only');
   const local = (path, init = {}) => mf.dispatchFetch('http://localhost' + path, init);
 
   // The admin check reads only the list of tables and never shows the token.
@@ -725,7 +727,10 @@ try {
     breakEvenDropPermille: 100, ifFewer: [{percent: 5, newGrossCents: 115858}, {percent: 10, newGrossCents: 109760}]});
   assert.equal((await mcp('preceneni', {kategorie: 'Burgery'})).error, true, 'a change is needed');
   assert.equal((await mcp('preceneni', {hledat: 'pizza', procenta: 5})).error, true, 'nothing matches');
-  assert.deepEqual((await mcp('kontrola_cen')).data, {items: 4, findings: []}, 'no category has 4 items');
+  const checked = (await mcp('kontrola_cen')).data;
+  assert.deepEqual([checked.items, checked.findings], [4, []], 'no category has 4 items');
+  // What to fix on the website: the dishes without a description (the burger with one and the espresso, a hot drink, are fine).
+  assert.deepEqual(checked.webGaps.map(gap => [gap.kind, gap.name, gap.text]), [['description', 'Texas Burger', 'chybí popis'], ['description', 'Apple Pie', 'chybí popis']]);
   // Menu engineering: the burger that sold is a star, the rest of the food weak; the price changes of today wait for sales.
   const engineering = (await mcp('menu_engineering', {od: addDays(today, -6), do: today})).data;
   assert.deepEqual(engineering.matrix.map(part => [part.part, part.basis, part.classes.map(row => [row.kind, row.items.map(item => item.itemId)])]),
@@ -794,6 +799,8 @@ try {
   assert.deepEqual([boardData.menu.priceCheck, boardData.menu.profit.items.map(row => [row.name, row.quantity]), boardData.menu.profit.unpaired.map(row => row.name)],
     [{findings: [], total: 0}, [['Classic <b>Burger</b>', 5]], ['Tonic 0,25 l']], 'the shown day is yesterday: today\'s bill is not in');
   assert.match(content, /Prodej po položkách za 30 dní/);
+  assert.deepEqual([boardData.menu.gaps.total, boardData.menu.gaps.items.map(gap => gap.name)], [2, ['Texas Burger', 'Apple Pie']]);
+  assert.match(content, /Co opravit na webu<\/h3><ul><li><b>Texas Burger<\/b> \(Burgery\): chybí popis<\/li>/);
   assert.deepEqual(boardData.menu.matrix.map(part => part.classes.map(row => row.count)), [[1, 0, 0, 2]]);
   assert.match(content, /Obliba × výdělek za 30 dní/);
   assert.match(content, /Classic &lt;b&gt;Burger&lt;\/b&gt;/);

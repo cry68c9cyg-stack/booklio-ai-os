@@ -310,6 +310,9 @@ function menuCard(m) {
   const pc = m.priceCheck;
   h += '<h3>Ceny k prověření</h3>' + (pc.findings.length ? '<ul>' + pc.findings.map(f => '<li>' + (f.name ? '<b>' + esc(f.name) + '</b> ' + esc(f.priceText) : '<b>' + esc(f.category) + '</b>') +
     (f.name ? ' (' + esc(f.category) + ')' : '') + ': ' + esc(f.text) + '</li>').join('') + '</ul>' + (pc.total > pc.findings.length ? '<div class="muted">… a další ' + (pc.total - pc.findings.length) + '</div>' : '') : '<span class="muted">nic nápadného</span>');
+  const gp = m.gaps;
+  if (gp) h += '<h3>Co opravit na webu</h3>' + (gp.items.length ? '<ul>' + gp.items.map(g => '<li><b>' + esc(g.name) + '</b> (' + esc(g.group ? g.category + ' › ' + g.group : g.category) + '): ' + esc(g.text) + '</li>').join('') + '</ul>' +
+    (gp.total > gp.items.length ? '<div class="muted">… a další ' + (gp.total - gp.items.length) + '</div>' : '') : '<span class="muted">nic, lístek je úplný</span>');
   const pr = m.profit;
   if (pr) {
     h += '<h3>Prodej po položkách za 30 dní</h3><div class="scroll"><table><tr><th>Položka</th><th class="n">Kusů</th><th class="n">Tržba</th><th class="n">Zisk</th></tr>' +
