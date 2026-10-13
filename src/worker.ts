@@ -7,7 +7,7 @@ import {todoList} from './todo.ts';
 import {menuChanges, menuOverview} from './menu.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
-import {addDays, businessDate, isDate, localTime, weekday} from './time.ts';
+import {addDays, businessDate, isDate, localTime, sameClockDaysBefore, weekday} from './time.ts';
 import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-report.ts';
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
@@ -869,10 +869,12 @@ export class TenantObject extends DurableObject<Env> {
     const sum = (list: {part: DayPart; size: number}[]) => list.reduce((parts, row) => { parts[row.part] += row.size; return parts; }, empty());
     const days = [0, 1, 2, 3, 4, 5, 6].map(ahead => {
       const day = addDays(today, ahead);
-      const past = [1, 2, 3, 4, 5, 6, 7, 8].map(back => ({back, list: rows.get(addDays(day, -7 * back)) ?? []})).filter(({list}) => list.length > 0)
+      // Past days count only when most of their guests have the time of booking (older data has none, it would show no later bookings).
+      const past = [1, 2, 3, 4, 5, 6, 7, 8].map(back => ({back, list: rows.get(addDays(day, -7 * back)) ?? []}))
+        .filter(({list}) => list.length > 0 && 2 * list.filter(row => row.created !== null).reduce((guests, row) => guests + row.size, 0) >= list.reduce((guests, row) => guests + row.size, 0))
         .map(({back, list}) => {
-          // The same moment before that day as now is before this one.
-          const moment = now.getTime() - 7 * back * 86400000;
+          // The same moment before that day as now is before this one (same local clock time).
+          const moment = sameClockDaysBefore(now, 7 * back, config.timeZone);
           return {final: sum(list), early: sum(list.filter(row => row.created === null || row.created <= moment))};
         });
       return guestOutlookDay(day, sum(rows.get(day) ?? []), past);

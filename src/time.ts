@@ -2,10 +2,15 @@
 
 export type LocalTime = {date: string; hour: number; minute: number};
 
+// One formatter per time zone: building one is slow, and a briefing reads thousands of times.
+const formats = new Map<string, Intl.DateTimeFormat>();
+
 export function localTime(at: Date, timeZone: string): LocalTime {
-  const format = new Intl.DateTimeFormat('en-CA', {
-    timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-  });
+  let format = formats.get(timeZone);
+  if (!format) {
+    format = new Intl.DateTimeFormat('en-CA', {timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'});
+    formats.set(timeZone, format);
+  }
   const parts = Object.fromEntries(format.formatToParts(at).map(part => [part.type, part.value]));
   return {date: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour), minute: Number(parts.minute)};
 }
@@ -31,4 +36,11 @@ export function isDate(value: unknown): value is string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const parsed = new Date(value + 'T12:00:00Z');
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+/** The moment `days` days before `at` at the same local clock time (across a change of summer time too). */
+export function sameClockDaysBefore(at: Date, days: number, timeZone: string): number {
+  const offset = (ms: number) => { const local = localTime(new Date(ms), timeZone); return Date.parse(`${local.date}T${String(local.hour).padStart(2, '0')}:${String(local.minute).padStart(2, '0')}:00Z`) - Math.floor(ms / 60000) * 60000; };
+  const guess = at.getTime() - days * 86400000;
+  return guess + offset(at.getTime()) - offset(guess);
 }

@@ -6,7 +6,7 @@ import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
 import {weatherDays, weatherText} from '../src/weather.ts';
-import {businessDate} from '../src/time.ts';
+import {businessDate, sameClockDaysBefore} from '../src/time.ts';
 import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type TenantConfig} from '../src/validate.ts';
 
 const config: TenantConfig = {
@@ -534,4 +534,10 @@ test('events looked back on in the weekly summary', () => {
     {date: '2026-10-11', title: 'Brunch', guests: 1, usualGuests: null, revenueCents: 500000, usualRevenueCents: null},
   ]), ['Akce za týden: pá 9. 10. Rock Night – 120 hostů z rezervací (obvykle 80, +50 %), tržba 150 000 Kč (obvykle 100 000 Kč)'
     + ' · so 10. 10. Quiz – 30 hostů z rezervací (obvykle 40, −25 %) · ne 11. 10. Brunch – 1 host z rezervací, tržba 5 000 Kč']);
+});
+
+test('the same local clock time days before, across the end of summer time', () => {
+  // 30. 10. 2026 9:00 CET = 8:00 UTC; a week before (23. 10.) 9:00 CEST = 7:00 UTC.
+  assert.equal(new Date(sameClockDaysBefore(new Date('2026-10-30T08:00:00Z'), 7, 'Europe/Prague')).toISOString(), '2026-10-23T07:00:00.000Z');
+  assert.equal(new Date(sameClockDaysBefore(new Date('2026-10-14T07:00:00Z'), 14, 'Europe/Prague')).toISOString(), '2026-09-30T07:00:00.000Z');
 });

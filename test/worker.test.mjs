@@ -925,9 +925,11 @@ try {
       at(booking(`p${i}b`, 1, day, 'diner', 4, 'confirmed', null), `${day}T18:30:00Z`, `${day}T12:00:00Z`),
       {...booking(`p${i}c`, 1, day, 'diner', 2, 'confirmed', null), startsAt: `${day}T23:00:00Z`},
     ]),
+    // Older days without the time of booking would show no later guests: left out.
+    ...['2026-09-23', '2026-09-16'].map((day, i) => booking(`q${i}`, 1, day, 'diner', 10, 'confirmed', null)),
   ], 'Bearer ' + token, 'outlook-venue')).status, 200);
   const outlookMorning = await (await call('POST', '/admin/t/outlook-venue/tick', {at: '2026-10-14T07:00:00Z'})).json();
-  assert.match(outlookMorning.text, /\nHosté dnes: čekej asi 24 \(zatím rezervováno 20\) · přes den 4 · večer 10 · noc 10(\n|$)/, 'a booking without its creation time counts as early');
+  assert.match(outlookMorning.text, /\nHosté dnes: čekej asi 24 \(zatím rezervováno 20\) · přes den 4 · večer 10 · noc 10(\n|$)/, 'a booking without its creation time counts as early, days mostly without it are left out');
   const outlookDays = (await (await call('GET', '/admin/t/outlook-venue/briefing?date=2026-10-13')).json()).briefing.guestOutlook;
   assert.equal(outlookDays, null, 'not for a day looked at later');
 
