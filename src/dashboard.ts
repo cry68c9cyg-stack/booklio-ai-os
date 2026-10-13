@@ -306,6 +306,17 @@ function menuCard(m) {
   const range = c => c.minCents === c.maxCents ? kc(c.minCents) : kc(c.minCents) + ' – ' + kc(c.maxCents);
   let h = '<div class="card"><h2>Jídelní a nápojový lístek</h2><div class="muted">' + m.items + (m.items === 1 ? ' položka' : m.items >= 2 && m.items <= 4 ? ' položky' : ' položek') + ' · ' + m.parts.map(p => esc(p.name.toLowerCase()) + ' ' + p.items).join(', ') + ' · z webu, naposledy ' + esc(m.received) + '</div>';
   h += '<h3>Změny za 30 dní</h3>' + (m.changes.length ? '<ul>' + m.changes.map(c => '<li>' + esc(short(c.date)) + ' <b>' + esc(c.name) + '</b>: ' + changeText(c) + '</li>').join('') + '</ul>' + (m.changesTotal > m.changes.length ? '<div class="muted">… a další ' + (m.changesTotal - m.changes.length) + '</div>' : '') : '<span class="muted">beze změn</span>');
+  const pc = m.priceCheck;
+  h += '<h3>Ceny k prověření</h3>' + (pc.findings.length ? '<ul>' + pc.findings.map(f => '<li>' + (f.name ? '<b>' + esc(f.name) + '</b> ' + esc(f.priceText) : '<b>' + esc(f.category) + '</b>') +
+    (f.name ? ' (' + esc(f.category) + ')' : '') + ': ' + esc(f.text) + '</li>').join('') + '</ul>' + (pc.total > pc.findings.length ? '<div class="muted">… a další ' + (pc.total - pc.findings.length) + '</div>' : '') : '<span class="muted">nic nápadného</span>');
+  const pr = m.profit;
+  if (pr) {
+    h += '<h3>Prodej po položkách za 30 dní</h3><div class="scroll"><table><tr><th>Položka</th><th class="n">Kusů</th><th class="n">Tržba</th><th class="n">Zisk</th></tr>' +
+      pr.items.map(i => '<tr><td>' + esc(i.name) + '</td><td class="n">' + i.quantity + '</td><td class="n">' + kc(i.grossCents) + '</td><td class="n">' + (i.profitCents === null ? '<span class="muted">–</span>' : kc(i.profitCents)) + '</td></tr>').join('') + '</table></div>' +
+      '<div class="muted">spárováno s lístkem ' + (pr.totals.pairedPermille === null ? '–' : Math.round(pr.totals.pairedPermille / 10) + ' %') + ' tržby' + (pr.itemsTotal > pr.items.length ? ' · položek celkem ' + pr.itemsTotal : '') +
+      (pr.missing.length ? ' · k zisku chybí: ' + esc(pr.missing.join(', ')) : '') + '</div>' +
+      (pr.unpaired.length ? '<div class="muted">nespárováno: ' + pr.unpaired.map(u => esc(u.name) + ' ' + kc(u.grossCents)).join(', ') + (pr.unpairedTotal > pr.unpaired.length ? ' a další ' + (pr.unpairedTotal - pr.unpaired.length) : '') + '</div>' : '');
+  }
   for (const p of m.parts) {
     h += '<details><summary>' + esc(p.name) + ' (' + p.items + ')</summary><div class="scroll"><table><tr><th>Kategorie</th><th class="n">Položek</th><th class="n">Cena od – do</th><th class="n">Průměr</th></tr>' +
       p.categories.map(c => '<tr><td>' + esc(c.name) + '</td><td class="n">' + c.items + '</td><td class="n">' + range(c) + '</td><td class="n">' + kc(c.avgCents) + '</td></tr>').join('') + '</table></div></details>';

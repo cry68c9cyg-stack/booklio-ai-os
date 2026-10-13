@@ -7,9 +7,10 @@ import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
 import {counted, overdueInvoices, priceRises, renderSupplies, supplyBrief, supplySummary, unitPrice} from '../src/supplies.ts';
 import {weatherDays, weatherText} from '../src/weather.ts';
+import {itemProfit, nameKey, pairSale, priceCheck, repricing, volumeOf, type ItemSale} from '../src/menu.ts';
 import {businessDate, sameClockDaysBefore} from '../src/time.ts';
 import {czechHolidays, easterSunday, holidayName} from '../src/holidays.ts';
-import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type SupplierInvoice, type TenantConfig, type WebTraffic} from '../src/validate.ts';
+import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type Menu, type MenuItem, type SupplierInvoice, type TenantConfig, type WebTraffic} from '../src/validate.ts';
 
 const config: TenantConfig = {
   name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9],
@@ -18,7 +19,7 @@ const config: TenantConfig = {
 const bill = (id: string, extra: Partial<Bill> = {}): Bill => ({
   type: 'bill', id, version: 1, businessDate: '2026-10-08', closedAt: '2026-10-08T20:00:00.000Z', registerId: 'bar', section: 'bar',
   status: 'closed', tableId: null, guests: 2, waiterId: null, reservationId: null, totalCents: 50000, discountCents: 0,
-  items: [{name: 'Burger', productId: null, category: null, quantity: 2, totalCents: 50000}],
+  items: [{name: 'Burger', productId: null, category: null, quantity: 2, totalCents: 50000, vatRate: null}],
   payments: [{method: 'card', amountCents: 50000}], voids: [], ...extra,
 });
 
@@ -685,4 +686,66 @@ test('supplier invoices: costs by kind, food cost, price rises, overdue invoices
   const todo = todoList({...buildBriefing({businessDate: '2026-10-07', config, bills: [], closings: [], planHistory: [], incomplete: false}), supplies: brief});
   assert.deepEqual(todo.filter(row => /Zdražení|splatnosti/.test(row.text)).map(row => [row.text.slice(0, 30), row.amountCents]),
     [['Faktura po splatnosti: Makro, ', 99000], ['Zdražení: limety / ks (Makro) ', 2000]]);
+});
+
+const menuOf = (items: MenuItem[]): Menu => ({type: 'menu', id: 'menu-web', version: 1, businessDate: '2026-10-08', source: 'web', items, notes: []});
+const dish = (id: string, category: string, name: string, pricesCents: number[], extra: Partial<MenuItem> = {}): MenuItem =>
+  ({id, part: 'food', category, group: null, name, description: null, volume: null, volumeMl: null, pricesCents, tip: false, ...extra});
+const drink = (id: string, name: string, volumeMl: number, cents: number): MenuItem =>
+  dish(id, 'Pivo', name, [cents], {part: 'drinks', volume: `${volumeMl / 1000} l`, volumeMl});
+
+test('POS products are paired to the menu by name, size by volume or price, and only clear look-alikes', () => {
+  const menu = menuOf([dish('b1', 'Burgery', 'Classic Burger', [22500, 25500]), dish('b2', 'Burgery', 'Texas Burger', [24500]),
+    drink('p3', 'Plzeň', 300, 6500), drink('p5', 'Plzeň', 500, 8900), dish('s1', 'Saláty', 'Caesar salát', [19500])]);
+  assert.equal(nameKey('Coca-Cola 0,33 l'), 'coca cola');
+  assert.equal(volumeOf('Finlandia 4cl'), 40);
+  assert.deepEqual(pairSale(menu, {name: 'CLASSIC BURGER', quantity: 2, grossCents: 45000}), {itemId: 'b1', how: 'name'});
+  assert.deepEqual(pairSale(menu, {name: 'Plzeň 0,5 l', quantity: 3, grossCents: 26700}), {itemId: 'p5', how: 'name'});
+  assert.deepEqual(pairSale(menu, {name: 'Plzen', quantity: 2, grossCents: 13000}), {itemId: 'p3', how: 'name'}, 'no volume: the closest price');
+  assert.deepEqual(pairSale(menu, {name: 'Caesar salát s kuřetem', quantity: 1, grossCents: 21500}), {itemId: 's1', how: 'similar'});
+  assert.equal(pairSale(menu, {name: 'Burger', quantity: 1, grossCents: 22500}), null, 'two burgers share the word: unpaired');
+  assert.equal(pairSale(menu, {name: 'Tonic', quantity: 1, grossCents: 6000}), null);
+  assert.deepEqual([volumeOf('Víno 1/8 l'), volumeOf('Pivo 1/2 l'), nameKey('Víno 1/8 l')], [125, 500, 'vino']);
+  const burgers = menuOf([dish('c', 'Burgery', 'Cheeseburger', [21500]), dish('d', 'Burgery', 'Double bacon cheeseburger', [29500]),
+    dish('k', 'Hlavní', 'Kuře na grilu', [26500]), dish('h', 'Přílohy', 'Batátové hranolky', [8900])]);
+  assert.equal(pairSale(burgers, {name: 'Double cheeseburger', quantity: 1, grossCents: 26500}), null, 'two burgers close: unpaired');
+  assert.equal(pairSale(burgers, {name: 'Kuře na pepři', quantity: 1, grossCents: 26500}), null, 'filler words do not pair');
+  assert.equal(pairSale(burgers, {name: 'Hranolky', quantity: 1, grossCents: 6900}), null, 'half the words are not enough');
+});
+
+test('profit by item: revenue without VAT, food cost per piece and what is missing', () => {
+  const menu = menuOf([dish('b1', 'Burgery', 'Classic Burger', [22500]), dish('b2', 'Burgery', 'Texas Burger', [24500])]);
+  const sales: ItemSale[] = [{key: 'p1', productId: 'p1', name: 'Classic Burger', quantity: 4, grossCents: 89600, netCents: 80000},
+    {key: 'p2', productId: 'p2', name: 'Texas Burger', quantity: 1, grossCents: 22400, netCents: 20000}, {key: 'name:Tonic', productId: null, name: 'Tonic', quantity: 2, grossCents: 11200, netCents: 10000}];
+  const profit = itemProfit(menu, sales, new Map([['b1', 7000]]));
+  assert.deepEqual(profit.items.map(row => [row.itemId, row.quantity, row.netCents, row.costCents, row.profitCents]), [['b1', 4, 80000, 28000, 52000], ['b2', 1, 20000, null, null]]);
+  assert.deepEqual(profit.unpaired.map(row => row.name), ['Tonic']);
+  assert.deepEqual([profit.totals.pairedPermille, profit.totals.profitCents, profit.missing], [909, null, ['food cost za kus (nákupní ceny a receptury)']]);
+  const noVat = itemProfit(menu, [{...sales[0], netCents: null}], new Map([['b1', 7000]]));
+  assert.deepEqual([noVat.items[0].profitCents, noVat.missing], [null, ['sazba DPH u položek pokladny']]);
+});
+
+test('virtual repricing rounds to 5 Kč, filters by part, category and name, and keeps pieces sold', () => {
+  const menu = menuOf([dish('b1', 'Burgery', 'Classic Burger', [22500, 25500]), dish('b2', 'Burgery', 'Texas Burger', [24500]), drink('p5', 'Plzeň', 500, 8900)]);
+  const up = repricing(menu, {category: 'burgery', percent: 10}, new Map([['b1', {quantity: 10, grossCents: 225000}]]));
+  assert.deepEqual(up.items.map(item => [item.itemId, item.newPricesCents, item.newText]), [['b1', [25000, 28000], '250 / 280 Kč'], ['b2', [27000], '270 Kč']]);
+  assert.deepEqual(up.sales, {items: 1, grossCents: 225000, newGrossCents: 250000, differenceCents: 25000});
+  assert.deepEqual(repricing(menu, {part: 'drinks', deltaCents: 1000, stepCents: 100}, new Map()).items.map(item => item.newPricesCents), [[9900]]);
+  assert.deepEqual(repricing(menu, {query: 'texas', percent: -50}, new Map()).items.map(item => item.newPricesCents), [[12500]]);
+  assert.equal(repricing(menu, {query: 'pizza', percent: 5}, new Map()).count, 0);
+  const free = repricing(menuOf([dish('w', 'Voda', 'Voda z kohoutku', [0]), dish('e', 'Voda', 'Espresso', [6200])]), {deltaCents: -10000}, new Map());
+  assert.deepEqual(free.items.map(item => [item.newPricesCents, item.atMinimum ?? false]), [[[0], false], [[500], true]], 'free stays free, a price stays at one step');
+});
+
+test('price check: too cheap and too expensive in a category (per litre for sizes) and gaps in the price ladder', () => {
+  const findings = priceCheck(menuOf([dish('b1', 'Burgery', 'A', [22500]), dish('b2', 'Burgery', 'B', [24500]), dish('b3', 'Burgery', 'C', [25500]),
+    dish('b4', 'Burgery', 'D', [9900]), dish('b5', 'Burgery', 'E', [59900]), dish('x1', 'Malé', 'Jen tři', [100]),
+    drink('p1', 'Pivo 1', 300, 6500), drink('p2', 'Pivo 2', 500, 8900), drink('p3', 'Pivo 3', 500, 9500), drink('p4', 'Pivo 4', 300, 2500)]));
+  assert.deepEqual(findings.map(f => [f.kind, f.itemId, f.suggestedCents]), [['cheap', 'b4', 22500], ['expensive', 'b5', 25500], ['gap', null, 16000], ['gap', null, 42500], ['cheap', 'p4', 4500]]);
+  assert.match(findings[4].text, /za litr/);
+  const wine = priceCheck(menuOf([drink('v1', 'Víno 1', 100, 6000), drink('v2', 'Víno 2', 100, 7000), drink('v3', 'Víno 1 láhev', 750, 45000),
+    drink('v4', 'Víno 2 láhev', 750, 52000), drink('v5', 'Víno 3', 100, 6500), dish('t', 'Pivo', 'Voda', [0], {part: 'drinks'})]));
+  assert.deepEqual(wine, [], 'sizes are no gap and no outlier, a free item is left out');
+  const zeros = priceCheck(menuOf([0, 0, 0, 0, 0, 3000, 3500, 4000, 4500].map((cents, index) => dish(`z${index}`, 'Nealko', `N${index}`, [cents]))));
+  assert.ok(zeros.every(finding => finding.kind !== 'expensive'), 'free items do not make every price look expensive');
 });
