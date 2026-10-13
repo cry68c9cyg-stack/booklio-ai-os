@@ -189,6 +189,7 @@ function weekCard(w) {
     (e.revenueCents !== null ? ', ' + kc(e.revenueCents) + (e.usualRevenueCents ? vs(e.revenueCents, e.usualRevenueCents) : '') : '') + '</td><td class="n muted">' +
     (e.usualGuests || e.usualRevenueCents ? 'obvykle ' + [e.usualGuests ? hostWord(e.usualGuests) : '', e.usualRevenueCents ? kc(e.usualRevenueCents) : ''].filter(Boolean).join(', ') : '–') + '</td></tr>');
   if (n.cancelled || p.cancelled) rows.push('<tr><td>Zrušené rezervace</td><td class="n">' + (n.cancelled || 0) + '</td><td class="n muted">' + (p.cancelled || 0) + '</td></tr>');
+  if (n.lateCancelled || p.lateCancelled) rows.push('<tr><td>z toho do 24 h před začátkem</td><td class="n">' + (n.lateCancelled || 0) + ' <span class="muted">(' + hostWord(n.lateCancelledGuests || 0) + ')</span></td><td class="n muted">' + (p.lateCancelled || 0) + '</td></tr>');
   rows.push('<tr><td>Návštěvy webu</td><td class="n">' + (n.visits === null ? '–' : num(n.visits) + (p.visits !== null && p.visitDays === n.visitDays ? vs(n.visits, p.visits) : '')) + '</td><td class="n muted">' + (p.visits === null ? '–' : num(p.visits)) + '</td></tr>');
   const stars = t => t === null ? '' : ', ' + (t / 10).toFixed(1).replace('.', ',') + ' ★';
   rows.push('<tr><td>Web: odeslané formuláře → potvrzené rezervace z webu</td><td class="n">' + n.webSent + ' → ' + n.webConfirmed + '</td><td class="n muted">' + p.webSent + ' → ' + p.webConfirmed + '</td></tr>');
@@ -243,9 +244,10 @@ function monthCard(m) {
 function guestsCard(g) {
   if (!g || !(g.days || []).length) return '';
   const cell = (expected, booked) => '<b>' + (expected === null ? booked : expected) + '</b>' + (expected !== null ? ' <span class="muted">(' + booked + ')</span>' : '');
-  const rows = g.days.map(d => '<tr><td>' + esc(czDate(d.date).slice(0, -5)) + '</td>' + d.parts.map(p => '<td class="n">' + cell(p.expected, p.booked) + '</td>').join('') + '<td class="n">' + cell(d.expected, d.booked) + '</td></tr>').join('');
+  const rows = g.days.map(d => '<tr' + (d.weak ? ' class="warn"' : '') + '><td>' + esc(czDate(d.date).slice(0, -5)) + (d.weak ? '<div class="muted">obvykle touhle dobou ' + d.usual + ' potvrzených</div>' : '') + '</td>' +
+    d.parts.map(p => '<td class="n">' + cell(p.expected, p.booked) + '</td>').join('') + '<td class="n">' + cell(d.expected, d.booked) + '</td></tr>').join('');
   return '<div class="card"><h2>Hosté na 7 dní</h2><table><tr><th></th><th class="n">přes den</th><th class="n">večer</th><th class="n">noc</th><th class="n">celkem</th></tr>' + rows + '</table>' +
-    '<div class="muted">tučně kolik hostů čekat, v závorce kolik jich je zatím potvrzeno v rezervacích; kolik ještě přibude, se počítá ze stejného dne v týdnu za posledních 8 týdnů' +
+    '<div class="muted">tučně kolik hostů čekat, v závorce kolik jich je zatím potvrzeno v rezervacích; kolik ještě přibude nebo ubude stornem, se počítá ze stejného dne v týdnu za posledních 8 týdnů; červeně den, kdy je potvrzeno aspoň o 40 % méně hostů než obvykle touhle dobou' +
     (g.noShowGuests ? ' · dnes obvykle nedorazí asi ' + g.noShowGuests : '') + '</div></div>';
 }
 
