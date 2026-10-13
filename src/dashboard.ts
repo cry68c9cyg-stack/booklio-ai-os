@@ -225,7 +225,7 @@ function eventsCard(ranking) {
   if (!ranking || !ranking.length) return '';
   const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.';
   const days = ['ne', 'po', 'út', 'st', 'čt', 'pá', 'so'];
-  const lift = x => x === null ? '<span class="muted">–</span>' : '<span class="' + (x < 1 ? 'warn' : '') + '">' + (x >= 1 ? '+' : '−') + Math.round(Math.abs(x - 1) * 100) + ' %</span>';
+  const lift = x => { if (x === null) return '<span class="muted">–</span>'; const p = Math.round((x - 1) * 100); return '<span class="' + (p < 0 ? 'warn' : '') + '">' + (p === 0 ? '±0' : (p > 0 ? '+' : '−') + Math.abs(p)) + ' %</span>'; };
   const rows = ranking.map(r => '<tr><td><b>' + esc(r.title) + '</b><div class="muted">' + r.count + '× · ' + r.weekdays.map(d => days[d]).join(', ') + ' · naposledy ' + esc(short(r.last)) + '</div></td>' +
     '<td class="n">' + r.guests + (r.usualGuests !== null ? ' <span class="muted">/ ' + r.usualGuests + '</span>' : '') + '</td><td class="n">' + lift(r.guestLift) + '</td><td class="n">' + lift(r.revenueLift) + '</td></tr>').join('');
   return '<div class="card"><h2>Akce za půl roku</h2><div class="scroll"><table><tr><th>Akce</th><th class="n">hosté / obvykle</th><th class="n">hosté</th><th class="n">tržba</th></tr>' + rows + '</table></div>' +
@@ -275,7 +275,10 @@ function forecastCard(f) {
   const by = (x, what) => ' <span class="muted">(' + (x >= 1 ? '+' : '−') + Math.round(Math.abs(x - 1) * 100) + ' % ' + what + ')</span>';
   const lift = d => { const e = d.eventBoost || 1; return (e > d.boost ? by(e, 'akce') : d.boost > 1 ? by(d.boost, 'rezervace') : '') +
     (d.holidayFactor !== undefined && d.holidayFactor !== 1 ? by(d.holidayFactor, 'svátek') : '') + (d.rainFactor !== undefined && d.rainFactor !== 1 ? by(d.rainFactor, 'déšť') : ''); };
-  const week = (f.days || []).map(d => '<tr><td>' + wd(d.date) + ' ' + short(d.date) + ((d.events || []).length ? '<div class="muted">' + d.events.map(esc).join(', ') + '</div>' : '') + (d.holiday ? '<div class="muted">svátek: ' + esc(d.holiday) + '</div>' : '') + '</td><td class="n">' + kc(round(d.cents)) + lift(d) + ((d.bySection || []).length ? '<div class="muted">' + d.bySection.map(x => esc(x.label) + ' ' + kc(round(x.cents))).join(', ') + '</div>' : '') +
+  // Sections in whole thousands that add up to the day's rounded amount (the rest goes to the largest); under 1 000 Kč left out.
+  const sections = d => { const rows = d.bySection.map(x => ({label: x.label, cents: round(x.cents)})), top = rows.reduce((a, x) => x.cents > a.cents ? x : a, rows[0]);
+    top.cents += round(d.cents) - rows.reduce((t, x) => t + x.cents, 0); return rows.filter(x => x.cents > 0); };
+  const week = (f.days || []).map(d => '<tr><td>' + wd(d.date) + ' ' + short(d.date) + ((d.events || []).length ? '<div class="muted">' + d.events.map(esc).join(', ') + '</div>' : '') + (d.holiday ? '<div class="muted">svátek: ' + esc(d.holiday) + '</div>' : '') + '</td><td class="n">' + kc(round(d.cents)) + lift(d) + ((d.bySection || []).length ? '<div class="muted">' + sections(d).map(x => esc(x.label) + ' ' + kc(x.cents)).join(', ') + '</div>' : '') +
     '</td><td class="n' + (d.boost > 1 ? ' warn' : '') + '">' + d.guests + (d.usualGuests !== null ? ' <span class="muted">/ ' + d.usualGuests + '</span>' : '') + '</td><td class="muted">' + esc(d.weatherText || '–') + '</td></tr>').join('');
   const rows = [];
   rows.push('<tr><td>7 dní od dneška <span class="muted">(' + short(f.week.from) + '–' + short(f.week.to) + ')</span></td><td class="n">' + kc(round(f.week.cents)) + '</td></tr>');

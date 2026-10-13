@@ -74,7 +74,7 @@ Důležité hodnoty: stav rezervace `nova` (čeká na obsluhu), `potvrzena`, `od
 | `report_manazeru(datum)` | denní report manažerů a rozbor „Report dne“ |
 | `kontrola_lahvi(datum)` | ranní kontroly lahví a manka od prahu |
 | `ucty(datum)` | účty z pokladny (položky, platby, slevy, storna) |
-| `odhad_a_vyhled(datum)` | výhled ranní zprávy za provozní den `datum` (od dne po něm): rezervace a plán, odhad tržby na 7 dní a měsíce (svátky, počasí, akce, rezervace), přesnost odhadu, akce; u poslední zprávy i nepotvrzené rezervace na 7 dní a hosté po částech dne |
+| `odhad_a_vyhled(datum)` | výhled ranní zprávy za provozní den `datum` (od dne po něm): rezervace a plán, odhad tržby na 7 dní (u dne i `bySection` po prostorech, když jsou tržby po prostorech aspoň ze 2 stejných dnů v týdnu za 8 týdnů) a měsíce (svátky, počasí, akce, rezervace), přesnost odhadu, akce; u poslední zprávy i nepotvrzené rezervace na 7 dní a hosté po částech dne |
 | `tyden_mesic_trendy(datum)` | 7 dní proti 7 předtím, měsíc od 1. dne a 12 týdnů trendů s chybou odhadu |
 | `souhrn_obdobi(od, do)` | součty za libovolné období (tržba, rezervace, hosté, nedorazili, storna, zdroje, předstih, web, recenze, akce), nejvýš 400 dní |
 | `k_vyrizeni(datum)` | seznam k vyřízení jako na dashboardu a kdy naposledy poslal data každý zdroj |

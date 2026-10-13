@@ -139,7 +139,9 @@ export type EventReview = {date: string; title: string; guests: number; usualGue
  * Events of half a year by name: how often, on which weekdays (0 = Sunday), guests booked in their place on average, and how much the
  * guests and the day's revenue were against usual same weekdays without an event (1.5 = +50 %; `null` = nothing to compare with).
  */
-export type EventRank = {title: string; count: number; weekdays: number[]; guests: number; usualGuests: number | null; guestLift: number | null; revenueLift: number | null; last: string};
+export type EventRank = {title: string; count: number; weekdays: number[]; guests: number; usualGuests: number | null; guestLift: number | null; revenueLift: number | null; last: string;
+  /** The guests' lift on each weekday the event ran on (for the weak-day tip). */
+  byWeekday: {weekday: number; count: number; guestLift: number | null}[]};
 export function rankEvents(reviews: EventReview[]): EventRank[] {
   const groups = new Map<string, EventReview[]>();
   for (const review of reviews) {
@@ -150,33 +152,57 @@ export function rankEvents(reviews: EventReview[]): EventRank[] {
     const base = pairs.reduce((sum, [, usual]) => sum + usual, 0);
     return pairs.length && base > 0 ? Math.round(pairs.reduce((sum, [value]) => sum + value, 0) / base * 100) / 100 : null;
   };
+  const guestRatio = (list: EventReview[]) => ratio(list.filter(review => review.usualGuests).map(review => [review.guests, review.usualGuests!]));
+  const average = (values: number[]) => Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
   return [...groups.values()].map(list => {
     const sorted = [...list].sort((a, b) => a.date.localeCompare(b.date)), latest = sorted.at(-1)!;
     const withUsual = list.filter(review => review.usualGuests);
-    return {title: latest.title.trim(), count: list.length, weekdays: [...new Set(list.map(review => weekday(review.date)))].sort(),
-      guests: Math.round(list.reduce((sum, review) => sum + review.guests, 0) / list.length),
-      usualGuests: withUsual.length ? Math.round(withUsual.reduce((sum, review) => sum + review.usualGuests!, 0) / withUsual.length) : null,
-      guestLift: ratio(withUsual.map(review => [review.guests, review.usualGuests!])),
+    const weekdays = [...new Set(list.map(review => weekday(review.date)))].sort((a, b) => a - b);
+    // Guests against usual over the same events, so the two numbers side by side compare like with like.
+    return {title: latest.title.trim(), count: list.length, weekdays,
+      guests: average((withUsual.length ? withUsual : list).map(review => review.guests)),
+      usualGuests: withUsual.length ? average(withUsual.map(review => review.usualGuests!)) : null,
+      guestLift: guestRatio(list),
       revenueLift: ratio(list.filter(review => review.revenueCents !== null && review.usualRevenueCents).map(review => [review.revenueCents!, review.usualRevenueCents!])),
-      last: latest.date};
+      last: latest.date,
+      byWeekday: weekdays.map(day => {
+        const same = list.filter(review => weekday(review.date) === day);
+        return {weekday: day, count: same.length, guestLift: guestRatio(same)};
+      })};
   }).sort((a, b) => (b.guestLift ?? -1) - (a.guestLift ?? -1) || (b.revenueLift ?? -1) - (a.revenueLift ?? -1) || b.count - a.count || a.title.localeCompare(b.title));
 }
-const lift = (value: number) => `${value >= 1 ? '+' : '−'}${Math.round(Math.abs(value - 1) * 100)} %`;
+const lift = (value: number) => {
+  const percent = Math.round((value - 1) * 100);
+  return percent === 0 ? '±0 %' : `${percent > 0 ? '+' : '−'}${Math.abs(percent)} %`;
+};
+const rankValue = (rank: EventRank) => rank.guestLift ?? rank.revenueLift ?? 1;
 /** "Rock Night (4×, hosté +50 %, tržba +30 %)" */
 const rankText = (rank: EventRank) => `${rank.title} (${[`${rank.count}×`, rank.guestLift !== null ? `hosté ${lift(rank.guestLift)}` : '', rank.revenueLift !== null ? `tržba ${lift(rank.revenueLift)}` : ''].filter(Boolean).join(', ')})`;
-/** "Akce za půl roku: nejvíc táhne Rock Night (…) · Koncert (…) · nejméně Quiz (…)"; only events with something to compare. */
+/** "Akce za půl roku: nejvíc táhne Rock Night (…) · Koncert (…) · nejméně Quiz (…)"; only events with something to compare (guests, else revenue). */
 export function renderEventRanking(ranking: EventRank[] | null | undefined): string[] {
   const known = (ranking ?? []).filter(rank => rank.guestLift !== null || rank.revenueLift !== null);
-  if (!known.length) return [];
-  const top = known.slice(0, 3), worst = known.length > 3 ? known.at(-1)! : null;
-  return [`Akce za půl roku: nejvíc táhne ${top.map(rankText).join(' · ')}${worst && (worst.guestLift ?? worst.revenueLift ?? 1) < 1 ? ` · nejméně ${rankText(worst)}` : ''}`];
+  const top = known.filter(rank => rankValue(rank) > 1).slice(0, 3);
+  const worst = known.filter(rank => rankValue(rank) < 1).sort((a, b) => rankValue(a) - rankValue(b))[0];
+  if (!top.length && !worst) return [];
+  return [`Akce za půl roku: ${[top.length ? `nejvíc táhne ${top.map(rankText).join(' · ')}` : 'žádná nepřivedla víc než obvyklý den', worst ? `nejméně ${rankText(worst)}` : ''].filter(Boolean).join(' · ')}`];
 }
 const weekdayIn = ['v neděli', 'v pondělí', 'v úterý', 've středu', 've čtvrtek', 'v pátek', 'v sobotu'];
-/** The event that brought the most guests on the day's weekday (at least +10 % against usual), as a tip for a weak day. */
+/** The event that brought the most guests on the day's weekday (at least twice there, at least +10 % against usual), as a tip for a weak day. */
 export function eventTip(ranking: EventRank[] | null | undefined, date: string): string {
-  const best = (ranking ?? []).filter(rank => rank.weekdays.includes(weekday(date)) && rank.guestLift !== null && rank.guestLift >= 1.1)
-    .sort((a, b) => b.guestLift! - a.guestLift!)[0];
-  return best ? `, ${weekdayIn[weekday(date)]} nejvíc táhla akce ${best.title} (hosté ${lift(best.guestLift!)})` : '';
+  const day = weekday(date);
+  const best = (ranking ?? []).map(rank => ({rank, there: rank.byWeekday.find(entry => entry.weekday === day)}))
+    .filter(({there}) => there && there.count >= 2 && there.guestLift !== null && there.guestLift >= 1.1)
+    .sort((a, b) => b.there!.guestLift! - a.there!.guestLift!)[0];
+  return best ? `, ${weekdayIn[day]} nejvíc táhla akce ${best.rank.title} (hosté ${lift(best.there!.guestLift!)})` : '';
+}
+
+/** Sections of a forecast day in whole thousands of crowns that add up to the day's rounded amount; sections under 1 000 Kč left out. */
+export function sectionThousands(cents: number, rows: {label: string; cents: number}[]): {label: string; cents: number}[] {
+  const step = 100000, rounded = rows.map(row => ({label: row.label, cents: Math.round(row.cents / step) * step}));
+  if (!rounded.length) return [];
+  const largest = rounded.reduce((top, row) => row.cents > top.cents ? row : top, rounded[0]);
+  largest.cents += Math.round(cents / step) * step - rounded.reduce((sum, row) => sum + row.cents, 0);
+  return rounded.filter(row => row.cents > 0);
 }
 
 /** Changes of the menu over the week (Monday message): new prices, new items and removed items. */
@@ -867,7 +893,7 @@ export function renderForecast(forecast: Briefing['forecast']): string[] {
   const parts: string[] = [];
   const next = forecast.days?.[1];
   if (forecast.tomorrow.cents !== null) parts.push(`zítra (${weekdayShort[weekday(forecast.tomorrow.date)]} ${shortDate(forecast.tomorrow.date)}) ${thousands(forecast.tomorrow.cents)}`
-    + bracket(next) + (next?.weatherText ? `, ${next.weatherText}` : '') + (next?.bySection?.length ? ` (${next.bySection.map(row => `${row.label} ${thousands(row.cents)}`).join(', ')})` : ''));
+    + bracket(next) + (next?.weatherText ? `, ${next.weatherText}` : '') + (next?.bySection?.length ? ` (${sectionThousands(next.cents ?? 0, next.bySection).map(row => `${row.label} ${crowns(row.cents)}`).join(', ')})` : ''));
   if (forecast.week.cents !== null) parts.push(`7 dní od dneška ${thousands(forecast.week.cents)}`);
   const month = forecast.month, missing = month.elapsedDays - month.actualDays;
   if (month.totalCents !== null) parts.push(`${monthName(month.month)} celkem ${thousands(month.totalCents)}`

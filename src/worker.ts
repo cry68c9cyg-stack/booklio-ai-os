@@ -299,7 +299,7 @@ export class TenantObject extends DurableObject<Env> {
     const stored = this.sql.exec<{text: string}>('SELECT text FROM briefings WHERE business_date=?', day).toArray()[0];
     const todo = this.todoFor(day, briefing);
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
-      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: this.eventRanking(day)});
+      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day)});
   }
 
   /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
@@ -644,8 +644,9 @@ export class TenantObject extends DurableObject<Env> {
   }
 
   private dayRevenueUncached(date: string): number | null {
-    const bills = this.day<Bill>('bill', date).filter(bill => bill.status === 'closed');
-    if (bills.length) return bills.reduce((sum, bill) => sum + bill.totalCents, 0);
+    const bills = this.sql.exec<{count: number; total: number | null}>(`SELECT count(*) AS count, SUM(json_extract(json, '$.totalCents')) AS total
+      FROM records WHERE type='bill' AND business_date=? AND json_extract(json, '$.status') = 'closed'`, date).toArray()[0];
+    if (bills.count) return bills.total ?? 0;
     const reported = this.sql.exec<{total: number | null}>("SELECT SUM(amount_cents) AS total FROM report_lines WHERE business_date=? AND kind='revenue_section'", date).toArray()[0]?.total;
     if (reported !== null && reported !== undefined) return reported;
     return this.sql.exec<{revenue_cents: number}>('SELECT revenue_cents FROM history WHERE business_date=?', date).toArray()[0]?.revenue_cents ?? null;
@@ -926,7 +927,7 @@ export class TenantObject extends DurableObject<Env> {
       for (const day of result.days) {
         const split = shares[weekday(day.date)];
         if (!split || !day.cents) continue;
-        const rows = split.map(row => ({section: row.section, label: config.sections[row.section] ?? row.section, cents: Math.round(day.cents! * row.share)}))
+        const rows = split.map(row => ({section: row.section, label: Object.hasOwn(config.sections, row.section) ? config.sections[row.section] : row.section, cents: Math.round(day.cents! * row.share)}))
           .sort((a, b) => (order.indexOf(a.section) + 1 || 99) - (order.indexOf(b.section) + 1 || 99) || a.section.localeCompare(b.section));
         // Rounding goes to the largest section, so the parts add up to the day.
         const largest = rows.reduce((top, row) => row.cents > top.cents ? row : top, rows[0]);
@@ -939,8 +940,9 @@ export class TenantObject extends DurableObject<Env> {
 
   /** A day's revenue by section: POS bills, else the managers' report; none for a day known only from the imported history. */
   private sectionRows(date: string): {key: string; amountCents: number}[] {
-    const bills = this.day<Bill>('bill', date).filter(bill => bill.status === 'closed');
-    return bills.length ? bills.map(bill => ({key: bill.section, amountCents: bill.totalCents}))
+    const bills = this.sql.exec<{key: string; amount_cents: number}>(`SELECT json_extract(json, '$.section') AS key, SUM(json_extract(json, '$.totalCents')) AS amount_cents
+      FROM records WHERE type='bill' AND business_date=? AND json_extract(json, '$.status') = 'closed' GROUP BY key`, date).toArray().map(row => ({key: row.key, amountCents: row.amount_cents}));
+    return bills.length ? bills
       : this.sql.exec<{key: string; amount_cents: number}>("SELECT key, amount_cents FROM report_lines WHERE business_date=? AND kind='revenue_section'", date).toArray()
         .map(row => ({key: row.key, amountCents: row.amount_cents}));
   }
@@ -956,7 +958,13 @@ export class TenantObject extends DurableObject<Env> {
   private menuWeek(date: string): MenuWeek | null {
     const rows = this.menuChangesBetween(addDays(date, -6), date, 500).rows;
     if (!rows.length) return null;
-    return {prices: rows.filter(row => row.kind === 'price').map(row => ({name: row.name, oldText: row.oldText, newText: row.newText})),
+    // Newest first: an item priced twice in the week shows once, from its first old price to its latest one.
+    const prices = new Map<string, {name: string; oldText: string | null; newText: string | null}>();
+    for (const row of rows.filter(row => row.kind === 'price')) {
+      const seen = prices.get(row.itemId);
+      prices.set(row.itemId, seen ? {...seen, oldText: row.oldText} : {name: row.name, oldText: row.oldText, newText: row.newText});
+    }
+    return {prices: [...prices.values()],
       added: rows.filter(row => row.kind === 'added').map(row => row.name), removed: rows.filter(row => row.kind === 'removed').map(row => row.name)};
   }
 

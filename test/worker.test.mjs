@@ -714,6 +714,9 @@ try {
     await new Promise(resolve => setTimeout(resolve, 100));
     return elements[box].innerHTML;
   };
+  // An event a month ago: the ranking card shows it with its title escaped.
+  assert.equal((await jdIngest('batch-jd-event', [{type: 'event', id: 'jd-akce', version: 1, businessDate: addDays(today, -30), startsAt: `${addDays(today, -30)}T19:00:00Z`,
+    section: 'club', title: '<img src=x onerror=alert(1)>Jam', status: 'published'}])).status, 200);
   const boardData = await (await jdBoard('GET', '/data', undefined, jdCookie)).json();
   const shown = await renderCard({'/d/james-dean/data': boardData, '/d/james-dean/web': {card}});
   // The menu card: items per part and category, and the changes, escaped.
@@ -722,6 +725,8 @@ try {
   const content = await renderCard({'/d/james-dean/data': boardData, '/d/james-dean/web': {card}}, 'content');
   assert.ok(content.includes('Jídelní a nápojový lístek') && content.includes('4 položky · jídlo 3, nápoje 1') && content.includes('245 Kč → 259 Kč') && content.includes('225 Kč – 259 Kč'));
   assert.ok(content.includes('Classic &lt;b&gt;Burger&lt;/b&gt;') && !content.includes('<b>Burger</b>'), 'item names are escaped');
+  assert.deepEqual(boardData.eventRanking.map(rank => [rank.title, rank.count]), [['<img src=x onerror=alert(1)>Jam', 1]]);
+  assert.ok(content.includes('Akce za půl roku') && content.includes('&lt;img src=x onerror=alert(1)&gt;Jam') && !content.includes('<img'), 'event titles are escaped');
   assert.ok(shown.includes('Zuzana &lt;b&gt;Testovaci&lt;/b&gt; Hostova') && !shown.includes('<b>Testovaci</b>'), 'guest names are escaped');
   assert.ok(shown.includes('&lt;img src=x onerror=alert(1)&gt;') && !shown.includes('<img'), 'notes are escaped');
   assert.ok(shown.includes('Recenzent &lt;i&gt;X&lt;/i&gt;') && shown.includes('stůl') && shown.includes('4, 5') && shown.includes('klub A'));
@@ -946,7 +951,7 @@ try {
 
   // The events of half a year ranked in the message of the month's last day, and on the dashboard data.
   const rankedEnd = await (await call('GET', '/admin/t/event-venue/briefing?date=2026-10-31')).json();
-  assert.deepEqual(rankedEnd.briefing.eventRanking[0], {title: 'Koncert 3', count: 1, weekdays: [4], guests: 8, usualGuests: 5, guestLift: 1.6, revenueLift: 1.5, last: '2026-10-08'});
+  assert.deepEqual(rankedEnd.briefing.eventRanking[0], {title: 'Koncert 3', count: 1, weekdays: [4], guests: 8, usualGuests: 5, guestLift: 1.6, revenueLift: 1.5, last: '2026-10-08', byWeekday: [{weekday: 4, count: 1, guestLift: 1.6}]});
   assert.match(rankedEnd.text, /\nAkce za půl roku: nejvíc táhne Koncert 3 \(1×, hosté \+60 %, tržba \+50 %\)/);
   assert.equal((await (await call('GET', '/admin/t/event-venue/briefing?date=2026-10-30')).json()).briefing.eventRanking, null, 'only at the month end or for a weak day');
 
