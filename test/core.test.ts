@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, renderEventReviews, renderGuestOutlook, guestOutlookDay, median, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
 import {weatherDays, weatherText} from '../src/weather.ts';
-import {businessDate} from '../src/time.ts';
+import {businessDate, sameClockDaysBefore} from '../src/time.ts';
 import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type TenantConfig} from '../src/validate.ts';
 
 const config: TenantConfig = {
@@ -504,4 +504,40 @@ test('outlook for the starting day and no-shows against the usual share', () => 
   const text = renderBriefing('Testovací podnik', briefing);
   assert.match(text, /\nDnes rezervováno: 2 \(64 hostů\), čeká na potvrzení 1 · obvykle za celý den 53 hostů · plán tržby 120 000 Kč\nNejvíc rezervovaných hostů: 20–21 h 64\nSkupiny od 8 osob: 20:00 Diner 34, 20:00 Diner 30\n⚠ No-show: nedorazilo 12 hostů z 52 rezervovaných \(23 %, obvykle 5 %\)/);
   assert.ok(todoList(briefing).some(item => item.text === 'No-show: nedorazilo 12 hostů z 52 rezervovaných (23 %, obvykle 5 %)'));
+});
+
+test('guests by part of the day: booked now + the usual later bookings, no-shows, the morning line', () => {
+  assert.deepEqual([5, 6, 16, 17, 21, 22, 0].map(dayPart), ['night', 'day', 'day', 'evening', 'evening', 'night', 'night']);
+  assert.deepEqual([median([3]), median([5, 1, 3]), median([1, 4]), median([4, 1, 2, 10])], [3, 3, 3, 3]);
+  const parts = (day: number, evening: number, night: number) => ({day, evening, night});
+  const past = [{final: parts(10, 40, 20), early: parts(6, 30, 20)}, {final: parts(8, 50, 30), early: parts(8, 30, 10)}, {final: parts(4, 20, 5), early: parts(6, 18, 5)}];
+  assert.deepEqual(guestOutlookDay('2026-10-14', parts(5, 40, 30), past), {date: '2026-10-14', booked: 75, expected: 85,
+    parts: [{key: 'day', booked: 5, expected: 5}, {key: 'evening', booked: 40, expected: 50}, {key: 'night', booked: 30, expected: 30}]}, 'medians 0, 10, 0; fewer guests later counts as 0');
+  assert.deepEqual(guestOutlookDay('2026-10-14', parts(5, 40, 30), past.slice(0, 1)).expected, null, 'one past day is not usual');
+  const days = [guestOutlookDay('2026-10-14', parts(5, 40, 30), past), guestOutlookDay('2026-10-15', parts(0, 0, 0), [])];
+  const briefing = buildBriefing({businessDate: '2026-10-13', config, bills: [], closings: [], planHistory: [], incomplete: false,
+    guestOutlook: {days}, noShowHistory: {confirmedGuests: 400, noShowGuests: 20}});
+  assert.equal(briefing.guestOutlook!.noShowGuests, 4, '5 % of 85');
+  assert.match(renderBriefing('Test', briefing), /\nHosté dnes: čekej asi 85 \(zatím rezervováno 75\) · přes den 5 · večer 50 · noc 30 · obvykle nedorazí asi 4(\n|$)/);
+  const few = buildBriefing({businessDate: '2026-10-13', config, bills: [], closings: [], planHistory: [], incomplete: false,
+    guestOutlook: {days: [guestOutlookDay('2026-10-14', parts(0, 6, 0), [])]}, noShowHistory: {confirmedGuests: 40, noShowGuests: 20}});
+  assert.deepEqual(renderGuestOutlook(few.guestOutlook), ['Hosté dnes: rezervováno 6 · večer 6'], 'no estimate without history, no no-shows from under 50 guests');
+  assert.deepEqual(renderGuestOutlook(buildBriefing({businessDate: '2026-10-13', config, bills: [], closings: [], planHistory: [], incomplete: false}).guestOutlook), []);
+  assert.deepEqual(renderGuestOutlook({days: [guestOutlookDay('2026-10-14', parts(0, 0, 0), [])], noShowGuests: null}), [], 'nothing on an empty day');
+});
+
+test('events looked back on in the weekly summary', () => {
+  assert.deepEqual(renderEventReviews([]), []);
+  assert.deepEqual(renderEventReviews([
+    {date: '2026-10-09', title: 'Rock Night', guests: 120, usualGuests: 80, revenueCents: 15000000, usualRevenueCents: 10000000},
+    {date: '2026-10-10', title: 'Quiz', guests: 30, usualGuests: 40, revenueCents: null, usualRevenueCents: null},
+    {date: '2026-10-11', title: 'Brunch', guests: 1, usualGuests: null, revenueCents: 500000, usualRevenueCents: null},
+  ]), ['Akce za týden: pá 9. 10. Rock Night – 120 hostů z rezervací (obvykle 80, +50 %), tržba 150 000 Kč (obvykle 100 000 Kč)'
+    + ' · so 10. 10. Quiz – 30 hostů z rezervací (obvykle 40, −25 %) · ne 11. 10. Brunch – 1 host z rezervací, tržba 5 000 Kč']);
+});
+
+test('the same local clock time days before, across the end of summer time', () => {
+  // 30. 10. 2026 9:00 CET = 8:00 UTC; a week before (23. 10.) 9:00 CEST = 7:00 UTC.
+  assert.equal(new Date(sameClockDaysBefore(new Date('2026-10-30T08:00:00Z'), 7, 'Europe/Prague')).toISOString(), '2026-10-23T07:00:00.000Z');
+  assert.equal(new Date(sameClockDaysBefore(new Date('2026-10-14T07:00:00Z'), 14, 'Europe/Prague')).toISOString(), '2026-09-30T07:00:00.000Z');
 });

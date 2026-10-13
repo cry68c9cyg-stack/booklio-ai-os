@@ -1,13 +1,13 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
-import {buildBriefing, type Briefing, eventFactor, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
+import {buildBriefing, type Briefing, dayPart, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
 import {menuChanges, menuOverview} from './menu.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
-import {addDays, businessDate, isDate, localTime, weekday} from './time.ts';
+import {addDays, businessDate, isDate, localTime, sameClockDaysBefore, weekday} from './time.ts';
 import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-report.ts';
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
@@ -813,8 +813,7 @@ export class TenantObject extends DurableObject<Env> {
   /** Today's events with the confirmed guests booked that day in their place (the whole venue for an event of the whole venue). */
   private todayEvents(config: TenantConfig, date: string): Briefing['events'] {
     return this.events(date, date).map(event => {
-      const guests = this.sql.exec<{guests: number | null}>(`SELECT SUM(json_extract(json, '$.partySize')) AS guests FROM records WHERE type='reservation'
-        AND business_date=? AND json_extract(json, '$.status') = 'confirmed' AND (? = 'all' OR json_extract(json, '$.section') = ?)`, date, event.section, event.section).toArray()[0]?.guests ?? 0;
+      const guests = this.placeGuests(date, event.section);
       const local = localTime(new Date(event.startsAt), config.timeZone);
       return {time: `${local.hour}:${String(local.minute).padStart(2, '0')}`, label: event.section === 'all' ? 'celý podnik' : Object.hasOwn(config.sections, event.section) ? config.sections[event.section] : event.section, title: event.title, guests};
     });
@@ -823,8 +822,64 @@ export class TenantObject extends DurableObject<Env> {
   /** The 7 days up to the reported day against the 7 days before them. */
   private week(date: string): Week {
     const week: Week = {from: addDays(date, -6), to: date, current: this.weekPart(addDays(date, -6), date), previous: this.weekPart(addDays(date, -13), addDays(date, -7)),
-      reviewsUsual: this.reviewStats(addDays(date, -34), addDays(date, -7))};
+      reviewsUsual: this.reviewStats(addDays(date, -34), addDays(date, -7)), events: this.eventReviews(addDays(date, -6), date)};
     return {...week, reviewDrop: reviewDrop(week)};
+  }
+
+  /** Confirmed guests booked on a day in a place (`all` = the whole venue), summed in SQL. */
+  private placeGuests(date: string, section: string): number {
+    return this.sql.exec<{guests: number | null}>(`SELECT SUM(json_extract(json, '$.partySize')) AS guests FROM records WHERE type='reservation'
+      AND business_date=? AND json_extract(json, '$.status') = 'confirmed' AND (? = 'all' OR json_extract(json, '$.section') = ?)`, date, section, section).toArray()[0]?.guests ?? 0;
+  }
+
+  /**
+   * The week's events looked back on: guests booked in the event's place and the day's revenue, against the average of
+   * up to 4 earlier same weekdays without an event (8 weeks back, at least 2 of them, else unknown).
+   */
+  private eventReviews(from: string, to: string): EventReview[] {
+    const events = this.events(from, to);
+    if (!events.length) return [];
+    const eventDays = new Set(this.events(addDays(from, -56), to).map(event => event.date));
+    return events.map(event => {
+      const plain = [1, 2, 3, 4, 5, 6, 7, 8].map(back => addDays(event.date, -7 * back)).filter(day => !eventDays.has(day)).slice(0, 4);
+      const booked = plain.map(day => this.placeGuests(day, event.section)).filter(guests => guests > 0);
+      const revenues = plain.map(day => this.dayRevenue(day)).filter((value): value is number => value !== null);
+      return {date: event.date, title: event.title, guests: this.placeGuests(event.date, event.section),
+        usualGuests: booked.length >= 2 ? Math.round(booked.reduce((sum, guests) => sum + guests, 0) / booked.length) : null,
+        revenueCents: this.dayRevenue(event.date), usualRevenueCents: planFrom(revenues.map(revenueCents => ({revenueCents})))?.revenueCents ?? null};
+    });
+  }
+
+  /**
+   * Guests to expect over the 7 days from the starting one, by part of the day (local hour of the booking's start). For each day, the same
+   * weekday of the 8 weeks before shows how many guests were still booked after the same moment (bookings without `createdAt` count as early).
+   * Only for the latest day; only start, size and creation time of confirmed bookings are read.
+   */
+  private guestOutlook(config: TenantConfig, date: string, now: Date): {days: GuestOutlookDay[]} | null {
+    if (date !== reportDate(now, config.timeZone, config.businessDayCutoffHour)) return null;
+    const today = addDays(date, 1), empty = (): Record<DayPart, number> => ({day: 0, evening: 0, night: 0});
+    const rows = new Map<string, {part: DayPart; size: number; created: number | null}[]>();
+    for (const row of this.sql.exec<{day: string; starts: string; size: number | null; created: string | null}>(`SELECT business_date AS day,
+        json_extract(json, '$.startsAt') AS starts, json_extract(json, '$.partySize') AS size, json_extract(json, '$.createdAt') AS created
+      FROM records WHERE type='reservation' AND business_date BETWEEN ? AND ? AND json_extract(json, '$.status') = 'confirmed'`, addDays(today, -56), addDays(today, 6))) {
+      const list = rows.get(row.day) ?? [];
+      list.push({part: dayPart(localTime(new Date(row.starts), config.timeZone).hour), size: row.size ?? 0, created: row.created ? Date.parse(row.created) : null});
+      rows.set(row.day, list);
+    }
+    const sum = (list: {part: DayPart; size: number}[]) => list.reduce((parts, row) => { parts[row.part] += row.size; return parts; }, empty());
+    const days = [0, 1, 2, 3, 4, 5, 6].map(ahead => {
+      const day = addDays(today, ahead);
+      // Past days count only when most of their guests have the time of booking (older data has none, it would show no later bookings).
+      const past = [1, 2, 3, 4, 5, 6, 7, 8].map(back => ({back, list: rows.get(addDays(day, -7 * back)) ?? []}))
+        .filter(({list}) => list.length > 0 && 2 * list.filter(row => row.created !== null).reduce((guests, row) => guests + row.size, 0) >= list.reduce((guests, row) => guests + row.size, 0))
+        .map(({back, list}) => {
+          // The same moment before that day as now is before this one (same local clock time).
+          const moment = sameClockDaysBefore(now, 7 * back, config.timeZone);
+          return {final: sum(list), early: sum(list.filter(row => row.created === null || row.created <= moment))};
+        });
+      return guestOutlookDay(day, sum(rows.get(day) ?? []), past);
+    });
+    return days.some(day => day.booked || day.expected) ? {days} : null;
   }
 
   private senders(now: Date) {
@@ -862,7 +917,7 @@ export class TenantObject extends DurableObject<Env> {
       week: weekday(date) === 0 ? this.week(date) : null, silent: this.silentSources(config, date, now),
       month: weekday(date) === 0 || addDays(date, 1).endsWith('-01') ? this.month(config, date) : null,
       lastWeekRevenueCents: this.dayRevenue(addDays(date, -7)), discountHistory: this.discountHistory(date),
-      ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast: this.forecast(date), pendingAhead: this.pendingAhead(config, date, now), events: this.todayEvents(config, addDays(date, 1)),
+      ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast: this.forecast(date), pendingAhead: this.pendingAhead(config, date, now), events: this.todayEvents(config, addDays(date, 1)), guestOutlook: this.guestOutlook(config, date, now),
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};

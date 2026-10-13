@@ -903,6 +903,35 @@ try {
   const eventWeek = (await (await call('GET', '/admin/t/event-venue/briefing?date=2026-10-11')).json()).briefing.week.current;
   assert.deepEqual([eventWeek.lead, eventWeek.sources], [{sameDay: 1, upTo2: 1, upTo7: 1, more: 1},
     [{source: 'web', reservations: 3, guests: 11, noShowGuests: 4}, {source: 'obsluha', reservations: 1, guests: 3, noShowGuests: 0}]]);
+  // The week's events looked back on: guests booked in the club and the revenue against the same weekday without an event.
+  assert.equal((await ingest('batch-e4', [booking('e7', 1, '2026-10-08', 'club', 8, 'confirmed', null), booking('e8', 1, '2026-10-01', 'club', 4, 'confirmed', null),
+    booking('e9', 1, '2026-09-24', 'club', 6, 'confirmed', null), booking('e10', 1, '2026-09-24', 'diner', 9, 'confirmed', null)], 'Bearer ' + token, 'event-venue')).status, 200);
+  const reviewed = await (await call('GET', '/admin/t/event-venue/briefing?date=2026-10-11')).json();
+  assert.deepEqual(reviewed.briefing.week.events, [{date: '2026-10-08', title: 'Koncert 3', guests: 8, usualGuests: 5, revenueCents: 1500000, usualRevenueCents: 1000000}],
+    'the event day of 10. 9. is not usual; the diner\'s guests do not count for a club event');
+  assert.match(reviewed.text, /\nAkce za týden: čt 8\. 10\. Koncert 3 – 8 hostů z rezervací \(obvykle 5, \+60 %\), tržba 15 000 Kč \(obvykle 10 000 Kč\)\n/);
+
+  // Guests to expect today by part of the day: booked now + what the same weekday usually still got after the same moment (local start time).
+  assert.equal((await call('PUT', '/admin/t/outlook-venue/config', {...config, registers: []})).status, 200);
+  await call('POST', '/admin/t/outlook-venue/pair', {installationId: 'pos-installation-1', token});
+  const at = (record, startsAt, createdAt) => ({...record, startsAt, createdAt});
+  assert.equal((await ingest('batch-o1', [
+    at(booking('o1', 1, '2026-10-14', 'diner', 4, 'confirmed', null), '2026-10-14T10:00:00Z', '2026-10-01T10:00:00Z'),
+    at(booking('o2', 1, '2026-10-14', 'diner', 6, 'confirmed', null), '2026-10-14T18:00:00Z', '2026-10-01T10:00:00Z'),
+    at(booking('o3', 1, '2026-10-14', 'diner', 10, 'confirmed', null), '2026-10-14T22:30:00Z', '2026-10-01T10:00:00Z'),
+    at(booking('o4', 1, '2026-10-14', 'diner', 3, 'pending', null), '2026-10-14T18:00:00Z', '2026-10-01T10:00:00Z'),
+    ...['2026-10-07', '2026-09-30'].flatMap((day, i) => [
+      at(booking(`p${i}a`, 1, day, 'diner', 6, 'confirmed', null), `${day}T18:00:00Z`, '2026-09-01T10:00:00Z'),
+      at(booking(`p${i}b`, 1, day, 'diner', 4, 'confirmed', null), `${day}T18:30:00Z`, `${day}T12:00:00Z`),
+      {...booking(`p${i}c`, 1, day, 'diner', 2, 'confirmed', null), startsAt: `${day}T23:00:00Z`},
+    ]),
+    // Older days without the time of booking would show no later guests: left out.
+    ...['2026-09-23', '2026-09-16'].map((day, i) => booking(`q${i}`, 1, day, 'diner', 10, 'confirmed', null)),
+  ], 'Bearer ' + token, 'outlook-venue')).status, 200);
+  const outlookMorning = await (await call('POST', '/admin/t/outlook-venue/tick', {at: '2026-10-14T07:00:00Z'})).json();
+  assert.match(outlookMorning.text, /\nHosté dnes: čekej asi 24 \(zatím rezervováno 20\) · přes den 4 · večer 10 · noc 10(\n|$)/, 'a booking without its creation time counts as early, days mostly without it are left out');
+  const outlookDays = (await (await call('GET', '/admin/t/outlook-venue/briefing?date=2026-10-13')).json()).briefing.guestOutlook;
+  assert.equal(outlookDays, null, 'not for a day looked at later');
 
   // The admin script talks to a real HTTP endpoint: config, rkeeper-style CSV import, preview.
   await mf.dispose();
