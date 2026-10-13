@@ -277,7 +277,7 @@ function forecastCard(f) {
     '. Výrazně víc potvrzených hostů než obvykle (aspoň o 10) zvýší odhad dne o polovinu toho rozdílu, nejvýš o 50 %. ' +
     (f.eventFactor && f.eventFactor.factor > 1 ? 'Den s akcí bývá o ' + Math.round((f.eventFactor.factor - 1) * 100) + ' % silnější (' + f.eventFactor.days + ' dní s akcí za půl roku); platí větší z obou úprav. ' : 'Vliv akcí se započítá od 4 dní s akcí a tržbou. ') +
     'Státní svátek se počítá podle stejného svátku loni proti jeho dnům v týdnu (jinak podle mediánu svátků za rok) a do průměrů dnů v týdnu nevstupuje. ' +
-    (f.rainFactor ? 'Deštivý den (od 5 mm) bývá ' + (f.rainFactor.factor >= 1 ? 'o ' + Math.round((f.rainFactor.factor - 1) * 100) + ' % silnější' : 'o ' + Math.round((1 - f.rainFactor.factor) * 100) + ' % slabší') + ' (' + f.rainFactor.days + ' deštivých dní za půl roku). ' : 'Vliv deště se započítá od 6 deštivých dní s tržbou (OKO1 si počasí ukládá od října 2026). ') +
+    (f.rainFactor ? 'Deštivý den (od 5 mm) bývá ' + (f.rainFactor.factor >= 1 ? 'o ' + Math.round((f.rainFactor.factor - 1) * 100) + ' % silnější' : 'o ' + Math.round((1 - f.rainFactor.factor) * 100) + ' % slabší') + ' (' + f.rainFactor.days + ' deštivých dní za půl roku). ' : 'Vliv deště se započítá od 6 deštivých dní s tržbou (počasí dne = poslední předpověď MET Norway pro ten den, OKO1 si ji ukládá od října 2026). ') +
     'Počasí: MET Norway.</p></div>';
 }
 

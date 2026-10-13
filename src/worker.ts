@@ -7,7 +7,7 @@ import {todoList} from './todo.ts';
 import {menuChanges, menuOverview} from './menu.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
-import {holidayName} from './holidays.ts';
+import {czechHolidays, holidayName} from './holidays.ts';
 import {addDays, businessDate, isDate, localTime, sameClockDaysBefore, weekday} from './time.ts';
 import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-report.ts';
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
@@ -81,6 +81,9 @@ function stamp(at: Date, timeZone: string): string {
 }
 
 /** One SQLite Durable Object per venue (tenant). Nothing here is shared between venues. */
+/** The median of numbers (the middle two averaged). */
+const medianOf = (values: number[]) => { const sorted = [...values].sort((a, b) => a - b), middle = Math.floor(sorted.length / 2); return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2; };
+
 export class TenantObject extends DurableObject<Env> {
   private sql: SqlStorage;
 
@@ -769,7 +772,8 @@ export class TenantObject extends DurableObject<Env> {
     const open = history.filter(values => values.length >= 2).length;
     const bases = history.map(values => !values.length && open >= 4 ? 0 : planFrom(values.map(revenueCents => ({revenueCents})))?.revenueCents ?? null);
     const average = (dates: string[]) => {
-      const values = dates.map(revenue).filter((value): value is number => value !== null);
+      // Holidays have their own factor: last year's month averages leave them out, so they do not count twice.
+      const values = dates.filter(entry => !holidayName(entry)).map(revenue).filter((value): value is number => value !== null);
       return values.length >= 20 ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
     };
     const baseLastYear = average(window.map(entry => addDays(entry, -364)));
@@ -823,16 +827,18 @@ export class TenantObject extends DurableObject<Env> {
       return made !== null && base && base.revenueCents > 0 ? made / base.revenueCents : null;
     };
     // Public holidays: the same holiday last year against its weekdays; without it, the median of the holidays over the past year (at least 3).
-    const pastHolidays = Array.from({length: 365}, (_, i) => addDays(date, -i)).filter(entry => holidayName(entry));
-    const holidayRatios = new Map(pastHolidays.map(entry => [entry, against(entry, other => !holidayName(other) && !eventDates.has(other))]));
-    const known = [...holidayRatios.values()].filter((value): value is number => value !== null);
-    const usualHoliday = known.length >= 3 ? known.sort((a, b) => a - b)[Math.floor(known.length / 2)] : null;
+    const plainOf = (entry: string) => !holidayName(entry) && !eventDates.has(entry);
+    const known = Array.from({length: 365}, (_, i) => addDays(date, -i)).filter(entry => holidayName(entry))
+      .map(entry => against(entry, plainOf)).filter((value): value is number => value !== null);
+    const usualHoliday = known.length >= 3 ? medianOf(known) : null;
     const holidays: Record<string, {name: string; factor: number | null}> = {};
-    for (let day = today; day <= addDays(month + '-01', 62); day = addDays(day, 1)) {
+    // From the 1st of the month: an elapsed day without data is estimated in the month total too.
+    for (let day = month + '-01'; day <= addDays(month + '-01', 62); day = addDays(day, 1)) {
       const name = holidayName(day);
       if (!name) continue;
-      const lastYear = pastHolidays.find(entry => holidayName(entry) === name && entry.slice(0, 4) < day.slice(0, 4));
-      const ratio = lastYear !== undefined ? holidayRatios.get(lastYear) ?? null : null;
+      // The same holiday last year by its name (Easter moves, a leap year shifts the dates).
+      const lastYear = Object.entries(czechHolidays(Number(day.slice(0, 4)) - 1)).find(([, other]) => other === name)?.[0];
+      const ratio = lastYear !== undefined && lastYear <= date ? against(lastYear, plainOf) : null;
       const factor = ratio ?? usualHoliday;
       holidays[day] = {name, factor: factor === null ? null : Math.round(Math.min(2, Math.max(0, factor)) * 100) / 100};
     }
@@ -866,7 +872,8 @@ export class TenantObject extends DurableObject<Env> {
     return Array.from({length: 12}, (_, i) => 11 - i).map(back => {
       const to = addDays(date, -7 * back), from = addDays(to, -6), part = this.weekPart(from, to);
       // The plans the morning messages gave against the revenue; a week's error shows from 4 such days.
-      const rows = this.sql.exec<{day: string; cents: number}>('SELECT for_date AS day, cents FROM forecast_log WHERE horizon=0 AND for_date BETWEEN ? AND ? AND cents > 0', from, to).toArray()
+      // Up to the day before the shown one: its revenue may still be incomplete.
+      const rows = this.sql.exec<{day: string; cents: number}>('SELECT for_date AS day, cents FROM forecast_log WHERE horizon=0 AND for_date BETWEEN ? AND ? AND for_date < ? AND cents > 0', from, to, date).toArray()
         .map(row => ({forecast: row.cents, actual: this.dayRevenue(row.day)})).filter((row): row is {forecast: number; actual: number} => row.actual !== null);
       return {from, to, revenueCents: part.revenueCents, revenueDays: part.revenueDays, reservations: part.reservations, guests: part.guests, noShowGuests: part.noShowGuests,
         visits: part.visits, webSent: part.webSent, webConfirmed: part.webConfirmed, reviews: part.reviews, starsTenths: part.starsTenths,
