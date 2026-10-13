@@ -185,7 +185,7 @@ export function createServer(context: ToolContext): McpServer {
     return outlook ? result(outlook) : failed('Provozovna není v OKO1 nastavená.');
   });
   tool('tyden_mesic_trendy', 'Týden, měsíc a trendy', 'K provoznímu dni: posledních 7 dní proti 7 předtím (tržba, rezervace, hosté, nedorazili, storna, odkud a jak dopředu se rezervuje, web, recenze, akce), ' +
-    'měsíc od 1. dne proti minulému a 12 týdnů trendů s chybou odhadu. Jen počty, částky v haléřích.', {datum: date},
+    'měsíc od 1. dne proti minulému, 12 týdnů trendů s chybou odhadu a 12 týdnů zájmu o lístek na webu (menuInterest: návštěvy, které si ho otevřely, zobrazení jídla a nápojů, ze zahraničí, jazyky, rezervace). Jen počty, částky v haléřích.', {datum: date},
   async ({datum}: {datum: string}) => {
     if (!isDate(datum)) return badDate;
     const trends = await context.venue.posTrends(datum);

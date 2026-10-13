@@ -789,12 +789,22 @@ try {
   // An event a month ago: the ranking card shows it with its title escaped.
   assert.equal((await jdIngest('batch-jd-event', [{type: 'event', id: 'jd-akce', version: 1, businessDate: addDays(today, -30), startsAt: `${addDays(today, -30)}T19:00:00Z`,
     section: 'club', title: '<img src=x onerror=alert(1)>Jam', status: 'published'}])).status, 200);
+  // Interest in the menu on the website: a day without `menu` is left out, unknown fields are refused, the card shows the weeks with data.
+  const menuDay = (businessDate, menu) => ({type: 'web_traffic', id: `web-${businessDate}`, version: 1, businessDate, visits: 50, visitsWithAction: 0, origins: [], actions: {}, reviewScans: 0, ...(menu ? {menu} : {})});
+  const interest = {views: {food: 30, drinks: 12}, visits: 20, abroad: 15, reserved: 2, languages: [{key: 'en', visits: 14, reserved: 1}, {key: 'cs', visits: 6, reserved: 1}]};
+  assert.equal((await jdIngest('batch-jd-menu-0', [menuDay(addDays(today, -1), {...interest, ids: []})])).status, 400, 'nothing about single visits');
+  assert.equal((await jdIngest('batch-jd-menu-0', [menuDay(addDays(today, -1), {...interest, languages: [{key: 'en', visits: 1}]})])).status, 400, 'a language needs reservations');
+  assert.equal((await jdIngest('batch-jd-menu-1', [menuDay(addDays(today, -1), interest), menuDay(addDays(today, -2)), menuDay(addDays(today, -8), {...interest, visits: 10, abroad: 2, languages: [{key: 'cs', visits: 10, reserved: 2}]})])).status, 200);
   const boardData = await (await jdBoard('GET', '/data', undefined, jdCookie)).json();
+  assert.deepEqual([boardData.menuInterest.length, boardData.menuInterest[11].to, boardData.menuInterest[11].days, boardData.menuInterest[11].visits, boardData.menuInterest[11].food, boardData.menuInterest[11].languages,
+    boardData.menuInterest[10].days, boardData.menuInterest[10].visits, boardData.menuInterest[9].days],
+  [12, boardData.businessDate, 1, 20, 30, interest.languages, 1, 10, 0]);
   const shown = await renderCard({'/d/james-dean/data': boardData, '/d/james-dean/web': {card}});
   // The menu card: items per part and category, and the changes, escaped.
   assert.deepEqual([boardData.menu.items, boardData.menu.parts.map(part => [part.part, part.items]), boardData.menu.changes.length, boardData.menu.changesTotal], [4, [['food', 3], ['drinks', 1]], 4, 4]);
   assert.deepEqual(boardData.menu.parts[0].categories[0], {name: 'Burgery', items: 2, minCents: 22500, maxCents: 25900, avgCents: 24200});
   const content = await renderCard({'/d/james-dean/data': boardData, '/d/james-dean/web': {card}}, 'content');
+  assert.match(content, /Zájem o lístek na webu \(12 týdnů\)[\s\S]*<td class="n">20<\/td><td class="n">30 \/ 12<\/td><td class="n">75 %<\/td><td class="n">30 %<\/td><td class="n">70 %<\/td><td class="n">0 %<\/td><td class="n">2 <span class="muted">\(10,0 %\)<\/span>/);
   // The menu card also checks prices and, with POS bills, shows what sold by item and what is not paired to the menu.
   assert.deepEqual([boardData.menu.priceCheck, boardData.menu.profit.items.map(row => [row.name, row.quantity]), boardData.menu.profit.unpaired.map(row => row.name)],
     [{findings: [], total: 0}, [['Classic <b>Burger</b>', 5]], ['Tonic 0,25 l']], 'the shown day is yesterday: today\'s bill is not in');

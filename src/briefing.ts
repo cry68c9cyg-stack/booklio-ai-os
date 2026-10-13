@@ -1,4 +1,4 @@
-import {DEFAULT_BOTTLE_LOSS_CENTS, type Bill, type BottleCheck, type CashClosing, type Reservation, type ReviewSummary, type TenantConfig, type WebTraffic} from './validate.ts';
+import {DEFAULT_BOTTLE_LOSS_CENTS, type Bill, type BottleCheck, type CashClosing, type Reservation, type ReviewSummary, type TenantConfig, type WebMenuInterest, type WebTraffic} from './validate.ts';
 import {addDays, localTime, weekday} from './time.ts';
 import {line, total, type DailyReport} from './daily-report.ts';
 import type {NotePoint, NotesAnalysis} from './notes.ts';
@@ -73,6 +73,8 @@ export type Briefing = {
   priceCheck?: {total: number; top: PriceFinding[]} | null;
   /** Monday: what to fix in the menu on the website (`menuGaps`), by kind with the first names. */
   menuGaps?: {total: number; kinds: {kind: MenuGap['kind']; count: number; names: string[]}[]} | null;
+  /** Monday: interest in the menu on the website, the week against the one before; `null` = not asked for. */
+  menuInterest?: {current: MenuInterest; previous: MenuInterest} | null;
   /** Reviews that reached the website's admin on the reported calendar day, and how many wait there. `null` = nothing sent. */
   reviews: {newCount: number; averageTenths: number | null; low: number; bySource: {name: string; newCount: number}[]; waiting: number; forManagement: number; failed: number} | null;
   /** The 7 days up to the reported day against the 7 before: sums only. `null` = not asked for. */
@@ -278,6 +280,46 @@ export const menuGapsText = (gaps: NonNullable<Briefing['menuGaps']>) => gaps.ki
 const GAP_WORDS: Record<MenuGap['kind'], string> = {price: 'rozdílná cena', description: 'chybí popis nebo složení', volume: 'chybí objem'};
 export function renderMenuGaps(gaps: Briefing['menuGaps']): string[] {
   return gaps?.total ? [`Na webu opravit v lístku: ${menuGapsText(gaps)}`] : [];
+}
+/**
+ * Interest in the menu on the website over some days: sums of the days whose web traffic carries `menu` (sent by the
+ * website since 13. 10. 2026). `days` = how many days had it; one record per day (the first one, as everywhere).
+ */
+export type MenuInterest = {
+  from: string; to: string; days: number; visits: number; abroad: number; reserved: number; food: number; drinks: number;
+  languages: {key: string; visits: number; reserved: number}[];
+};
+export function sumMenuInterest(records: {businessDate: string; menu?: WebMenuInterest}[], from: string, to: string): MenuInterest {
+  const sum: MenuInterest = {from, to, days: 0, visits: 0, abroad: 0, reserved: 0, food: 0, drinks: 0, languages: []};
+  const seen = new Set<string>(), languages = new Map<string, {key: string; visits: number; reserved: number}>();
+  for (const {businessDate, menu} of records) {
+    if (businessDate < from || businessDate > to || seen.has(businessDate)) continue;
+    seen.add(businessDate);
+    if (!menu) continue;
+    sum.days++; sum.visits += menu.visits; sum.abroad += menu.abroad; sum.reserved += menu.reserved; sum.food += menu.views.food; sum.drinks += menu.views.drinks;
+    for (const language of menu.languages) {
+      const row = languages.get(language.key) ?? {key: language.key, visits: 0, reserved: 0};
+      row.visits += language.visits; row.reserved += language.reserved;
+      languages.set(language.key, row);
+    }
+  }
+  sum.languages = [...languages.values()].sort((a, b) => b.visits - a.visits || a.key.localeCompare(b.key));
+  return sum;
+}
+export const LANGUAGE_NAMES: Record<string, string> = {cs: 'česky', en: 'anglicky', de: 'německy'};
+const percentOf = (part: number, whole: number) => `${Math.round(part / whole * 100)} %`;
+/** The Monday line: visits that opened the menu, from abroad, the website's languages and how many sent a reservation in that visit. */
+export function renderMenuInterest(interest: Briefing['menuInterest']): string[] {
+  const now = interest?.current, before = interest?.previous;
+  if (!now?.days || !now.visits) return [];
+  const days = now.days < 7 ? ` (${now.days} ${now.days === 1 ? 'den' : now.days <= 4 ? 'dny' : 'dní'} s daty)` : '';
+  const change = now.days === 7 && before?.days === 7 && before.visits ? Math.round((now.visits / before.visits - 1) * 100) : null;
+  const languages = now.languages.filter(row => row.visits).slice(0, 3).map(row => `${LANGUAGE_NAMES[row.key] ?? row.key} ${percentOf(row.visits, now.visits)}`);
+  const rate = (Math.round(now.reserved / now.visits * 1000) / 10).toFixed(1).replace('.', ',');
+  return [`Lístek na webu za týden${days}: otevřela si ho ${now.visits} ${visitsWord(now.visits)}` +
+    (change === null ? '' : ` (${change === 0 ? '±0' : (change > 0 ? '+' : '−') + Math.abs(change)} % proti minulému týdnu)`) +
+    `, ${percentOf(now.abroad, now.visits)} ze zahraničí` + (languages.length ? `; jazyk webu ${languages.join(', ')}` : '') +
+    `; z nich rezervaci poslalo ${now.reserved} (${rate} %)`];
 }
 export function renderMenuWeek(week: MenuWeek | null | undefined, title = 'Lístek za týden'): string[] {
   if (!week || !(week.prices.length + week.added.length + week.removed.length)) return [];
@@ -595,7 +637,7 @@ export function buildBriefing(input: {
   web?: WebTraffic; webLastWeek?: WebTraffic;
   /** Visits and sent booking forms of the same weekday over the 4 weeks before (days the website sent). */
   webUsual?: {visits: number; sent: number}[];
-  eventRanking?: EventRank[] | null; menuWeek?: MenuWeek | null; menuDay?: MenuWeek | null; menuMonth?: MenuMonth | null; slowSellers?: SlowSellers | null; priceResults?: PriceExperiment[]; menuProblems?: string[]; priceMismatches?: PriceMismatch[]; priceCheck?: Briefing['priceCheck']; menuGaps?: Briefing['menuGaps'];
+  eventRanking?: EventRank[] | null; menuWeek?: MenuWeek | null; menuDay?: MenuWeek | null; menuMonth?: MenuMonth | null; slowSellers?: SlowSellers | null; priceResults?: PriceExperiment[]; menuProblems?: string[]; priceMismatches?: PriceMismatch[]; priceCheck?: Briefing['priceCheck']; menuGaps?: Briefing['menuGaps']; menuInterest?: Briefing['menuInterest'];
   costs?: MonthResult | null; costsPrevious?: MonthResult | null; supplies?: SupplyBrief | null;
   reviews?: ReviewSummary;
   week?: Week | null; silent?: {name: string; since: string}[];
@@ -684,7 +726,7 @@ export function buildBriefing(input: {
     web: summarizeWeb(input.web, input.webLastWeek),
     webDrop: webDrop(input.web, input.webUsual),
     eventRanking: input.eventRanking ?? null,
-    menuWeek: input.menuWeek ?? null, menuDay: input.menuDay ?? null, menuMonth: input.menuMonth ?? null, slowSellers: input.slowSellers ?? null, priceResults: input.priceResults ?? [], menuProblems: input.menuProblems ?? [], priceMismatches: input.priceMismatches ?? [], priceCheck: input.priceCheck ?? null, menuGaps: input.menuGaps ?? null,
+    menuWeek: input.menuWeek ?? null, menuDay: input.menuDay ?? null, menuMonth: input.menuMonth ?? null, slowSellers: input.slowSellers ?? null, priceResults: input.priceResults ?? [], menuProblems: input.menuProblems ?? [], priceMismatches: input.priceMismatches ?? [], priceCheck: input.priceCheck ?? null, menuGaps: input.menuGaps ?? null, menuInterest: input.menuInterest ?? null,
     reviews: summarizeReviews(input.reviews),
     costs: input.costs ?? null, costsPrevious: input.costsPrevious ?? null, supplies: input.supplies ?? null,
     week: input.week ?? null,
@@ -761,7 +803,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderMenuWeek(briefing.menuDay, 'Lístek se změnil'), ...(briefing.menuProblems ?? []).map(text => `⚠ ${text}`));
   lines.push(...renderNotes(briefing));
   // The week in a few numbers once a week, in the message about Sunday (Monday morning).
-  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceResults(briefing.priceResults), ...renderPriceCheck(briefing.priceCheck), ...renderMenuGaps(briefing.menuGaps));
+  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceResults(briefing.priceResults), ...renderPriceCheck(briefing.priceCheck), ...renderMenuGaps(briefing.menuGaps), ...renderMenuInterest(briefing.menuInterest));
   // The month so far once a week, and the whole month in the message about its last day (the 1st in the morning).
   lines.push(...renderMonth(briefing.month));
   // Which events draw guests, once a month in the message about its last day.
