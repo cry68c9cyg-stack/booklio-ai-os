@@ -138,6 +138,13 @@ export function createServer(context: ToolContext): McpServer {
     const period = await context.venue.posPeriod(od, until);
     return period ? result(period) : failed('Provozovna není v OKO1 nastavená.');
   });
+  tool('akce_zebricek', 'Žebříček akcí', 'Akce podniku za půl roku do data, seřazené podle toho, kolik hostů přivedly navíc: kolikrát byly, ve které dny v týdnu (0 = neděle), ' +
+    'průměr potvrzených hostů na akci proti stejnému dni v týdnu bez akce a poměr hostů a tržby proti obvyklému dni (1,5 = +50 %; null = není s čím srovnat).', {datum: date},
+  async ({datum}: {datum: string}) => {
+    if (!isDate(datum)) return badDate;
+    const events = await context.venue.posEvents(datum);
+    return events ? result(events) : failed('Provozovna není v OKO1 nastavená.');
+  });
   tool('k_vyrizeni', 'Seznam k vyřízení', 'Seznam k vyřízení za provozní den jako na dashboardu (s tím, co už je „Vyřízeno“) a kdy naposledy poslal data každý zdroj (pokladna, web, report manažerů, náklady).',
     {datum: date}, async ({datum}: {datum: string}) => {
       if (!isDate(datum)) return badDate;

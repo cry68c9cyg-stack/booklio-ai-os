@@ -515,6 +515,11 @@ try {
     menuItem('food:dezerty:pie', 'food', 'Dezerty', 'Apple Pie', [14500])]);
   assert.deepEqual(await (await jdIngest('batch-menu-2', [secondMenu])).json(), {batchId: 'batch-menu-2', accepted: 1, stale: 0});
   assert.deepEqual(await (await jdIngest('batch-menu-3', [firstMenu])).json(), {batchId: 'batch-menu-3', accepted: 0, stale: 1}, 'an older menu changes nothing');
+  // The Monday message (Sunday's report) has a line on the menu's changes over the week.
+  const menuSunday = [0, 1, 2, 3, 4, 5, 6].map(i => addDays(calendar, i)).find(day => new Date(day + 'T12:00:00Z').getUTCDay() === 0);
+  const menuMonday = await (await call('GET', `/admin/t/james-dean/briefing?date=${menuSunday}`)).json();
+  assert.deepEqual([menuMonday.briefing.menuWeek.prices.length, menuMonday.briefing.menuWeek.added, menuMonday.briefing.menuWeek.removed], [2, ['Apple Pie'], ['Vodka X']]);
+  assert.match(menuMonday.text, /\nLístek za týden: nová cena 2× \(.+ → .+\) · nově Apple Pie · zrušeno Vodka X(\n|$)/);
   const local = (path, init = {}) => mf.dispatchFetch('http://localhost' + path, init);
 
   // The admin check reads only the list of tables and never shows the token.
@@ -619,7 +624,7 @@ try {
     body: rpc(1, 'initialize', {protocolVersion: '2025-06-18', capabilities: {}, clientInfo: {name: 'test', version: '1'}})})).json();
   assert.equal(initialized.result.serverInfo.name, 'oko1');
   const listed = await (await local('/mcp', {method: 'POST', headers: {...mcpHeaders, authorization: 'Bearer ' + tokens.access_token}, body: rpc(2, 'tools/list')})).json();
-  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['den', 'k_vyrizeni', 'kontrola_lahvi', 'listek', 'odhad_a_vyhled', 'ranni_prehled', 'report_manazeru', 'souhrn_obdobi', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty',
+  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['akce_zebricek', 'den', 'k_vyrizeni', 'kontrola_lahvi', 'listek', 'odhad_a_vyhled', 'ranni_prehled', 'report_manazeru', 'souhrn_obdobi', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty',
     'web_blokace_a_akce', 'web_darkove_karty', 'web_host', 'web_navstevnost', 'web_platby_lahvi', 'web_prehled', 'web_recenze', 'web_rezervace', 'web_rezervace_detail', 'web_tabulka']);
   assert.ok(listed.result.tools.every(entry => entry.annotations.readOnlyHint === true), 'read only');
 
@@ -662,6 +667,9 @@ try {
   const todoTool = (await mcp('k_vyrizeni', {datum: today})).data;
   assert.ok(Array.isArray(todoTool.todo) && Array.isArray(todoTool.sources.types));
   assert.equal((await mcp('odhad_a_vyhled', {datum: 'zitra'})).error, true);
+  const ranked = (await mcp('akce_zebricek', {datum: today})).data;
+  assert.deepEqual([ranked.to, ranked.from, Array.isArray(ranked.events)], [today, addDays(today, -181), true]);
+  assert.equal((await mcp('akce_zebricek', {datum: '13.10.2026'})).error, true);
   const menuTool = (await mcp('listek')).data;
   assert.deepEqual(menuTool.menu.items.map(item => [item.id, item.pricesCents]), [['food:burgery:classic', [22500, 26500]], ['food:burgery:texas', [25900]],
     ['drinks:kava:espresso', [6200]], ['food:dezerty:pie', [14500]]]);
@@ -935,6 +943,25 @@ try {
   assert.deepEqual(reviewed.briefing.week.events, [{date: '2026-10-08', title: 'Koncert 3', guests: 8, usualGuests: 5, revenueCents: 1500000, usualRevenueCents: 1000000}],
     'the event day of 10. 9. is not usual; the diner\'s guests do not count for a club event');
   assert.match(reviewed.text, /\nAkce za týden: čt 8\. 10\. Koncert 3 – 8 hostů z rezervací \(obvykle 5, \+60 %\), tržba 15 000 Kč \(obvykle 10 000 Kč\)\n/);
+
+  // The events of half a year ranked in the message of the month's last day, and on the dashboard data.
+  const rankedEnd = await (await call('GET', '/admin/t/event-venue/briefing?date=2026-10-31')).json();
+  assert.deepEqual(rankedEnd.briefing.eventRanking[0], {title: 'Koncert 3', count: 1, weekdays: [4], guests: 8, usualGuests: 5, guestLift: 1.6, revenueLift: 1.5, last: '2026-10-08'});
+  assert.match(rankedEnd.text, /\nAkce za půl roku: nejvíc táhne Koncert 3 \(1×, hosté \+60 %, tržba \+50 %\)/);
+  assert.equal((await (await call('GET', '/admin/t/event-venue/briefing?date=2026-10-30')).json()).briefing.eventRanking, null, 'only at the month end or for a weak day');
+
+  // The forecast split by section with the weekday's shares from the managers' reports (two Wednesdays: diner 60 %, club 40 %).
+  assert.equal((await call('PUT', '/admin/t/section-venue/config', {...config, registers: [], sections: {diner: 'Diner', bar: 'Bar', club: 'Klub'}})).status, 200);
+  await call('POST', '/admin/t/section-venue/history', {rows: Array.from({length: 60}, (_, i) => addDays('2026-10-12', -i)).map(day => ({businessDate: day, revenueCents: 1000000}))});
+  for (const [day, diner, club] of [['2026-10-07', 700000, 300000], ['2026-09-30', 500000, 500000]]) {
+    assert.equal((await call('PUT', '/admin/t/section-venue/report', {businessDate: day, source: 'admin', files: [], warnings: [], notes: null,
+      lines: [{kind: 'revenue_section', key: 'club', label: 'Klub', count: null, amountCents: club}, {kind: 'revenue_section', key: 'diner', label: 'Diner', count: null, amountCents: diner}]})).status, 200);
+  }
+  const sectionMorning = await (await call('GET', '/admin/t/section-venue/briefing?date=2026-10-12')).json();
+  const wednesday = sectionMorning.briefing.forecast.days.find(day => day.date === '2026-10-14');
+  assert.deepEqual(wednesday.bySection, [{section: 'diner', label: 'Diner', cents: wednesday.cents * 0.6}, {section: 'club', label: 'Klub', cents: wednesday.cents * 0.4}], 'in the order of the config');
+  assert.equal(sectionMorning.briefing.forecast.days.find(day => day.date === '2026-10-15').bySection, undefined, 'no Thursday with sections');
+  assert.match(sectionMorning.text, /\nOdhad tržby: zítra \(st 14\. 10\.\) [\d ]+ Kč \(Diner [\d ]+ Kč, Klub [\d ]+ Kč\) · /);
 
   // Public holidays: last year's 28. 10. was closed, so this year's forecast for it is 0 Kč; the weekday averages leave holidays out.
   assert.equal((await call('PUT', '/admin/t/holiday-venue/config', {...config, registers: []})).status, 200);

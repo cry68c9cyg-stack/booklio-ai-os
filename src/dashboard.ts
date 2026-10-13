@@ -220,6 +220,18 @@ function trendsCard(t) {
     rows + '</table></div><div class="muted">↑ ↓ = o víc než 5 % proti týdnu předtím; odchylka odhadu = jak daleko byla tržba od plánu z ranní zprávy (od 4 dní v týdnu)</div></div>';
 }
 
+// Events of the half year before the shown day, the strongest first: guests and revenue against the same weekday without an event.
+function eventsCard(ranking) {
+  if (!ranking || !ranking.length) return '';
+  const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.';
+  const days = ['ne', 'po', 'út', 'st', 'čt', 'pá', 'so'];
+  const lift = x => x === null ? '<span class="muted">–</span>' : '<span class="' + (x < 1 ? 'warn' : '') + '">' + (x >= 1 ? '+' : '−') + Math.round(Math.abs(x - 1) * 100) + ' %</span>';
+  const rows = ranking.map(r => '<tr><td><b>' + esc(r.title) + '</b><div class="muted">' + r.count + '× · ' + r.weekdays.map(d => days[d]).join(', ') + ' · naposledy ' + esc(short(r.last)) + '</div></td>' +
+    '<td class="n">' + r.guests + (r.usualGuests !== null ? ' <span class="muted">/ ' + r.usualGuests + '</span>' : '') + '</td><td class="n">' + lift(r.guestLift) + '</td><td class="n">' + lift(r.revenueLift) + '</td></tr>').join('');
+  return '<div class="card"><h2>Akce za půl roku</h2><div class="scroll"><table><tr><th>Akce</th><th class="n">hosté / obvykle</th><th class="n">hosté</th><th class="n">tržba</th></tr>' + rows + '</table></div>' +
+    '<div class="muted">průměr potvrzených hostů na jednu akci proti stejným dnům v týdnu bez akce (nejvýš 4 za 8 týdnů před ní); tržba stejně, jen u dnů s tržbou; nahoře akce, které přivedou nejvíc hostů navíc</div></div>';
+}
+
 // The month up to the shown day against the same days of the month before, and the cash the cash book paid out.
 const monthNames = ['leden', 'únor', 'březen', 'duben', 'květen', 'červen', 'červenec', 'srpen', 'září', 'říjen', 'listopad', 'prosinec'];
 function monthCard(m) {
@@ -263,7 +275,7 @@ function forecastCard(f) {
   const by = (x, what) => ' <span class="muted">(' + (x >= 1 ? '+' : '−') + Math.round(Math.abs(x - 1) * 100) + ' % ' + what + ')</span>';
   const lift = d => { const e = d.eventBoost || 1; return (e > d.boost ? by(e, 'akce') : d.boost > 1 ? by(d.boost, 'rezervace') : '') +
     (d.holidayFactor !== undefined && d.holidayFactor !== 1 ? by(d.holidayFactor, 'svátek') : '') + (d.rainFactor !== undefined && d.rainFactor !== 1 ? by(d.rainFactor, 'déšť') : ''); };
-  const week = (f.days || []).map(d => '<tr><td>' + wd(d.date) + ' ' + short(d.date) + ((d.events || []).length ? '<div class="muted">' + d.events.map(esc).join(', ') + '</div>' : '') + (d.holiday ? '<div class="muted">svátek: ' + esc(d.holiday) + '</div>' : '') + '</td><td class="n">' + kc(round(d.cents)) + lift(d) +
+  const week = (f.days || []).map(d => '<tr><td>' + wd(d.date) + ' ' + short(d.date) + ((d.events || []).length ? '<div class="muted">' + d.events.map(esc).join(', ') + '</div>' : '') + (d.holiday ? '<div class="muted">svátek: ' + esc(d.holiday) + '</div>' : '') + '</td><td class="n">' + kc(round(d.cents)) + lift(d) + ((d.bySection || []).length ? '<div class="muted">' + d.bySection.map(x => esc(x.label) + ' ' + kc(round(x.cents))).join(', ') + '</div>' : '') +
     '</td><td class="n' + (d.boost > 1 ? ' warn' : '') + '">' + d.guests + (d.usualGuests !== null ? ' <span class="muted">/ ' + d.usualGuests + '</span>' : '') + '</td><td class="muted">' + esc(d.weatherText || '–') + '</td></tr>').join('');
   const rows = [];
   rows.push('<tr><td>7 dní od dneška <span class="muted">(' + short(f.week.from) + '–' + short(f.week.to) + ')</span></td><td class="n">' + kc(round(f.week.cents)) + '</td></tr>');
@@ -280,7 +292,7 @@ function forecastCard(f) {
     (f.eventFactor && f.eventFactor.factor > 1 ? 'Den s akcí bývá o ' + Math.round((f.eventFactor.factor - 1) * 100) + ' % silnější (' + f.eventFactor.days + ' dní s akcí za půl roku); platí větší z obou úprav. ' : 'Vliv akcí se započítá od 4 dní s akcí a tržbou. ') +
     'Státní svátek se počítá podle stejného svátku loni proti jeho dnům v týdnu (jinak podle mediánu svátků za rok) a do průměrů dnů v týdnu nevstupuje. ' +
     (f.rainFactor ? 'Deštivý den (od 5 mm) bývá ' + (f.rainFactor.factor >= 1 ? 'o ' + Math.round((f.rainFactor.factor - 1) * 100) + ' % silnější' : 'o ' + Math.round((1 - f.rainFactor.factor) * 100) + ' % slabší') + ' (' + f.rainFactor.days + ' deštivých dní za půl roku). ' : 'Vliv deště se započítá od 6 deštivých dní s tržbou (počasí dne = poslední předpověď MET Norway pro ten den, OKO1 si ji ukládá od října 2026). ') +
-    'Počasí: MET Norway.</p></div>';
+    ((f.days || []).some(d => (d.bySection || []).length) ? 'Rozdělení po prostorech podle jejich podílu na tržbě stejného dne v týdnu za posledních 8 týdnů. ' : '') + 'Počasí: MET Norway.</p></div>';
 }
 
 // The menu from the website: items per part and category with base prices, and its changes over 30 days.
@@ -367,7 +379,7 @@ function render(data) {
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card" id="todo">' + todoCard(data.todo) + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
-  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast) + weekCard(data.week) + trendsCard(data.trends) + monthCard(data.month) + menuCard(data.menu) + sourcesCard(data.sources);
+  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast) + weekCard(data.week) + eventsCard(data.eventRanking) + trendsCard(data.trends) + monthCard(data.month) + menuCard(data.menu) + sourcesCard(data.sources);
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
   if (r) {
