@@ -99,7 +99,9 @@ export type UnusualDiscount = {key: string; label: string; amountCents: number; 
 /** One of the next 7 days: forecast (with the bookings boost), confirmed guests against the weekday's usual, weather. */
 export type ForecastDay = {date: string; cents: number | null; guests: number; usualGuests: number | null; boost: number; weather: WeatherDay | null; weatherText: string | null;
   /** Public events of the venue that day (names) and how much an event raises the day (1 = not known or no event). */
-  events?: string[]; eventBoost?: number};
+  events?: string[]; eventBoost?: number;
+  /** A public holiday that day and how it usually changes the day (1 = no holiday or not known); rain that changes it (1 = none). */
+  holiday?: string | null; holidayFactor?: number; rainFactor?: number};
 /** Revenue forecast; a part is `null` when a weekday it needs has under two weeks of revenue. */
 export type Forecast = {
   today: string;
@@ -116,6 +118,8 @@ export type Forecast = {
   seasonal: Record<string, number>;
   /** How much an event day usually makes against its weekday's average (median of past event days, at least 4); `null` = not enough of them yet. */
   eventFactor?: {factor: number; days: number} | null;
+  /** How much a rainy day (at least 5 mm) usually makes against its weekday's average (median, at least 6 rainy days); `null` = not enough yet. */
+  rainFactor?: {factor: number; days: number} | null;
 };
 export type Week = {from: string; to: string; current: WeekPart; previous: WeekPart; reviewsUsual?: ReviewStats | null; reviewDrop?: boolean;
   /** The week's events looked back on: guests booked that day (in the event's place) and revenue, against the same weekday without an event. */
@@ -323,17 +327,23 @@ const nextMonthOf = (month: string) => { const [year, number] = month.split('-')
  */
 export function forecast(input: {today: string; bases: (number | null)[]; seasonal: Record<string, number>; monthActual: {cents: number; days: number; missing?: string[]};
   bookings?: Record<string, {guests: number; usualGuests: number | null}>; weather?: WeatherDay[]; accuracy?: Forecast['accuracy'];
-  events?: Record<string, string[]>; eventFactor?: Forecast['eventFactor']}): Forecast {
+  events?: Record<string, string[]>; eventFactor?: Forecast['eventFactor'];
+  /** Public holidays in the forecast's reach with how each usually changes its day (`null` = not known yet). */
+  holidays?: Record<string, {name: string; factor: number | null}>; rainFactor?: Forecast['rainFactor']}): Forecast {
   const boost = (date: string) => {
     const booked = input.bookings?.[date];
     if (!booked?.usualGuests || booked.usualGuests < BOOKING_MIN_GUESTS || booked.guests - booked.usualGuests < BOOKING_MIN_GUESTS) return 1;
     return Math.min(BOOKING_BOOST_MAX, Math.round((1 + (booked.guests / booked.usualGuests - 1) / 2) * 100) / 100);
   };
   const eventBoost = (date: string) => input.events?.[date]?.length && input.eventFactor ? input.eventFactor.factor : 1;
-  // More bookings and an event both mean a fuller day: the bigger of the two counts, never both.
+  const weather = new Map((input.weather ?? []).map(entry => [entry.date, entry]));
+  const holidayFactor = (date: string) => input.holidays?.[date]?.factor ?? 1;
+  const rain = (date: string) => input.rainFactor && (weather.get(date)?.rainMm ?? 0) >= RAIN_MM ? input.rainFactor.factor : 1;
+  // More bookings and an event both mean a fuller day: the bigger of the two counts, never both. A holiday and rain change the day on top.
   const day = (date: string) => {
     const base = input.bases[weekday(date)];
-    return base === null || base === undefined ? null : Math.round(base * (input.seasonal[date.slice(0, 7)] ?? 1) * Math.max(boost(date), eventBoost(date)));
+    return base === null || base === undefined ? null
+      : Math.round(base * (input.seasonal[date.slice(0, 7)] ?? 1) * Math.max(boost(date), eventBoost(date)) * holidayFactor(date) * rain(date));
   };
   const sum = (from: string, to: string) => {
     let total = 0;
@@ -344,12 +354,12 @@ export function forecast(input: {today: string; bases: (number | null)[]; season
   // Elapsed days without data are forecast too, so the month total is not too low.
   const gaps = (input.monthActual.missing ?? []).map(day), rest = sum(input.today, monthEnd(month));
   const restCents = rest === null || gaps.includes(null) ? null : rest + gaps.reduce<number>((total, value) => total + value!, 0);
-  const weather = new Map((input.weather ?? []).map(entry => [entry.date, entry]));
   return {
     today: input.today,
     days: Array.from({length: 7}, (_, i) => addDays(input.today, i)).map(date => ({date, cents: day(date),
       guests: input.bookings?.[date]?.guests ?? 0, usualGuests: input.bookings?.[date]?.usualGuests ?? null, boost: boost(date), weather: weather.get(date) ?? null, weatherText: weather.has(date) ? weatherText(weather.get(date)!) : null,
-      events: input.events?.[date] ?? [], eventBoost: eventBoost(date)})),
+      events: input.events?.[date] ?? [], eventBoost: eventBoost(date),
+      holiday: input.holidays?.[date]?.name ?? null, holidayFactor: holidayFactor(date), rainFactor: rain(date)})),
     accuracy: input.accuracy ?? null,
     tomorrow: {date: addDays(input.today, 1), cents: day(addDays(input.today, 1))},
     week: {from: input.today, to: addDays(input.today, 6), cents: sum(input.today, addDays(input.today, 6))},
@@ -358,7 +368,17 @@ export function forecast(input: {today: string; bases: (number | null)[]; season
     nextMonth: {month: next, cents: sum(next + '-01', monthEnd(next))},
     seasonal: input.seasonal,
     eventFactor: input.eventFactor ?? null,
+    rainFactor: input.rainFactor ?? null,
   };
+}
+
+/** Rain from 5 mm a day counts as a rainy day; its factor needs 6 past rainy days with revenue and stays within 0,5–1,5×. */
+export const RAIN_MM = 5, RAIN_MIN_DAYS = 6;
+export function rainFactor(ratios: number[]): Forecast['rainFactor'] {
+  if (ratios.length < RAIN_MIN_DAYS) return null;
+  const sorted = [...ratios].sort((a, b) => a - b), middle = Math.floor(sorted.length / 2);
+  const value = sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  return {factor: Math.round(Math.min(1.5, Math.max(0.5, value)) * 100) / 100, days: ratios.length};
 }
 
 /** Event factor = median of event days' revenue against their weekday's average; at least 4 days, only raising (1–2×). */
@@ -728,6 +748,9 @@ function bracket(day: ForecastDay | undefined): string {
   const event = day.eventBoost ?? 1, notes: string[] = [];
   if (day.events?.length) notes.push(`akce ${day.events.join(', ')}${event > 1 && event >= day.boost ? `, bývá o ${Math.round((event - 1) * 100)} % víc` : ''}`);
   if (day.boost > 1 && day.boost > event) notes.push('víc rezervací než obvykle');
+  const by = (factor: number) => factor > 1 ? `bývá o ${Math.round((factor - 1) * 100)} % víc` : `bývá o ${Math.round((1 - factor) * 100)} % méně`;
+  if (day.holiday) notes.push(`svátek ${day.holiday}${day.holidayFactor !== undefined && day.holidayFactor !== 1 ? `, ${day.holidayFactor ? by(day.holidayFactor) : 'loni zavřeno'}` : ''}`);
+  if (day.rainFactor !== undefined && day.rainFactor !== 1) notes.push(`déšť, ${by(day.rainFactor)}`);
   return notes.length ? ` (${notes.join(', ')})` : '';
 }
 

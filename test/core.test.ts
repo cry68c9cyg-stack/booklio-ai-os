@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, renderEventReviews, renderGuestOutlook, guestOutlookDay, median, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, guestOutlookDay, median, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
 import {weatherDays, weatherText} from '../src/weather.ts';
 import {businessDate, sameClockDaysBefore} from '../src/time.ts';
+import {czechHolidays, easterSunday, holidayName} from '../src/holidays.ts';
 import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type TenantConfig} from '../src/validate.ts';
 
 const config: TenantConfig = {
@@ -540,4 +541,30 @@ test('the same local clock time days before, across the end of summer time', () 
   // 30. 10. 2026 9:00 CET = 8:00 UTC; a week before (23. 10.) 9:00 CEST = 7:00 UTC.
   assert.equal(new Date(sameClockDaysBefore(new Date('2026-10-30T08:00:00Z'), 7, 'Europe/Prague')).toISOString(), '2026-10-23T07:00:00.000Z');
   assert.equal(new Date(sameClockDaysBefore(new Date('2026-10-14T07:00:00Z'), 14, 'Europe/Prague')).toISOString(), '2026-09-30T07:00:00.000Z');
+});
+
+test('public holidays: Easter by year, fixed days, the forecast and the morning note', () => {
+  assert.deepEqual([2025, 2026, 2027, 2038].map(easterSunday), ['2025-04-20', '2026-04-05', '2027-03-28', '2038-04-25']);
+  assert.equal(Object.keys(czechHolidays(2026)).length, 13);
+  assert.deepEqual([holidayName('2026-04-03'), holidayName('2026-04-06'), holidayName('2026-10-28'), holidayName('2026-10-29')], ['Velký pátek', 'Velikonoční pondělí', 'Den vzniku státu', null]);
+  const base = {bases: Array(7).fill(10000000), seasonal: {}, monthActual: {cents: 0, days: 0}};
+  const plain = forecast({...base, today: '2026-10-27'});
+  const holiday = forecast({...base, today: '2026-10-27', holidays: {'2026-10-28': {name: 'Den vzniku státu', factor: 0.8}, '2026-11-17': {name: 'Den boje za svobodu', factor: 1.2}}});
+  assert.deepEqual([holiday.days[1].cents, holiday.days[1].holiday, holiday.days[1].holidayFactor], [8000000, 'Den vzniku státu', 0.8]);
+  assert.equal(holiday.nextMonth.cents! - plain.nextMonth.cents!, 2000000, 'the month totals take the holidays too');
+  assert.match(renderForecast(holiday)[0], /^Odhad tržby: zítra \(st 28\. 10\.\) 80 000 Kč \(svátek Den vzniku státu, bývá o 20 % méně\) · /);
+  const closed = forecast({...base, today: '2026-12-23', holidays: {'2026-12-24': {name: 'Štědrý den', factor: 0}}});
+  assert.match(renderForecast(closed)[0], /zítra \(čt 24\. 12\.\) 0 Kč \(svátek Štědrý den, loni zavřeno\)/);
+  const unknown = forecast({...base, today: '2026-10-27', holidays: {'2026-10-28': {name: 'Den vzniku státu', factor: null}}});
+  assert.match(renderForecast(unknown)[0], /zítra \(st 28\. 10\.\) 100 000 Kč \(svátek Den vzniku státu\) · /);
+});
+
+test('rain: the factor from past rainy days and the forecast of a rainy day', () => {
+  assert.equal(rainFactor([0.8, 0.9, 0.7, 0.85, 0.9]), null, 'under 6 rainy days');
+  assert.deepEqual(rainFactor([0.8, 0.9, 0.7, 0.85, 0.9, 0.75]), {factor: 0.83, days: 6});
+  assert.deepEqual(rainFactor([0.2, 0.3, 0.1, 0.2, 0.3, 0.4]), {factor: 0.5, days: 6}, 'never under half');
+  const weather = [{date: '2026-10-28', minC: 8, maxC: 12, rainMm: 7, symbol: 'rain'}, {date: '2026-10-29', minC: 8, maxC: 12, rainMm: 1, symbol: 'cloudy'}];
+  const wet = forecast({today: '2026-10-27', bases: Array(7).fill(10000000), seasonal: {}, monthActual: {cents: 0, days: 0}, weather, rainFactor: {factor: 0.8, days: 9}});
+  assert.deepEqual([wet.days[1].cents, wet.days[1].rainFactor, wet.days[2].cents], [8000000, 0.8, 10000000], 'only from 5 mm');
+  assert.match(renderForecast(wet)[0], /zítra \(st 28\. 10\.\) 80 000 Kč \(déšť, bývá o 20 % méně\), 12 °C, déšť /);
 });

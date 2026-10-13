@@ -1,12 +1,13 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
-import {buildBriefing, type Briefing, dayPart, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
+import {buildBriefing, type Briefing, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
 import {menuChanges, menuOverview} from './menu.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
+import {czechHolidays, holidayName} from './holidays.ts';
 import {addDays, businessDate, isDate, localTime, sameClockDaysBefore, weekday} from './time.ts';
 import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-report.ts';
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
@@ -80,6 +81,9 @@ function stamp(at: Date, timeZone: string): string {
 }
 
 /** One SQLite Durable Object per venue (tenant). Nothing here is shared between venues. */
+/** The median of numbers (the middle two averaged). */
+const medianOf = (values: number[]) => { const sorted = [...values].sort((a, b) => a - b), middle = Math.floor(sorted.length / 2); return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2; };
+
 export class TenantObject extends DurableObject<Env> {
   private sql: SqlStorage;
 
@@ -295,7 +299,7 @@ export class TenantObject extends DurableObject<Env> {
       // "… a další 3" is not an item of its own: no switch.
       .map(item => item.text.startsWith('… a další') ? {...item, key: null, done: false} : {...item, key: todoKey(item.text), done: done.has(todoKey(item.text))});
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
-      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), sources: this.sources(config), menu: this.menuCard(config, day)});
+      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), sources: this.sources(config), menu: this.menuCard(config, day)});
   }
 
   /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
@@ -762,12 +766,14 @@ export class TenantObject extends DurableObject<Env> {
     const cache = new Map<string, number | null>();
     const revenue = (entry: string) => { if (!cache.has(entry)) cache.set(entry, this.dayRevenue(entry)); return cache.get(entry)!; };
     const window = Array.from({length: 28}, (_, i) => addDays(date, -i));
-    const history = Array.from({length: 7}, (_, day) => window.filter(entry => weekday(entry) === day).map(revenue).filter((value): value is number => value !== null));
+    // Public holidays are out of the weekday averages: they have their own factor.
+    const history = Array.from({length: 7}, (_, day) => window.filter(entry => weekday(entry) === day && !holidayName(entry)).map(revenue).filter((value): value is number => value !== null));
     // A weekday with no revenue in 4 weeks while at least 4 others have it counts as closed (0), so it does not blank the sums.
     const open = history.filter(values => values.length >= 2).length;
     const bases = history.map(values => !values.length && open >= 4 ? 0 : planFrom(values.map(revenueCents => ({revenueCents})))?.revenueCents ?? null);
     const average = (dates: string[]) => {
-      const values = dates.map(revenue).filter((value): value is number => value !== null);
+      // Holidays have their own factor: last year's month averages leave them out, so they do not count twice.
+      const values = dates.filter(entry => !holidayName(entry)).map(revenue).filter((value): value is number => value !== null);
       return values.length >= 20 ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
     };
     const baseLastYear = average(window.map(entry => addDays(entry, -364)));
@@ -812,7 +818,37 @@ export class TenantObject extends DurableObject<Env> {
       const made = revenue(day), base = planFrom(plain.map(revenueCents => ({revenueCents})));
       return made !== null && base && base.revenueCents > 0 ? [made / base.revenueCents] : [];
     });
-    return forecast({today, bases, seasonal, monthActual: {cents, days, missing}, bookings, weather, accuracy, events, eventFactor: eventFactor(ratios)});
+    // A day against the other same weekdays of its month (up to the reported day) that are not like it, at least 2 with revenue:
+    // the forecast's seasons go by month, so a change between months does not read as the day's own effect.
+    const against = (day: string, unlike: (entry: string) => boolean) => {
+      const plain = [-28, -21, -14, -7, 7, 14, 21, 28].map(shift => addDays(day, shift))
+        .filter(entry => entry.slice(0, 7) === day.slice(0, 7) && entry <= date && unlike(entry)).map(revenue).filter((value): value is number => value !== null);
+      const made = revenue(day), base = planFrom(plain.map(revenueCents => ({revenueCents})));
+      return made !== null && base && base.revenueCents > 0 ? made / base.revenueCents : null;
+    };
+    // Public holidays: the same holiday last year against its weekdays; without it, the median of the holidays over the past year (at least 3).
+    const plainOf = (entry: string) => !holidayName(entry) && !eventDates.has(entry);
+    const known = Array.from({length: 365}, (_, i) => addDays(date, -i)).filter(entry => holidayName(entry))
+      .map(entry => against(entry, plainOf)).filter((value): value is number => value !== null);
+    const usualHoliday = known.length >= 3 ? medianOf(known) : null;
+    const holidays: Record<string, {name: string; factor: number | null}> = {};
+    // From the 1st of the month: an elapsed day without data is estimated in the month total too.
+    for (let day = month + '-01'; day <= addDays(month + '-01', 62); day = addDays(day, 1)) {
+      const name = holidayName(day);
+      if (!name) continue;
+      // The same holiday last year by its name (Easter moves, a leap year shifts the dates).
+      const lastYear = Object.entries(czechHolidays(Number(day.slice(0, 4)) - 1)).find(([, other]) => other === name)?.[0];
+      const ratio = lastYear !== undefined && lastYear <= date ? against(lastYear, plainOf) : null;
+      const factor = ratio ?? usualHoliday;
+      holidays[day] = {name, factor: factor === null ? null : Math.round(Math.min(2, Math.max(0, factor)) * 100) / 100};
+    }
+    // Rain: past rainy days (5 mm and more, by the weather kept for each day) against their weekdays without rain, half a year back.
+    const rainy = new Set(this.sql.exec<{date: string}>("SELECT date FROM weather WHERE date BETWEEN ? AND ? AND json_extract(json, '$.rainMm') >= ?",
+      addDays(date, -182 - 56), date, RAIN_MM).toArray().map(row => row.date));
+    const rainRatios = [...rainy].filter(day => day >= addDays(date, -182) && !holidayName(day) && !eventDates.has(day))
+      .map(day => against(day, other => !rainy.has(other) && !holidayName(other) && !eventDates.has(other))).filter((value): value is number => value !== null);
+    return forecast({today, bases, seasonal, monthActual: {cents, days, missing}, bookings, weather, accuracy, events, eventFactor: eventFactor(ratios),
+      holidays, rainFactor: rainFactor(rainRatios)});
   }
 
   /** Published events of the venue over a stretch of days, earliest first (public names and times only). */
@@ -828,6 +864,20 @@ export class TenantObject extends DurableObject<Env> {
       const guests = this.placeGuests(date, event.section);
       const local = localTime(new Date(event.startsAt), config.timeZone);
       return {time: `${local.hour}:${String(local.minute).padStart(2, '0')}`, label: event.section === 'all' ? 'celý podnik' : Object.hasOwn(config.sections, event.section) ? config.sections[event.section] : event.section, title: event.title, guests};
+    });
+  }
+
+  /** Twelve weeks up to the shown day, oldest first: the week's sums and how far the morning forecasts were from the revenue. */
+  private trends(date: string) {
+    return Array.from({length: 12}, (_, i) => 11 - i).map(back => {
+      const to = addDays(date, -7 * back), from = addDays(to, -6), part = this.weekPart(from, to);
+      // The plans the morning messages gave against the revenue; a week's error shows from 4 such days.
+      // Up to the day before the shown one: its revenue may still be incomplete.
+      const rows = this.sql.exec<{day: string; cents: number}>('SELECT for_date AS day, cents FROM forecast_log WHERE horizon=0 AND for_date BETWEEN ? AND ? AND for_date < ? AND cents > 0', from, to, date).toArray()
+        .map(row => ({forecast: row.cents, actual: this.dayRevenue(row.day)})).filter((row): row is {forecast: number; actual: number} => row.actual !== null);
+      return {from, to, revenueCents: part.revenueCents, revenueDays: part.revenueDays, reservations: part.reservations, guests: part.guests, noShowGuests: part.noShowGuests,
+        visits: part.visits, webSent: part.webSent, webConfirmed: part.webConfirmed, reviews: part.reviews, starsTenths: part.starsTenths,
+        errorPermille: rows.length >= 4 ? Math.round(rows.reduce((sum, row) => sum + Math.abs(row.actual - row.forecast) / row.forecast, 0) / rows.length * 1000) : null};
     });
   }
 
@@ -1008,7 +1058,8 @@ export class TenantObject extends DurableObject<Env> {
       const days = weatherDays(await response.json(), config.timeZone);
       if (!days.length) return;
       this.ctx.storage.transactionSync(() => {
-        this.sql.exec('DELETE FROM weather WHERE date < ?', addDays(localTime(at, config.timeZone).date, -1));
+        // Past days are kept (a year): the last forecast for a day stands for its weather when rain is weighed.
+        this.sql.exec('DELETE FROM weather WHERE date < ?', addDays(localTime(at, config.timeZone).date, -400));
         for (const day of days) this.sql.exec('INSERT OR REPLACE INTO weather VALUES(?,?,?)', day.date, JSON.stringify(day), at.toISOString());
       });
     } catch (error) {
