@@ -45,6 +45,8 @@ export type Briefing = {
   pendingAhead: {count: number; guests: number; first: {date: string; time: string}} | null;
   /** Public events of the venue on the day that is starting (from the website): time, place, name and confirmed guests booked there that day. */
   events: {time: string; label: string; title: string; guests: number}[];
+  /** Guests to expect from bookings over the 7 days from the starting one, by part of the day; `null` = not for this day or no bookings yet. */
+  guestOutlook: GuestOutlook | null;
   /** The website on the reported calendar day, against the same weekday a week before. `null` = the website sent nothing. */
   web: {visits: number; withAction: number; lastWeekVisits: number | null; reservationsSent: number; reviewScans: number; topOrigins: {name: string; visits: number}[]} | null;
   /** Reviews that reached the website's admin on the reported calendar day, and how many wait there. `null` = nothing sent. */
@@ -115,7 +117,32 @@ export type Forecast = {
   /** How much an event day usually makes against its weekday's average (median of past event days, at least 4); `null` = not enough of them yet. */
   eventFactor?: {factor: number; days: number} | null;
 };
-export type Week = {from: string; to: string; current: WeekPart; previous: WeekPart; reviewsUsual?: ReviewStats | null; reviewDrop?: boolean};
+export type Week = {from: string; to: string; current: WeekPart; previous: WeekPart; reviewsUsual?: ReviewStats | null; reviewDrop?: boolean;
+  /** The week's events looked back on: guests booked that day (in the event's place) and revenue, against the same weekday without an event. */
+  events?: EventReview[]};
+export type EventReview = {date: string; title: string; guests: number; usualGuests: number | null; revenueCents: number | null; usualRevenueCents: number | null};
+/** Parts of the day for the shifts: day 6–17 h, evening 17–22 h, night 22–6 h (local time of the booking's start). */
+export const DAY_PARTS = [{key: 'day', name: 'přes den'}, {key: 'evening', name: 'večer'}, {key: 'night', name: 'noc'}] as const;
+export type DayPart = typeof DAY_PARTS[number]['key'];
+export const dayPart = (hour: number): DayPart => hour >= 6 && hour < 17 ? 'day' : hour >= 17 && hour < 22 ? 'evening' : 'night';
+/**
+ * Confirmed guests booked now per day and part of the day, and what to expect: booked now + the usual later bookings (median over
+ * the same weekday of the 8 weeks before, how many guests were booked after the same moment; at least 2 such days, else unknown).
+ */
+export type GuestOutlookDay = {date: string; booked: number; expected: number | null; parts: {key: DayPart; booked: number; expected: number | null}[]};
+export type GuestOutlook = {days: GuestOutlookDay[]; noShowGuests: number | null};
+/** The median of whole numbers, rounded. */
+export const median = (values: number[]) => {
+  const sorted = [...values].sort((a, b) => a - b), middle = Math.floor(sorted.length / 2);
+  return Math.round(sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2);
+};
+/** One day of the outlook from guests booked now and past days' {final, booked by the same moment}, per part of the day. */
+export function guestOutlookDay(date: string, now: Record<DayPart, number>, past: {final: Record<DayPart, number>; early: Record<DayPart, number>}[]): GuestOutlookDay {
+  const parts = DAY_PARTS.map(({key}) => ({key, booked: now[key],
+    expected: past.length >= 2 ? now[key] + Math.max(0, median(past.map(day => day.final[key] - day.early[key]))) : null}));
+  const booked = parts.reduce((sum, part) => sum + part.booked, 0);
+  return {date, booked, expected: past.length >= 2 ? parts.reduce((sum, part) => sum + part.expected!, 0) : null, parts};
+}
 export type MonthResult = {
   month: string; through: string; rows: {account: string; name: string; amountCents: number}[];
   revenueCents: number; revenueDays: number; error: string | null;
@@ -359,7 +386,7 @@ export function buildBriefing(input: {
   reviews?: ReviewSummary;
   week?: Week | null; silent?: {name: string; since: string}[];
   month?: Month | null; lastWeekRevenueCents?: number | null; forecast?: Forecast | null;
-  pendingAhead?: Briefing['pendingAhead']; events?: Briefing['events'];
+  pendingAhead?: Briefing['pendingAhead']; events?: Briefing['events']; guestOutlook?: Omit<GuestOutlook, 'noShowGuests'> | null;
   /** The forecast OKO1 made for this day the morning before (its "plan for today"); wins over the weekday average. */
   forecastPlanCents?: number | null;
   /** The plan the message about this day gave for the next one (kept), so an old day shows what was sent. */
@@ -450,6 +477,7 @@ export function buildBriefing(input: {
     forecast: input.forecast ?? null,
     pendingAhead: input.pendingAhead ?? null,
     events: input.events ?? [],
+    guestOutlook: guestOutlookWithNoShows(input.guestOutlook ?? null, input.noShowHistory ?? null),
     noShows: noShowRate(input.reservations ?? [], input.noShowHistory ?? null),
     unusualDiscounts: report ? unusualDiscounts(report, input.discountHistory ?? {days: 0, totals: {}}) : [],
     silent: input.silent ?? [],
@@ -501,6 +529,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderBottles(briefing));
   lines.push(...renderReservations(briefing.reservations, briefing.outlook));
   lines.push(...renderEvents(briefing.events));
+  lines.push(...renderGuestOutlook(briefing.guestOutlook));
   if (briefing.pendingAhead) lines.push(`Na příštích 7 dní ${pendingAheadText(briefing.pendingAhead)}`);
   if (noShowAlarm(briefing.noShows)) lines.push(`⚠ No-show: ${noShowText(briefing.noShows!)}`);
   lines.push(...renderForecast(briefing.forecast));
@@ -644,9 +673,35 @@ export function renderWeek(week: Briefing['week']): string[] {
   if (now.reviews) parts.push(`recenze ${now.reviews}${now.starsTenths !== null ? `, průměr ${stars(now.starsTenths)}` : ''}`);
   const lines = parts.length ? [`Týden ${shortDate(week.from)}–${shortDate(week.to)}: ${parts.join(' · ')}`] : [];
   lines.push(...renderBooking(now));
+  lines.push(...renderEventReviews(week.events));
   if (now.origins.length) lines.push('Odkud na web za týden: ' + now.origins.slice(0, 5).map(row => `${row.name} ${group(row.visits)}${row.withAction ? ` (${group(row.withAction)} s akcí)` : ''}`).join(' · '));
   if (reviewDrop(week)) lines.push(`⚠ Recenze: ${reviewDropText(week)}`);
   return lines;
+}
+
+/** Guests who usually do not come, from the expected guests of the starting day and the share over 28 days (from 50 booked guests). */
+function guestOutlookWithNoShows(outlook: Omit<GuestOutlook, 'noShowGuests'> | null, history: {confirmedGuests: number; noShowGuests: number} | null): GuestOutlook | null {
+  if (!outlook?.days.length) return null;
+  const today = outlook.days[0], guests = today.expected ?? today.booked;
+  return {...outlook, noShowGuests: history && history.confirmedGuests >= 50 && guests ? Math.round(guests * history.noShowGuests / history.confirmedGuests) : null};
+}
+
+/** "Hosté dnes: čekej asi 140 (zatím rezervováno 95) · přes den 20 · večer 70 · noc 50 · obvykle nedorazí asi 8" */
+export function renderGuestOutlook(outlook: Briefing['guestOutlook'] | undefined): string[] {
+  const today = outlook?.days[0];
+  if (!today || (!today.booked && !today.expected)) return [];
+  const parts = today.parts.filter(part => (part.expected ?? part.booked) > 0)
+    .map(part => `${DAY_PARTS.find(entry => entry.key === part.key)!.name} ${part.expected ?? part.booked}`);
+  const head = today.expected !== null ? `čekej asi ${today.expected} (zatím rezervováno ${today.booked})` : `rezervováno ${today.booked}`;
+  return [`Hosté dnes: ${[head, ...parts, outlook!.noShowGuests ? `obvykle nedorazí asi ${outlook!.noShowGuests}` : ''].filter(Boolean).join(' · ')}`];
+}
+
+/** "Akce za týden: pá 9. 10. Rock Night – 120 hostů z rezervací (obvykle 80, +50 %), tržba 150 000 Kč (obvykle 100 000 Kč)" */
+export function renderEventReviews(events: EventReview[] | undefined): string[] {
+  if (!events?.length) return [];
+  return ['Akce za týden: ' + events.map(event => `${weekdayShort[weekday(event.date)]} ${shortDate(event.date)} ${event.title} – ${event.guests} ${guestsWord(event.guests)} z rezervací`
+    + (event.usualGuests ? ` (obvykle ${event.usualGuests}, ${change(event.guests, event.usualGuests).slice(2, -1)})` : '')
+    + (event.revenueCents !== null ? `, tržba ${crowns(event.revenueCents)}${event.usualRevenueCents ? ` (obvykle ${crowns(event.usualRevenueCents)})` : ''}` : '')).join(' · ')];
 }
 
 /** "Dnes akce: 21:00 Klub – Rock Night (rezervováno 40 hostů)" */
