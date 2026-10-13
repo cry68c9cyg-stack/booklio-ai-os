@@ -866,10 +866,18 @@ try {
   assert.deepEqual([texasHistory.items.map(item => item.name), texasHistory.changes.map(change => [change.kind, change.oldText, change.newText])],
     [['Texas Burger'], [['price', '245 Kč', '259 Kč']]]);
   assert.equal((await mcp('historie_ceny', {hledat: 'pizza'})).error, true);
+  // The dashboard shows one item over 26 weeks: the price of each week (today's change in the last one) and pieces sold.
+  assert.equal((await jdBoard('GET', '/item?q=texas')).status, 401);
+  const itemTrend = await (await jdBoard('GET', '/item?q=texas', undefined, jdCookie)).json();
+  assert.deepEqual([itemTrend.item.name, itemTrend.weeks.length, itemTrend.weeks[0].priceCents, itemTrend.weeks.at(-1).priceCents, itemTrend.hasSales], ['Texas Burger', 26, 24500, 25900, false]);
+  assert.deepEqual((await (await jdBoard('GET', '/item?q=pizza', undefined, jdCookie)).json()).item, null);
+  const burgers = await (await jdBoard('GET', '/item?q=burger&id=' + encodeURIComponent(itemTrend.item.itemId), undefined, jdCookie)).json();
+  assert.ok(burgers.matches.length > 1 && burgers.item.itemId === itemTrend.item.itemId, 'a match picked by its id');
   assert.ok((await mcp('historie_ceny', {hledat: 'vodka x'})).data.changes.some(change => change.kind === 'removed'), 'a removed item is found by its name');
   const [menuYear, menuMonthNumber] = today.split('-').map(Number);
   const menuMonthEnd = addDays(menuMonthNumber === 12 ? `${menuYear + 1}-01-01` : `${menuYear}-${String(menuMonthNumber + 1).padStart(2, '0')}-01`, -1);
   assert.match((await (await call('GET', `/admin/t/james-dean/briefing?date=${menuMonthEnd}`)).json()).text, /\nLístek v [^\n]+: zdraženo 2, přidáno \d+, zrušeno \d+(\n|$)/);
+  assert.doesNotMatch((await (await call('GET', `/admin/t/james-dean/briefing?date=${menuMonthEnd}`)).json()).text, /Skoro neprodané/, 'not with bills on fewer than 14 days');
 
   // Logging everybody out ends the MCP connection too: the access token and its refresh stop working.
   assert.deepEqual(await (await call('POST', '/admin/t/james-dean/logout', {})).json(), {ended: 2});
