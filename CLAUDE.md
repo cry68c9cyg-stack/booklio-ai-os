@@ -12,3 +12,4 @@
 ## Working preferences
 
 - Po dokončení každé úlohy (nasazeno, hotovo) hned sám navrhni MC další balík několika konkrétních bodů a čekej jen na jeho „jo“; nečekej, až se zeptá „co dál“ (MC, 13. 10. 2026).
+- Každé nové pravidlo od MC zapiš přes skill Task Observer sem do „Working preferences“ (a do paměti projektu) (MC, 13. 10. 2026).
