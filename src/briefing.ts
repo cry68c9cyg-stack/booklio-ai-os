@@ -57,6 +57,10 @@ export type Briefing = {
   eventRanking: EventRank[] | null;
   /** Changes of the menu over the week (Monday message); `null` = not asked for. */
   menuWeek: MenuWeek | null;
+  /** Changes of the menu on the reported day (every message but Monday's, which has the week); a briefing stored before has none. */
+  menuDay?: MenuWeek | null;
+  /** A held menu or refused menu batches (src/worker.ts `menuProblems`); a briefing stored before has none. */
+  menuProblems?: string[];
   /** Products the POS charged that day at a price the menu did not have (src/menu.ts); a briefing stored before has none. */
   priceMismatches?: PriceMismatch[];
   /** Prices of the menu to look at (Monday message); `null` = not asked for. */
@@ -226,12 +230,12 @@ export function renderPriceCheck(check: Briefing['priceCheck']): string[] {
   if (!check?.total) return [];
   return [`Ceny k prověření: ${check.total} (${check.top.slice(0, 2).map(row => `${row.name ?? row.category} ${row.priceText} → návrh ${crowns(row.suggestedCents)}`).join(', ')}${check.total > 2 ? ', další na dashboardu' : ''})`];
 }
-export function renderMenuWeek(week: MenuWeek | null | undefined): string[] {
+export function renderMenuWeek(week: MenuWeek | null | undefined, title = 'Lístek za týden'): string[] {
   if (!week || !(week.prices.length + week.added.length + week.removed.length)) return [];
   const names = (list: string[]) => list.slice(0, 3).join(', ') + (list.length > 3 ? ` a další ${list.length - 3}` : '');
   const parts = [week.prices.length ? `nová cena ${week.prices.length}× (${names(week.prices.map(row => `${row.name} ${row.oldText ?? '?'} → ${row.newText ?? '?'}`))})` : '',
     week.added.length ? `nově ${names(week.added)}` : '', week.removed.length ? `zrušeno ${names(week.removed)}` : ''].filter(Boolean);
-  return [`Lístek za týden: ${parts.join(' · ')}`];
+  return [`${title}: ${parts.join(' · ')}`];
 }
 /** Parts of the day for the shifts: day 6–17 h, evening 17–22 h, night 22–6 h (local time of the booking's start). */
 export const DAY_PARTS = [{key: 'day', name: 'přes den'}, {key: 'evening', name: 'večer'}, {key: 'night', name: 'noc'}] as const;
@@ -542,7 +546,7 @@ export function buildBriefing(input: {
   web?: WebTraffic; webLastWeek?: WebTraffic;
   /** Visits and sent booking forms of the same weekday over the 4 weeks before (days the website sent). */
   webUsual?: {visits: number; sent: number}[];
-  eventRanking?: EventRank[] | null; menuWeek?: MenuWeek | null; priceMismatches?: PriceMismatch[]; priceCheck?: Briefing['priceCheck'];
+  eventRanking?: EventRank[] | null; menuWeek?: MenuWeek | null; menuDay?: MenuWeek | null; menuProblems?: string[]; priceMismatches?: PriceMismatch[]; priceCheck?: Briefing['priceCheck'];
   costs?: MonthResult | null; costsPrevious?: MonthResult | null; supplies?: SupplyBrief | null;
   reviews?: ReviewSummary;
   week?: Week | null; silent?: {name: string; since: string}[];
@@ -631,7 +635,7 @@ export function buildBriefing(input: {
     web: summarizeWeb(input.web, input.webLastWeek),
     webDrop: webDrop(input.web, input.webUsual),
     eventRanking: input.eventRanking ?? null,
-    menuWeek: input.menuWeek ?? null, priceMismatches: input.priceMismatches ?? [], priceCheck: input.priceCheck ?? null,
+    menuWeek: input.menuWeek ?? null, menuDay: input.menuDay ?? null, menuProblems: input.menuProblems ?? [], priceMismatches: input.priceMismatches ?? [], priceCheck: input.priceCheck ?? null,
     reviews: summarizeReviews(input.reviews),
     costs: input.costs ?? null, costsPrevious: input.costsPrevious ?? null, supplies: input.supplies ?? null,
     week: input.week ?? null,
@@ -705,6 +709,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderCosts(briefing.costs, briefing.costsPrevious));
   lines.push(...renderSupplies(briefing.supplies));
   lines.push(...renderPriceMismatches(briefing.priceMismatches));
+  lines.push(...renderMenuWeek(briefing.menuDay, 'Lístek se změnil'), ...(briefing.menuProblems ?? []).map(text => `⚠ ${text}`));
   lines.push(...renderNotes(briefing));
   // The week in a few numbers once a week, in the message about Sunday (Monday morning).
   if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceCheck(briefing.priceCheck));

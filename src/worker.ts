@@ -15,7 +15,7 @@ import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
 import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
 import {counted, overdueInvoices, priceRises, supplyBrief, supplySummary} from './supplies.ts';
 import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
-import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
+import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Batch, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
 import {dashboardWeb} from './web-views.ts';
 import {WEATHER_AGENT, WEATHER_URL, weatherDays, type WeatherDay} from './weather.ts';
@@ -62,6 +62,8 @@ const same = (a: string, b: string) => {
 
 const randomHex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
 const PREPARE_BUDGET_MS = 60000;
+/** Record types of the ingest contract; a refused batch logs only these (anything else as `other`). */
+const RECORD_TYPES = new Set(['bill', 'cash_closing', 'bottle_check', 'reservation', 'web_traffic', 'review_summary', 'event', 'menu', 'supplier_invoice']);
 const SESSION_MS = 30 * 86400000;
 /** A session renews itself on use, but never lives longer than a year from the SMS code that opened it. */
 const SESSION_MAX_MS = 365 * 86400000;
@@ -129,6 +131,14 @@ export class TenantObject extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS menu_changes(at TEXT NOT NULL, business_date TEXT NOT NULL, menu_id TEXT NOT NULL, item_id TEXT NOT NULL, name TEXT NOT NULL,
         kind TEXT NOT NULL CHECK(kind IN ('added','removed','price')), old_cents INTEGER, new_cents INTEGER, old_text TEXT, new_text TEXT);
       CREATE INDEX IF NOT EXISTS menu_changes_item ON menu_changes(item_id, at);
+      -- A menu that would drop over a tenth of the items at once waits here (a broken website?) and takes over after 24 hours.
+      CREATE TABLE IF NOT EXISTS menu_held(id TEXT PRIMARY KEY, held_at TEXT NOT NULL, version INTEGER NOT NULL, json TEXT NOT NULL, installation_id TEXT NOT NULL,
+        removed INTEGER NOT NULL, total INTEGER NOT NULL);
+      -- Prices of the menu per month, part and category (last state of the month), for the price trend.
+      CREATE TABLE IF NOT EXISTS menu_months(month TEXT NOT NULL, part TEXT NOT NULL, category TEXT NOT NULL, items INTEGER NOT NULL, avg_cents INTEGER NOT NULL,
+        PRIMARY KEY(month, part, category));
+      -- Batches OKO1 refused as not matching the contract: when, from whom, which record types (no content).
+      CREATE TABLE IF NOT EXISTS ingest_rejects(at TEXT NOT NULL, installation_id TEXT NOT NULL, code TEXT NOT NULL, types TEXT NOT NULL);
     `));
     // Wrong codes for unknown venues are counted per venue name in the shared stand-in (see `loginStub`).
     if (!this.sql.exec<{name: string}>('PRAGMA table_info(login_failures)').toArray().some(column => column.name === 'scope')) {
@@ -452,7 +462,17 @@ export class TenantObject extends DurableObject<Env> {
     const row = typeof installationId === 'string'
       ? this.sql.exec<{token_hash: string}>('SELECT token_hash FROM installations WHERE installation_id=?', installationId).toArray()[0] : undefined;
     if (!row || !token || !same(sha256(token), row.token_hash)) return failure('UNAUTHORIZED', 401);
-    const batch = validateBatch(body);
+    let batch: Batch;
+    try { batch = validateBatch(body); } catch (error) {
+      // Kept so a sender whose data OKO1 keeps refusing (a broken menu from the website) is seen, not silently lost.
+      if (error instanceof InputError) {
+        const records = (body as {records?: unknown})?.records;
+        const types = [...new Set((Array.isArray(records) ? records : []).map(record => (record as {type?: unknown})?.type).map(type => typeof type === 'string' && RECORD_TYPES.has(type) ? type : 'other'))].slice(0, 10);
+        this.sql.exec('INSERT INTO ingest_rejects VALUES(?,?,?,?)', new Date().toISOString(), installationId, error.message.slice(0, 60), types.join(','));
+        this.sql.exec("DELETE FROM ingest_rejects WHERE at < ?", new Date(Date.now() - 90 * 86400000).toISOString());
+      }
+      throw error;
+    }
     const payloadHash = sha256(JSON.stringify(batch));
     return this.ctx.storage.transactionSync(() => {
       const replay = this.sql.exec<{payload_hash: string; result: string}>('SELECT payload_hash, result FROM batches WHERE batch_id=?', batch.batchId).toArray()[0];
@@ -461,7 +481,11 @@ export class TenantObject extends DurableObject<Env> {
       let accepted = 0, stale = 0;
       // A booking first sent with counts only takes its guest details (12 Oct 2026) and the time it was made at the same version (resent once).
       for (const record of batch.records) {
-        const before = record.type === 'menu' ? this.menu(record.id) : null;
+        if (record.type === 'menu') {
+          const result = this.storeMenu(record, batch.installationId, now, false);
+          if (result === 'stale') stale++; else accepted++;
+          continue;
+        }
         const changed = this.sql.exec(`INSERT INTO records(type, id, version, business_date, register_id, json, installation_id, received_at) VALUES(?,?,?,?,?,?,?,?)
           ON CONFLICT(type, id) DO UPDATE SET version=excluded.version, business_date=excluded.business_date, register_id=excluded.register_id,
           json=excluded.json, installation_id=excluded.installation_id, received_at=excluded.received_at WHERE excluded.version > records.version
@@ -470,13 +494,6 @@ export class TenantObject extends DurableObject<Env> {
             AND (instr(excluded.json, '"guest":') > 0 OR instr(records.json, '"guest":') = 0))`,
         record.type, record.id, record.version, record.businessDate, 'registerId' in record ? record.registerId : '', JSON.stringify(record), batch.installationId, now).rowsWritten;
         if (changed) accepted++; else stale++;
-        // The first menu is the starting point; from then on every new item, removed item and new price is kept.
-        if (changed && before && record.type === 'menu') {
-          for (const change of menuChanges(before, record)) {
-            this.sql.exec('INSERT INTO menu_changes VALUES(?,?,?,?,?,?,?,?,?,?)', now, record.businessDate, record.id, change.itemId, change.name, change.kind,
-              change.oldCents, change.newCents, change.oldText, change.newText);
-          }
-        }
       }
       const result = {batchId: batch.batchId, accepted, stale};
       this.sql.exec('INSERT INTO batches VALUES(?,?,?,?,?)', batch.batchId, batch.installationId, payloadHash, JSON.stringify(result), now);
@@ -558,6 +575,85 @@ export class TenantObject extends DurableObject<Env> {
     }
   }
 
+  /**
+   * Stores a newer menu with its changes (the first one is the starting point), or holds it when it would drop more than
+   * a tenth of the items at once (at least 3): a website error must not wipe the menu. A held menu takes over after
+   * 24 hours (`releaseHeldMenu`) or is replaced by a newer menu; `force` stores it anyway, valid from `effectiveDate`
+   * (the business day it takes over, not the day the website sent it).
+   */
+  private storeMenu(record: Menu, installationId: string, now: string, force: boolean, effectiveDate = record.businessDate): 'stored' | 'held' | 'stale' {
+    const before = this.menu(record.id);
+    if (before && before.version >= record.version) return 'stale';
+    const held = this.sql.exec<{version: number}>('SELECT version FROM menu_held WHERE id=?', record.id).toArray()[0];
+    if (held && held.version >= record.version && !force) return 'stale';
+    if (before && !force) {
+      const ids = new Set(record.items.map(item => item.id)), removed = before.items.filter(item => !ids.has(item.id)).length;
+      if (removed >= 3 && removed * 10 > before.items.length) {
+        // A newer menu still without the items replaces the held one, but the 24 hours run from the first.
+        this.sql.exec(`INSERT INTO menu_held VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET version=excluded.version, json=excluded.json,
+          installation_id=excluded.installation_id, removed=excluded.removed, total=excluded.total`, record.id, now, record.version, JSON.stringify(record), installationId, removed, before.items.length);
+        return 'held';
+      }
+    }
+    this.sql.exec(`INSERT INTO records(type, id, version, business_date, register_id, json, installation_id, received_at) VALUES('menu',?,?,?,'',?,?,?)
+      ON CONFLICT(type, id) DO UPDATE SET version=excluded.version, business_date=excluded.business_date, json=excluded.json,
+      installation_id=excluded.installation_id, received_at=excluded.received_at`, record.id, record.version, effectiveDate, JSON.stringify({...record, businessDate: effectiveDate}), installationId, now);
+    this.sql.exec('DELETE FROM menu_held WHERE id=?', record.id);
+    for (const change of before ? menuChanges(before, record) : []) {
+      this.sql.exec('INSERT INTO menu_changes VALUES(?,?,?,?,?,?,?,?,?,?)', now, effectiveDate, record.id, change.itemId, change.name, change.kind,
+        change.oldCents, change.newCents, change.oldText, change.newText);
+    }
+    // The month's prices per category for the trend: the last menu of the month wins.
+    const month = effectiveDate.slice(0, 7);
+    this.sql.exec('DELETE FROM menu_months WHERE month=?', month);
+    for (const part of menuOverview(record).parts) for (const category of part.categories) {
+      this.sql.exec('INSERT INTO menu_months VALUES(?,?,?,?,?)', month, part.part, category.name, category.items, category.avgCents);
+    }
+    return 'stored';
+  }
+
+  /**
+   * A held menu that nobody replaced within 24 hours was meant: it takes over (the morning run), valid from the business
+   * day of the release, so the days before keep their old prices. A failure never stops the morning message.
+   */
+  private releaseHeldMenu(at: Date, config: TenantConfig) {
+    for (const row of this.sql.exec<{id: string; json: string; installation_id: string}>('SELECT id, json, installation_id FROM menu_held WHERE held_at <= ?', new Date(at.getTime() - 86400000).toISOString()).toArray()) {
+      try {
+        this.ctx.storage.transactionSync(() => {
+          const result = this.storeMenu(JSON.parse(row.json) as Menu, row.installation_id, at.toISOString(), true, businessDate(at, config.timeZone, config.businessDayCutoffHour));
+          if (result === 'stale') this.sql.exec('DELETE FROM menu_held WHERE id=?', row.id);
+        });
+      } catch (error) {
+        console.error('menu release failed', error instanceof Error ? error.message : 'unknown');
+      }
+    }
+  }
+
+  /** What is wrong with the menu's flow: a held menu, or menu batches refused over the last 7 days (to-do list, morning message). */
+  private menuProblems(at: Date): string[] {
+    const problems = this.sql.exec<{removed: number; total: number; held_at: string}>('SELECT removed, total, held_at FROM menu_held').toArray()
+      .map(row => `Web poslal lístek bez ${row.removed} z ${row.total} položek; OKO1 drží předchozí lístek a nový převezme ráno po 24 hodinách, jestli ho web mezitím neopraví.`);
+    const refused = this.sql.exec<{count: number; code: string}>("SELECT count(*) AS count, max(code) AS code FROM ingest_rejects WHERE at >= ? AND (',' || types || ',') LIKE '%,menu,%'",
+      new Date(at.getTime() - 7 * 86400000).toISOString()).toArray()[0];
+    if (refused.count) problems.push(`Lístek z webu OKO1 ${refused.count}× odmítlo (${refused.code}); platí poslední přijatý lístek.`);
+    return problems;
+  }
+
+  /** Average base price per part and category by month (the last 12 months with a menu); the current month from the current menu. */
+  private menuTrend() {
+    const menu = this.menu();
+    if (!menu) return null;
+    const current = menu.businessDate.slice(0, 7);
+    const rows = this.sql.exec<{month: string; part: string; category: string; avg_cents: number}>('SELECT month, part, category, avg_cents FROM menu_months WHERE month < ? ORDER BY month DESC LIMIT 2000', current).toArray();
+    const months = [...new Set(rows.map(row => row.month))].slice(0, 11).reverse().concat(current);
+    const now = menuOverview(menu);
+    return {months, categories: now.parts.flatMap(part => part.categories.map(category => {
+      const values = months.map(month => month === current ? category.avgCents : rows.find(row => row.month === month && row.part === part.part && row.category === category.name)?.avg_cents ?? null);
+      const first = values.find(value => value !== null) ?? null;
+      return {part: part.part, name: category.name, values, changePermille: first ? Math.round((category.avgCents / first - 1) * 1000) : null};
+    }))};
+  }
+
   /** The latest menu from one sender (`id`), or the latest of any sender. */
   private menu(id?: string): Menu | null {
     const row = this.sql.exec<{json: string}>(`SELECT json FROM records WHERE type='menu'${id ? ' AND id=?' : ''} ORDER BY received_at DESC LIMIT 1`, ...(id ? [id] : [])).toArray()[0];
@@ -582,7 +678,7 @@ export class TenantObject extends DurableObject<Env> {
     const findings = priceCheck(menu), sales = this.itemSales(addDays(day, -29), day);
     const profit = sales.length ? itemProfit(menu, sales, this.menuItemCosts()) : null;
     return {...menuOverview(menu), received: stamp(new Date(received), config.timeZone), changes: changes.rows, changesTotal: changes.total,
-      priceCheck: {findings: findings.slice(0, 10), total: findings.length},
+      priceCheck: {findings: findings.slice(0, 10), total: findings.length}, trend: this.menuTrend(), problems: this.menuProblems(new Date()),
       matrix: profit ? menuMatrix(menu, profit, this.newMenuItems(addDays(day, -29), day)).map(part => ({...part, classes: part.classes.map(row => ({...row, count: row.items.length, items: row.items.slice(0, 5)}))})) : null,
       experiments: profit ? this.priceExperiments(day, 5) : null,
       profit: profit && {from: addDays(day, -29), to: day, items: profit.items.slice(0, 10), itemsTotal: profit.items.length, unpaired: profit.unpaired.slice(0, 5),
@@ -1152,9 +1248,9 @@ export class TenantObject extends DurableObject<Env> {
     try { return rankEvents(this.eventReviews(addDays(date, -181), date)); } finally { this.revenueMemo = outer; }
   }
 
-  /** The menu's changes over the 7 days up to a day (Monday message). */
-  private menuWeek(date: string): MenuWeek | null {
-    const rows = this.menuChangesBetween(addDays(date, -6), date, 500).rows;
+  /** The menu's changes over the 7 days (Monday message) or the one day (other days) up to a day. */
+  private menuWeek(date: string, days = 7): MenuWeek | null {
+    const rows = this.menuChangesBetween(addDays(date, 1 - days), date, 500).rows;
     if (!rows.length) return null;
     // Newest first: an item priced twice in the week shows once, from its first old price to its latest one.
     const prices = new Map<string, {name: string; oldText: string | null; newText: string | null}>();
@@ -1307,7 +1403,8 @@ export class TenantObject extends DurableObject<Env> {
       ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast: this.forecast(date), pendingAhead: this.pendingAhead(config, date, now), events: this.todayEvents(config, addDays(date, 1)), guestOutlook,
       // The ranking only when it is shown: tips for weak days, and the message about a month's last day.
       eventRanking: guestOutlook?.days.some(day => day.weak) || addDays(date, 1).endsWith('-01') ? this.eventRanking(date) : null,
-      menuWeek: weekday(date) === 0 ? this.menuWeek(date) : null, priceMismatches: this.priceMismatchesOn(date),
+      menuWeek: weekday(date) === 0 ? this.menuWeek(date) : null, menuDay: weekday(date) === 0 ? null : this.menuWeek(date, 1), priceMismatches: this.priceMismatchesOn(date),
+      menuProblems: this.menuProblems(now),
       priceCheck: weekday(date) === 0 ? this.priceCheckSummary() : null,
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
       supplies: this.supplyBriefFor(config, date),
@@ -1326,6 +1423,7 @@ export class TenantObject extends DurableObject<Env> {
   async tick(at: Date, tenant: string) {
     const config = this.config();
     if (!config) return {decision: 'not-configured'};
+    this.releaseHeldMenu(at, config);
     const date = reportDate(at, config.timeZone, config.businessDayCutoffHour);
     const sent = this.sql.exec<{status: string}>("SELECT status FROM briefings WHERE business_date=? AND status IN ('stored','delivered')", date).toArray().length > 0;
     const hour = localHour(at, config.timeZone);
