@@ -2,7 +2,8 @@
  * OAuth for the MCP server (/mcp, docs/web-v1.md), with @cloudflare/workers-oauth-provider and the KV OAUTH_KV.
  * Connecting Claude: the person types the venue and their phone, gets the same SMS code as for the dashboard (same
  * numbers, limits and validity) and the code opens a dashboard-like session. The OAuth grant carries the venue and
- * that session: every MCP request and every token refresh checks that the session still lives, so 30 days, a change
+ * that session: every MCP request and every token refresh checks that the session still lives (and so renews it to 30
+ * days from now, at most a year from the code), so a month without use, a year, a change
  * of the allowed phones or POST /admin/t/{tenant}/logout end the connection too.
  */
 import {AuthorizationError, OAuthError, type OAuthHelpers, type OAuthProviderOptions} from '@cloudflare/workers-oauth-provider';
@@ -13,8 +14,8 @@ import type {Env, TenantObject} from './worker.ts';
 export const MCP_PATH = '/mcp';
 export const AUTHORIZE_PATH = '/oauth/authorize';
 const ACCESS_TOKEN_S = 60 * 60;
-/** The same 30 days as a dashboard session: the connection cannot outlive the login it came from. */
-const REFRESH_TOKEN_S = 30 * 24 * 60 * 60;
+/** The session's longest life (a year); the session itself ends the connection after a month without use. */
+const REFRESH_TOKEN_S = 365 * 24 * 60 * 60;
 const CLIENT_REGISTRATION_S = 180 * 24 * 60 * 60;
 const MAX_FORM = 4096;
 const SESSION_ENDED = 'The OKO1 login has ended, connect again.';
@@ -124,7 +125,7 @@ function codeStep(view: Page): string {
   <label for="kod">Kód z SMS</label><input id="kod" name="kod" inputmode="numeric" autocomplete="one-time-code" maxlength="6" minlength="6" pattern="[0-9]{6}" required autofocus>
   <button>Připojit</button>
   ${view.sent ? '<p class="muted">Pokud má číslo přístup, kód je na cestě.</p>' : ''}
-  <p class="muted" data-countdown data-expires-in="${expiresIn}" data-retry-after="${retryAfter}"><span data-left>${still}</span> Připojení pak vydrží 30 dní.</p>
+  <p class="muted" data-countdown data-expires-in="${expiresIn}" data-retry-after="${retryAfter}"><span data-left>${still}</span> Připojení se pak při každém použití prodlouží o 30 dní.</p>
   <p class="warn" role="alert">${escape(view.error ?? '')}</p>
 </form>
 <form method="post" class="again">

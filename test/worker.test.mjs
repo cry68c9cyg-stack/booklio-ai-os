@@ -667,6 +667,16 @@ try {
   assert.equal(jdSent.status, 200);
   const boardCode = texts.at(-1).match(/(\d{6})/)[1];
   const jdCookie = {cookie: (await jdBoard('POST', '/verify', {code: boardCode})).headers.get('set-cookie').split(';')[0]};
+  // Each visit renews the session to 30 days from now (and the cookie with it), at most a year from the code.
+  const renewedCookie = (await jdBoard('GET', '/data', undefined, jdCookie)).headers.get('set-cookie');
+  assert.match(renewedCookie, /^oko1_session=[a-f0-9]+; Path=\/d\/james-dean; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000$/);
+  const jdObject = jdTenants.get(jdTenants.idFromName('james-dean'));
+  const jdToken = jdCookie.cookie.split('=')[1], loginAt = Date.now(), oneDay = 86400000;
+  assert.equal(await jdObject.validSession(jdToken, loginAt + 29 * oneDay), true);
+  assert.equal(await jdObject.validSession(jdToken, loginAt + 58 * oneDay), true, 'used within 30 days, so still logged in');
+  for (let d = 87; d <= 348; d += 29) assert.equal(await jdObject.validSession(jdToken, loginAt + d * oneDay), true);
+  assert.equal(await jdObject.validSession(jdToken, loginAt + 364 * oneDay), true);
+  assert.equal(await jdObject.validSession(jdToken, loginAt + 366 * oneDay), false, 'never longer than a year from the code');
   const card = (await (await jdBoard('GET', '/web', undefined, jdCookie)).json()).card;
   assert.equal(card.name, 'Web James Dean');
   assert.deepEqual(card.reservations.map(row => [row.cas, row.jmeno, row.stoly, row.stav]), [['19:00', guestName, ['p4', 'p5'], 'potvrzena'], ['22:00', 'Petr Synteticky', ['kA'], 'nova']]);

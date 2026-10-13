@@ -54,7 +54,7 @@ ${LOGIN_CSS}
         <label for="code">Kód z SMS</label><input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" minlength="6" pattern="[0-9]{6}" required>
         <button>Přihlásit</button>
         <p id="loginMsg" class="muted" role="status"></p>
-        <p class="muted"><span id="codeLeft" role="timer">Platí 10 minut.</span> Přihlášení pak vydrží 30 dní.</p>
+        <p class="muted"><span id="codeLeft" role="timer">Platí 10 minut.</span> Přihlášení se pak při každé návštěvě prodlouží o 30 dní.</p>
         <p id="loginErr" class="warn" role="alert"></p>
       </form>
       <form id="againForm" class="again"><button class="secondary" id="again">Poslat kód znovu</button></form>
