@@ -226,7 +226,8 @@ function menuInterestCard(weeks) {
   const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.', num = v => String(v).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ' ');
   const share = (a, b) => b ? Math.round(a / b * 100) + ' %' : '–';
   const language = (w, key) => share((w.languages.find(l => l.key === key) || {visits: 0}).visits, w.visits);
-  const rows = weeks.slice().reverse().filter(w => w.days).map((w, i, all) => {
+  const rows = weeks.slice().reverse().map((w, i, all) => {
+    if (!w.days) return '';
     const prev = all[i + 1], arrow = prev && prev.days === 7 && w.days === 7 ? (w.visits > prev.visits * 1.05 ? ' <span class="muted">↑</span>' : w.visits < prev.visits * 0.95 ? ' <span class="muted">↓</span>' : '') : '';
     return '<tr><td>' + esc(short(w.from)) + '–' + esc(short(w.to)) + (w.days < 7 ? ' <span class="muted">(' + w.days + ' d)</span>' : '') + '</td>' +
       '<td class="n">' + num(w.visits) + arrow + '</td><td class="n">' + num(w.food) + ' / ' + num(w.drinks) + '</td><td class="n">' + share(w.abroad, w.visits) + '</td>' +

@@ -229,10 +229,10 @@ test('menu interest on the website: weekly sums of the days that carry it, the M
   assert.deepEqual(week, {from: '2026-10-05', to: '2026-10-11', days: 2, visits: 120, abroad: 70, reserved: 4, food: 240, drinks: 120,
     languages: [{key: 'cs', visits: 50, reserved: 2}, {key: 'en', visits: 50, reserved: 2}, {key: 'de', visits: 20, reserved: 0}]}, 'the first record of a day only, a day without menu not counted');
   assert.deepEqual(renderMenuInterest({current: week, previous: sumMenuInterest([], '2026-09-28', '2026-10-04')}),
-    ['Lístek na webu za týden (2 dny s daty): otevřela si ho 120 návštěv, 58 % ze zahraničí; jazyk webu česky 42 %, anglicky 42 %, německy 17 %; z nich rezervaci poslalo 4 (3,3 %)']);
+    ['Lístek na webu za týden (2 dny s daty): otevřelo si ho 120 návštěv, 58 % ze zahraničí; jazyk webu česky 42 %, anglicky 42 %, německy 17 %; z nich rezervaci poslaly 4 (3,3 %)']);
   const full = {...week, days: 7}, before = {...week, days: 7, visits: 100};
-  assert.match(renderMenuInterest({current: full, previous: before})[0], /^Lístek na webu za týden: otevřela si ho 120 návštěv \(\+20 % proti minulému týdnu\), /);
-  assert.match(renderMenuInterest({current: {...full, visits: 3, abroad: 0, reserved: 0, languages: []}, previous: {...before, days: 6}})[0], /^Lístek na webu za týden: otevřela si ho 3 návštěvy, 0 % ze zahraničí; z nich rezervaci poslalo 0 \(0,0 %\)$/);
+  assert.match(renderMenuInterest({current: full, previous: before})[0], /^Lístek na webu za týden: otevřelo si ho 120 návštěv \(\+20 % proti minulému týdnu\), /);
+  assert.match(renderMenuInterest({current: {...full, visits: 3, abroad: 0, reserved: 0, languages: [{key: 'neznamy', visits: 3, reserved: 0}]}, previous: {...before, days: 6}})[0], /^Lístek na webu za týden: otevřely si ho 3 návštěvy, 0 % ze zahraničí; z nich rezervaci poslalo 0 \(0,0 %\)$/);
   assert.deepEqual(renderMenuInterest({current: sumMenuInterest([day('2026-10-06')], '2026-10-05', '2026-10-11'), previous: before}), []);
   assert.deepEqual(renderMenuInterest(null), []);
   const config = validateConfig({name: 'Test', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9], registers: ['bar'], sections: {bar: 'Bar'}, recipients: []});

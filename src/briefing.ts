@@ -307,6 +307,7 @@ export function sumMenuInterest(records: {businessDate: string; menu?: WebMenuIn
   return sum;
 }
 export const LANGUAGE_NAMES: Record<string, string> = {cs: 'česky', en: 'anglicky', de: 'německy'};
+const verb = (n: number, stem: string) => stem + (n === 1 ? 'a' : n >= 2 && n <= 4 ? 'y' : 'o');
 const percentOf = (part: number, whole: number) => `${Math.round(part / whole * 100)} %`;
 /** The Monday line: visits that opened the menu, from abroad, the website's languages and how many sent a reservation in that visit. */
 export function renderMenuInterest(interest: Briefing['menuInterest']): string[] {
@@ -314,12 +315,12 @@ export function renderMenuInterest(interest: Briefing['menuInterest']): string[]
   if (!now?.days || !now.visits) return [];
   const days = now.days < 7 ? ` (${now.days} ${now.days === 1 ? 'den' : now.days <= 4 ? 'dny' : 'dní'} s daty)` : '';
   const change = now.days === 7 && before?.days === 7 && before.visits ? Math.round((now.visits / before.visits - 1) * 100) : null;
-  const languages = now.languages.filter(row => row.visits).slice(0, 3).map(row => `${LANGUAGE_NAMES[row.key] ?? row.key} ${percentOf(row.visits, now.visits)}`);
+  const languages = now.languages.filter(row => row.visits && row.key !== 'neznamy').slice(0, 3).map(row => `${LANGUAGE_NAMES[row.key] ?? row.key} ${percentOf(row.visits, now.visits)}`);
   const rate = (Math.round(now.reserved / now.visits * 1000) / 10).toFixed(1).replace('.', ',');
-  return [`Lístek na webu za týden${days}: otevřela si ho ${now.visits} ${visitsWord(now.visits)}` +
+  return [`Lístek na webu za týden${days}: ${verb(now.visits, 'otevřel')} si ho ${now.visits} ${visitsWord(now.visits)}` +
     (change === null ? '' : ` (${change === 0 ? '±0' : (change > 0 ? '+' : '−') + Math.abs(change)} % proti minulému týdnu)`) +
     `, ${percentOf(now.abroad, now.visits)} ze zahraničí` + (languages.length ? `; jazyk webu ${languages.join(', ')}` : '') +
-    `; z nich rezervaci poslalo ${now.reserved} (${rate} %)`];
+    `; z nich rezervaci ${verb(now.reserved, 'poslal')} ${now.reserved} (${rate} %)`];
 }
 export function renderMenuWeek(week: MenuWeek | null | undefined, title = 'Lístek za týden'): string[] {
   if (!week || !(week.prices.length + week.added.length + week.removed.length)) return [];
