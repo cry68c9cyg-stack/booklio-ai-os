@@ -473,7 +473,8 @@ export class TenantObject extends DurableObject<Env> {
    */
   private menuForPos(token: string | null, query: Record<string, string>): Result {
     if (!this.paired(query.installationId, token)) return failure('UNAUTHORIZED', 401);
-    const menu = this.menu();
+    // The website's menu (another sender, e.g. a test, never replaces it for the POS).
+    const menu = this.menu('menu-web') ?? this.menu();
     if (!menu) return ok({menu: null});
     if (query.since !== undefined && query.since === String(menu.version)) return ok({menu: null, unchanged: true, version: menu.version});
     const received = this.sql.exec<{at: string}>("SELECT received_at AS at FROM records WHERE type='menu' AND id=?", menu.id).toArray()[0].at;

@@ -73,9 +73,9 @@ export function volumeOf(name: string): number | null {
   return found ? Math.round(Number(found[1].replace(',', '.')) * UNIT_ML[found[2] as keyof typeof UNIT_ML]) : null;
 }
 /** Words of a drinks category, group or name that make it alcohol (21 % VAT). */
-const ALCOHOL = /\b(vin[ao]?\b|sumiv|destilat|piv[oa]\b|cider|champagne|sampan|liker|rum\b|gin\b|vodk|tequil|whisk|bourbon|cognac|brandy|aperitiv|sekt\b|prosecco|absint|slivovic)/;
+const ALCOHOL = /\b(vin[ao]?\b|wine|sumiv|destilat|lihovin|alkohol|spirit|piv[oa]\b|beer|cider|champagne|sampan|liker|rum\b|gin\b|vodk|tequil|whisk|bourbon|cognac|brandy|aperitiv|aperol|spritz|hugo\b|mojito|cuba libre|sekt\b|prosecco|absint|slivovic|fernet|becher|grog|svarak|irsk|irish)/;
 /** Words that make a drink non-alcoholic whatever its category says. */
-const SOFT = /\b(nealko|virgin|non alcoholic|alcohol free|bez alkoholu|0 0)/;
+const SOFT = /\b(nealko|virgin|non alcoholic|alcohol free|bez alkoholu|0 0|zazvorove pivo|ginger beer|root beer)/;
 
 /**
  * What kind of item it is for the POS and its Czech VAT rate in whole percent: food and non-alcoholic drinks 12 %
@@ -146,7 +146,12 @@ export function itemProfit(menu: Menu, sales: ItemSale[], unitCosts: Map<string,
   for (const sale of sales) {
     const pairing = pairSale(menu, sale);
     const item = pairing && items.get(pairing.itemId);
-    if (!item) { unpaired.push({name: sale.name, productId: sale.productId, quantity: sale.quantity, grossCents: sale.grossCents}); continue; }
+    if (!item) {
+      // Lines of one product sent with and without a menu item id are still one unpaired product.
+      const same = unpaired.find(row => (row.productId ?? row.name) === (sale.productId ?? sale.name));
+      if (same) { same.quantity += sale.quantity; same.grossCents += sale.grossCents; } else unpaired.push({name: sale.name, productId: sale.productId, quantity: sale.quantity, grossCents: sale.grossCents});
+      continue;
+    }
     const row = rows.get(item.id) ?? {itemId: item.id, name: item.name, part: item.part, category: item.category, menuPrice: priceText(item), quantity: 0, grossCents: 0, netCents: 0,
       unitCostCents: unitCosts.get(item.id) ?? null, costCents: null, profitCents: null, posNames: []};
     row.quantity += sale.quantity; row.grossCents += sale.grossCents;
@@ -311,7 +316,10 @@ export function priceMismatches(menu: Menu, lines: {name: string; menuItemId?: s
     const known = [...item.pricesCents, ...(earlierCents.get(item.id) ?? [])];
     if ([...prices.keys()].every(unit => known.every(cents => Math.abs(cents - unit) >= 100))) {
       const menuCents = [...item.pricesCents].sort((a, b) => Math.abs(a - posCents) - Math.abs(b - posCents))[0];
-      found.push({itemId: item.id, name: item.name, posName, posCents, menuText: priceText(item), menuCents, quantity});
+      // The same product sent with and without its menu item id is one row.
+      const same = found.find(row => row.itemId === item.id && row.posName === posName);
+      if (same) { same.quantity += quantity; if (Math.abs(posCents - menuCents) > Math.abs(same.posCents - same.menuCents)) Object.assign(same, {posCents, menuCents}); }
+      else found.push({itemId: item.id, name: item.name, posName, posCents, menuText: priceText(item), menuCents, quantity});
     }
   }
   const weight = (row: PriceMismatch) => row.quantity * Math.abs(row.posCents - row.menuCents);
