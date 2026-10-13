@@ -515,6 +515,18 @@ try {
     menuItem('food:dezerty:pie', 'food', 'Dezerty', 'Apple Pie', [14500])]);
   assert.deepEqual(await (await jdIngest('batch-menu-2', [secondMenu])).json(), {batchId: 'batch-menu-2', accepted: 1, stale: 0});
   assert.deepEqual(await (await jdIngest('batch-menu-3', [firstMenu])).json(), {batchId: 'batch-menu-3', accepted: 0, stale: 1}, 'an older menu changes nothing');
+  // The menu for the POS (Pexeso takes it over): only a paired installation, with each item's kind and VAT rate; `since` = nothing new.
+  const posMenu = (query, auth = 'Bearer ' + token) => call('GET', `/v1/t/james-dean/menu?${query}`, undefined, auth);
+  assert.equal((await posMenu('installationId=pos-installation-1', null)).status, 401);
+  assert.equal((await posMenu('installationId=pos-installation-1', 'Bearer ' + 'b'.repeat(64))).status, 401);
+  assert.equal((await posMenu('installationId=pos-installation-2')).status, 401);
+  assert.equal((await call('POST', '/v1/t/james-dean/menu?installationId=pos-installation-1', {}, 'Bearer ' + token)).status, 405);
+  const forPos = (await (await posMenu('installationId=pos-installation-1')).json()).menu;
+  assert.deepEqual([forPos.version, forPos.businessDate, typeof forPos.receivedAt, forPos.notes.length], [2, today, 'string', 1]);
+  assert.deepEqual(forPos.items.map(item => [item.id, item.pricesCents, item.kind, item.vatRate]), [['food:burgery:classic', [22500, 26500], 'food', 12],
+    ['food:burgery:texas', [25900], 'food', 12], ['drinks:kava:espresso', [6200], 'soft', 12], ['food:dezerty:pie', [14500], 'food', 12]]);
+  assert.deepEqual(await (await posMenu('installationId=pos-installation-1&since=2')).json(), {menu: null, unchanged: true, version: 2});
+  assert.equal((await (await posMenu('installationId=pos-installation-1&since=1')).json()).menu.version, 2);
   // Supplier invoices (interim from Dishboard, synthetic): an older purchase, a dearer one now and an unpaid invoice past its due date.
   const invoice = (id, businessDate, items, extra = {}) => ({type: 'supplier_invoice', id, version: 1, businessDate, source: 'dishboard', supplier: 'Velkoobchod <Test>',
     netCents: items.reduce((sum, item) => sum + item.netCents, 0), grossCents: Math.round(items.reduce((sum, item) => sum + item.netCents, 0) * 1.12), kind: 'food', items, ...extra});
@@ -697,6 +709,13 @@ try {
   assert.deepEqual(sold.items.map(row => [row.itemId, row.quantity, row.grossCents, row.netCents, row.profitCents]), [['food:burgery:classic', 4, 89600, 80000, null]]);
   assert.deepEqual([sold.unpaired.map(row => row.name), sold.totals.pairedPermille, sold.missing], [['Burger', 'Tonic 0,25 l'], 481, ['food cost za kus (nákupní ceny a receptury)']]);
   assert.equal((await mcp('vydelek_polozek', {od: today, do: addDays(today, -1)})).error, true);
+  // A POS line linked to a menu item (`menuItemId`) pairs by it whatever its name; an id no longer on the menu falls back to the name.
+  const linkedDay = addDays(today, 800);
+  assert.equal((await jdIngest('batch-linked-0', [{...bill('jd-linked', 1, 25900, linkedDay), items: [{name: 'X', quantity: 1, totalCents: 25900, menuItemId: 'bad id'}]}])).status, 400);
+  assert.equal((await jdIngest('batch-linked-1', [{...bill('jd-linked', 1, 48400, linkedDay), items: [{name: 'Texaský s hranolky', quantity: 1, totalCents: 25900, vatRate: 12, menuItemId: 'food:burgery:texas'},
+    {name: 'Classic Burger', quantity: 1, totalCents: 22500, vatRate: 12, menuItemId: 'food:burgery:gone'}], payments: [{method: 'card', amountCents: 48400}]}])).status, 200);
+  const linked = (await mcp('vydelek_polozek', {od: linkedDay, do: linkedDay})).data;
+  assert.deepEqual([linked.items.map(row => [row.itemId, row.quantity, row.posNames]), linked.unpaired.length], [[['food:burgery:texas', 1, ['Texaský s hranolky']], ['food:burgery:classic', 1, ['Classic Burger']]], 0]);
   // A discount on the whole bill falls on its lines in proportion to what was paid.
   assert.equal((await jdIngest('batch-jd-pos-2', [{...bill('jd-pos-2', 1, 20160, soldDay), discountCents: 2240, items: [{name: 'Classic Burger', productId: 'pos-classic', quantity: 1, totalCents: 22400, vatRate: 12}]}])).status, 200);
   assert.deepEqual((await mcp('vydelek_polozek', {od: addDays(today, -6), do: today})).data.items.map(row => [row.quantity, row.grossCents, row.netCents]), [[5, 109760, 98000]]);

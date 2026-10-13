@@ -72,23 +72,44 @@ export function volumeOf(name: string): number | null {
   const found = lower.match(/(\d+(?:[.,]\d+)?)\s*(ml|cl|dl|l)\b/);
   return found ? Math.round(Number(found[1].replace(',', '.')) * UNIT_ML[found[2] as keyof typeof UNIT_ML]) : null;
 }
+/** Words of a drinks category, group or name that make it alcohol (21 % VAT). */
+const ALCOHOL = /\b(vin[ao]?\b|sumiv|destilat|piv[oa]\b|cider|champagne|sampan|liker|rum\b|gin\b|vodk|tequil|whisk|bourbon|cognac|brandy|aperitiv|sekt\b|prosecco|absint|slivovic)/;
+/** Words that make a drink non-alcoholic whatever its category says. */
+const SOFT = /\b(nealko|virgin|non alcoholic|alcohol free|bez alkoholu|0 0)/;
+
+/**
+ * What kind of item it is for the POS and its Czech VAT rate in whole percent: food and non-alcoholic drinks 12 %
+ * (catering), alcohol 21 %. A guess from the part, category, group and name of the menu; the POS shows it before using it.
+ */
+export function menuItemTax(item: Pick<MenuItem, 'part' | 'category' | 'group' | 'name'>): {kind: 'food' | 'soft' | 'alcohol'; vatRate: 12 | 21} {
+  if (item.part === 'food') return {kind: 'food', vatRate: 12};
+  const words = nameKey(`${item.category} ${item.group ?? ''} ${item.name}`);
+  if (SOFT.test(words)) return {kind: 'soft', vatRate: 12};
+  // A cocktail is alcohol unless said otherwise; other drinks only by their category, group or name.
+  return item.part === 'cocktails' || ALCOHOL.test(words) ? {kind: 'alcohol', vatRate: 21} : {kind: 'soft', vatRate: 12};
+}
+
 /** Short words that say nothing about the dish ("Kuře na grilu" and "Kuře na pepři" share only "kuře"). */
 const FILLER = new Set(['na', 'se', 'ze', 'po', 'do', 'od', 'pro', 'bez', 'and', 'with', 'the']);
 const wordsOf = (key: string) => new Set(key.split(' ').filter(word => word.length > 1 && !FILLER.has(word)));
 
 /** One product sold over some days, as the POS bills have it (sum over all bills). */
 export type ItemSale = {key: string; productId: string | null; name: string; quantity: number; grossCents: number;
+  /** The menu item the POS linked the product to (docs/ingest-v1.md), else null. */
+  menuItemId?: string | null;
   /** Revenue without VAT; null when some line came without the VAT rate. */
   netCents: number | null};
-export type Pairing = {itemId: string; how: 'name' | 'similar'} | null;
+export type Pairing = {itemId: string; how: 'id' | 'name' | 'similar'} | null;
 
 /**
- * Which menu item a POS product is (OKO1 pairs them itself, the web's ids are not in the POS): the same name, and among
+ * Which menu item a POS product is. A POS that knows the menu (Pexeso takes it over from OKO1) sends the item's id with
+ * each line; an id still on the menu wins. Otherwise OKO1 pairs by name: the same name, and among
  * items of that name (sizes) the same volume, else the price closest to what the product sold for. A name that is not
  * the same is paired only when all words of one name are in the other, they share at least 60 % of their words and
  * no other dish comes within 0.2 of that. Otherwise unpaired: a wrong pair is worse than none.
  */
-export function pairSale(menu: Menu, sale: Pick<ItemSale, 'name' | 'quantity' | 'grossCents'>): Pairing {
+export function pairSale(menu: Menu, sale: Pick<ItemSale, 'name' | 'quantity' | 'grossCents' | 'menuItemId'>): Pairing {
+  if (sale.menuItemId && menu.items.some(item => item.id === sale.menuItemId)) return {itemId: sale.menuItemId, how: 'id'};
   const key = nameKey(sale.name), volume = volumeOf(sale.name), unitCents = sale.quantity ? sale.grossCents / sale.quantity : 0;
   const closest = (items: MenuItem[]) => {
     const byVolume = volume === null ? [] : items.filter(item => item.volumeMl === volume);
@@ -272,18 +293,20 @@ export type PriceMismatch = {itemId: string; name: string; posName: string; posC
  * pieces were sold at. Less than 1 Kč apart counts as the same, so happy hour, staff prices and extras next to the
  * menu price raise nothing; a discount on the whole bill is not part of the line's price.
  */
-export function priceMismatches(menu: Menu, lines: {name: string; unitCents: number; quantity: number}[], earlierCents: Map<string, number[]>): PriceMismatch[] {
-  const byName = new Map<string, Map<number, number>>();
+export function priceMismatches(menu: Menu, lines: {name: string; menuItemId?: string | null; unitCents: number; quantity: number}[], earlierCents: Map<string, number[]>): PriceMismatch[] {
+  // One product = its name and the menu item the POS linked it to (none when the POS does not link).
+  const byName = new Map<string, {posName: string; menuItemId: string | null; prices: Map<number, number>}>();
   for (const line of lines) {
-    const prices = byName.get(line.name) ?? new Map<number, number>();
-    prices.set(line.unitCents, (prices.get(line.unitCents) ?? 0) + line.quantity);
-    byName.set(line.name, prices);
+    const key = JSON.stringify([line.name, line.menuItemId ?? null]);
+    const product = byName.get(key) ?? {posName: line.name, menuItemId: line.menuItemId ?? null, prices: new Map<number, number>()};
+    product.prices.set(line.unitCents, (product.prices.get(line.unitCents) ?? 0) + line.quantity);
+    byName.set(key, product);
   }
   const items = new Map(menu.items.map(item => [item.id, item])), found: PriceMismatch[] = [];
-  for (const [posName, prices] of byName) {
+  for (const {posName, menuItemId, prices} of byName.values()) {
     const [posCents] = [...prices].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0];
     const quantity = [...prices.values()].reduce((sum, count) => sum + count, 0);
-    const pairing = pairSale(menu, {name: posName, quantity: 1, grossCents: posCents}), item = pairing && items.get(pairing.itemId);
+    const pairing = pairSale(menu, {name: posName, menuItemId, quantity: 1, grossCents: posCents}), item = pairing && items.get(pairing.itemId);
     if (!item || !posCents) continue;
     const known = [...item.pricesCents, ...(earlierCents.get(item.id) ?? [])];
     if ([...prices.keys()].every(unit => known.every(cents => Math.abs(cents - unit) >= 100))) {

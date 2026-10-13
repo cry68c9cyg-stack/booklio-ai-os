@@ -4,7 +4,7 @@ import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
 import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, type MenuMonth, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
-import {itemProfit, menuChanges, menuMatrix, menuOverview, nameKey, PART_NAMES, pairSale, priceText, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
+import {itemProfit, menuChanges, menuItemTax, menuMatrix, menuOverview, nameKey, PART_NAMES, pairSale, priceText, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
 import {czechHolidays, holidayName} from './holidays.ts';
@@ -157,6 +157,7 @@ export class TenantObject extends DurableObject<Env> {
   async handle(tenant: string, route: string, method: string, body: unknown, token: string | null, query: Record<string, string>): Promise<Result> {
     try {
       if (route === 'v1/ingest' && method === 'POST') return this.ingest(tenant, body, token);
+      if (route === 'v1/menu' && method === 'GET') return this.menuForPos(token, query);
       if (route === 'admin/report' && method === 'PUT') return ok(this.saveReport(validateDailyReport(body)));
       if (route === 'admin/report' && method === 'GET') return isDate(query.date) ? ok({report: this.report(query.date), notes: this.notes(query.date)}) : failure('INVALID_REQUEST', 400);
       if (route === 'admin/fetch' && method === 'POST') {
@@ -459,11 +460,30 @@ export class TenantObject extends DurableObject<Env> {
     };
   }
 
-  private ingest(tenant: string, body: unknown, token: string | null): Result {
-    const installationId = (body as {installationId?: unknown})?.installationId;
+  /** A paired installation (the POS) and its token, as the ingest checks them. */
+  private paired(installationId: unknown, token: string | null) {
     const row = typeof installationId === 'string'
       ? this.sql.exec<{token_hash: string}>('SELECT token_hash FROM installations WHERE installation_id=?', installationId).toArray()[0] : undefined;
-    if (!row || !token || !same(sha256(token), row.token_hash)) return failure('UNAUTHORIZED', 401);
+    return !!row && !!token && same(sha256(token), row.token_hash);
+  }
+
+  /**
+   * The menu for the POS (docs/ingest-v1.md, „Lístek pro pokladnu“): the latest menu with each item's kind and VAT rate,
+   * so Pexeso takes it over and offers price changes. `since` = the version the POS has; the same one returns no items.
+   */
+  private menuForPos(token: string | null, query: Record<string, string>): Result {
+    if (!this.paired(query.installationId, token)) return failure('UNAUTHORIZED', 401);
+    const menu = this.menu();
+    if (!menu) return ok({menu: null});
+    if (query.since !== undefined && query.since === String(menu.version)) return ok({menu: null, unchanged: true, version: menu.version});
+    const received = this.sql.exec<{at: string}>("SELECT received_at AS at FROM records WHERE type='menu' AND id=?", menu.id).toArray()[0].at;
+    return ok({menu: {version: menu.version, businessDate: menu.businessDate, receivedAt: received,
+      items: menu.items.map(item => ({...item, ...menuItemTax(item)})), notes: menu.notes}});
+  }
+
+  private ingest(tenant: string, body: unknown, token: string | null): Result {
+    const installationId = (body as {installationId?: unknown})?.installationId;
+    if (!this.paired(installationId, token)) return failure('UNAUTHORIZED', 401);
     let batch: Batch;
     try { batch = validateBatch(body); } catch (error) {
       // Kept so a sender whose data OKO1 keeps refusing (a broken menu from the website) is seen, not silently lost.
@@ -694,16 +714,18 @@ export class TenantObject extends DurableObject<Env> {
    */
   private itemSales(from: string, to: string): ItemSale[] {
     // `product` and not `key`, `bill` and not `json`: json_each has columns of those names.
-    return this.sql.exec<{product: string; product_id: string | null; name: string; quantity: number; gross_cents: number; net: number | null; without_vat: number}>(`
+    // A product linked to a menu item by the POS (`menuItemId`) is counted per item it was linked to when sold.
+    return this.sql.exec<{product: string; product_id: string | null; menu_item_id: string | null; name: string; quantity: number; gross_cents: number; net: number | null; without_vat: number}>(`
       SELECT coalesce(json_extract(i.value, '$.productId'), 'name:' || json_extract(i.value, '$.name')) AS product, max(json_extract(i.value, '$.productId')) AS product_id,
+        json_extract(i.value, '$.menuItemId') AS menu_item_id,
         max(json_extract(i.value, '$.name')) AS name, sum(json_extract(i.value, '$.quantity')) AS quantity, sum(json_extract(i.value, '$.totalCents') * b.paid) AS gross_cents,
         sum(json_extract(i.value, '$.totalCents') * b.paid * 100.0 / (100 + json_extract(i.value, '$.vatRate'))) AS net,
         sum(json_extract(i.value, '$.vatRate') IS NULL) AS without_vat
       FROM (SELECT r.json AS bill, coalesce(json_extract(r.json, '$.totalCents') * 1.0
           / nullif((SELECT sum(json_extract(l.value, '$.totalCents')) FROM json_each(r.json, '$.items') l), 0), 1) AS paid
         FROM records r WHERE r.type='bill' AND r.business_date BETWEEN ? AND ? AND json_extract(r.json, '$.status') = 'closed') b, json_each(b.bill, '$.items') i
-      GROUP BY product ORDER BY gross_cents DESC`, from, to).toArray()
-      .map(row => ({key: row.product, productId: row.product_id, name: row.name, quantity: Math.round(row.quantity * 1000) / 1000, grossCents: Math.round(row.gross_cents),
+      GROUP BY product, menu_item_id ORDER BY gross_cents DESC`, from, to).toArray()
+      .map(row => ({key: row.menu_item_id === null ? row.product : `${row.product} ${row.menu_item_id}`, productId: row.product_id, menuItemId: row.menu_item_id, name: row.name, quantity: Math.round(row.quantity * 1000) / 1000, grossCents: Math.round(row.gross_cents),
         netCents: row.without_vat || row.net === null ? null : Math.round(row.net)}));
   }
 
@@ -846,18 +868,18 @@ export class TenantObject extends DurableObject<Env> {
   private priceMismatchesOn(date: string) {
     const menu = this.menu();
     if (!menu) return [];
-    const lines = this.sql.exec<{name: string; unit: number; quantity: number}>(`
-      SELECT json_extract(i.value, '$.name') AS name, CAST(round(json_extract(i.value, '$.totalCents') * 1.0 / json_extract(i.value, '$.quantity')) AS INTEGER) AS unit,
+    const lines = this.sql.exec<{name: string; menu_item_id: string | null; unit: number; quantity: number}>(`
+      SELECT json_extract(i.value, '$.name') AS name, json_extract(i.value, '$.menuItemId') AS menu_item_id, CAST(round(json_extract(i.value, '$.totalCents') * 1.0 / json_extract(i.value, '$.quantity')) AS INTEGER) AS unit,
         sum(json_extract(i.value, '$.quantity')) AS quantity
       FROM records r, json_each(r.json, '$.items') i
-      WHERE r.type='bill' AND r.business_date=? AND json_extract(r.json, '$.status') = 'closed' AND json_extract(i.value, '$.quantity') > 0 GROUP BY 1, 2`, date).toArray();
+      WHERE r.type='bill' AND r.business_date=? AND json_extract(r.json, '$.status') = 'closed' AND json_extract(i.value, '$.quantity') > 0 GROUP BY 1, 2, 3`, date).toArray();
     if (!lines.length) return [];
     // Every price an item had before a change made that day or later was still right that day (all sizes, from the old text).
     const earlier = new Map<string, number[]>();
     for (const row of this.sql.exec<{item_id: string; old_text: string | null}>("SELECT item_id, old_text FROM menu_changes WHERE kind='price' AND business_date >= ?", date).toArray()) {
       earlier.set(row.item_id, [...(earlier.get(row.item_id) ?? []), ...pricesOfText(row.old_text)]);
     }
-    return priceMismatches(menu, lines.map(row => ({name: row.name, unitCents: row.unit, quantity: Math.round(row.quantity * 1000) / 1000})), earlier);
+    return priceMismatches(menu, lines.map(row => ({name: row.name, menuItemId: row.menu_item_id, unitCents: row.unit, quantity: Math.round(row.quantity * 1000) / 1000})), earlier);
   }
 
   /** Monday message: how many prices to look at and the two weighing most (cheap and expensive items before gaps). */
@@ -905,20 +927,21 @@ export class TenantObject extends DurableObject<Env> {
 
   /** Pieces and revenue per day and menu item over some days (closed bills, each product name paired with the menu once). */
   private dailyItemSales(menu: Menu, from: string, to: string) {
-    const daily = this.sql.exec<{date: string; name: string; quantity: number; gross_cents: number}>(`
-      SELECT b.date, json_extract(i.value, '$.name') AS name, sum(json_extract(i.value, '$.quantity')) AS quantity, sum(json_extract(i.value, '$.totalCents') * b.paid) AS gross_cents
+    const daily = this.sql.exec<{date: string; name: string; menu_item_id: string | null; quantity: number; gross_cents: number}>(`
+      SELECT b.date, json_extract(i.value, '$.name') AS name, json_extract(i.value, '$.menuItemId') AS menu_item_id, sum(json_extract(i.value, '$.quantity')) AS quantity, sum(json_extract(i.value, '$.totalCents') * b.paid) AS gross_cents
       FROM (SELECT r.business_date AS date, r.json AS bill, coalesce(json_extract(r.json, '$.totalCents') * 1.0
           / nullif((SELECT sum(json_extract(l.value, '$.totalCents')) FROM json_each(r.json, '$.items') l), 0), 1) AS paid
         FROM records r WHERE r.type='bill' AND r.business_date BETWEEN ? AND ? AND json_extract(r.json, '$.status') = 'closed') b, json_each(b.bill, '$.items') i
-      GROUP BY 1, 2`, from, to).toArray();
-    const totals = new Map<string, {quantity: number; grossCents: number}>(), byItem = new Map<string, {date: string; quantity: number; grossCents: number}[]>();
+      GROUP BY 1, 2, 3`, from, to).toArray();
+    const totals = new Map<string, {name: string; menuItemId: string | null; quantity: number; grossCents: number}>(), byItem = new Map<string, {date: string; quantity: number; grossCents: number}[]>();
+    const keyOf = (row: {name: string; menu_item_id: string | null}) => JSON.stringify([row.name, row.menu_item_id]);
     for (const row of daily) {
-      const total = totals.get(row.name) ?? {quantity: 0, grossCents: 0};
-      totals.set(row.name, {quantity: total.quantity + row.quantity, grossCents: total.grossCents + row.gross_cents});
+      const total = totals.get(keyOf(row)) ?? {name: row.name, menuItemId: row.menu_item_id, quantity: 0, grossCents: 0};
+      totals.set(keyOf(row), {...total, quantity: total.quantity + row.quantity, grossCents: total.grossCents + row.gross_cents});
     }
-    const paired = new Map([...totals].map(([name, total]) => [name, pairSale(menu, {name, ...total})?.itemId ?? null]));
+    const paired = new Map([...totals].map(([key, total]) => [key, pairSale(menu, total)?.itemId ?? null]));
     for (const row of daily) {
-      const itemId = paired.get(row.name);
+      const itemId = paired.get(keyOf(row));
       if (itemId) byItem.set(itemId, [...(byItem.get(itemId) ?? []), {date: row.date, quantity: row.quantity, grossCents: row.gross_cents}]);
     }
     return byItem;
@@ -1663,7 +1686,7 @@ export class Registry extends DurableObject<Env> {
 }
 
 const routes: Record<string, string[]> = {
-  'v1/ingest': ['POST'], 'admin/config': ['GET', 'PUT'], 'admin/pair': ['POST'], 'admin/history': ['POST'],
+  'v1/ingest': ['POST'], 'v1/menu': ['GET'], 'admin/config': ['GET', 'PUT'], 'admin/pair': ['POST'], 'admin/history': ['POST'],
   'admin/briefing': ['GET'], 'admin/briefings': ['GET'], 'admin/tick': ['POST'], 'admin/report': ['GET', 'PUT'], 'admin/fetch': ['POST'], 'admin/logout': ['POST'],
   'admin/web': ['GET'], 'admin/ingest': ['GET'],
 };

@@ -7,7 +7,7 @@ import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
 import {counted, overdueInvoices, priceRises, renderSupplies, supplyBrief, supplySummary, unitPrice} from '../src/supplies.ts';
 import {weatherDays, weatherText} from '../src/weather.ts';
-import {itemProfit, menuMatrix, nameKey, pairSale, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, volumeOf, type ItemSale} from '../src/menu.ts';
+import {itemProfit, menuItemTax, menuMatrix, nameKey, pairSale, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, volumeOf, type ItemSale} from '../src/menu.ts';
 import {businessDate, sameClockDaysBefore} from '../src/time.ts';
 import {czechHolidays, easterSunday, holidayName} from '../src/holidays.ts';
 import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type Menu, type MenuItem, type SupplierInvoice, type TenantConfig, type WebTraffic} from '../src/validate.ts';
@@ -727,6 +727,21 @@ test('POS products are paired to the menu by name, size by volume or price, and 
   assert.equal(pairSale(burgers, {name: 'Double cheeseburger', quantity: 1, grossCents: 26500}), null, 'two burgers close: unpaired');
   assert.equal(pairSale(burgers, {name: 'Kuře na pepři', quantity: 1, grossCents: 26500}), null, 'filler words do not pair');
   assert.equal(pairSale(burgers, {name: 'Hranolky', quantity: 1, grossCents: 6900}), null, 'half the words are not enough');
+});
+
+test('a POS line linked to a menu item pairs by its id; the menu says the kind and VAT rate of each item', () => {
+  const menu = menuOf([dish('b1', 'Burgery', 'Classic Burger', [22500]), dish('b2', 'Burgery', 'Texas Burger', [24500])]);
+  assert.deepEqual(pairSale(menu, {name: 'Burger', menuItemId: 'b2', quantity: 1, grossCents: 22500}), {itemId: 'b2', how: 'id'});
+  assert.deepEqual(pairSale(menu, {name: 'Classic Burger', menuItemId: 'gone', quantity: 1, grossCents: 22500}), {itemId: 'b1', how: 'name'}, 'an id off the menu: by name');
+  // The same POS name linked to the other burger is checked against that burger's price.
+  assert.deepEqual(priceMismatches(menu, [{name: 'Burger', menuItemId: 'b2', unitCents: 22500, quantity: 2}, {name: 'Burger', unitCents: 22500, quantity: 1}], new Map())
+    .map(row => [row.itemId, row.posCents, row.menuCents, row.quantity]), [['b2', 22500, 24500, 2]]);
+  const tax = (part: MenuItem['part'], category: string, name: string, group: string | null = null) => menuItemTax({part, category, group, name});
+  assert.deepEqual([tax('food', 'Dezerty', 'Apple Pie'), tax('cocktails', 'Signature Drinks', 'Mai Tai'), tax('cocktails', 'Nealkoholické', 'Crodino Spritz'),
+    tax('cocktails', 'Tiki', 'Virgin Mojito'), tax('drinks', 'Vína', 'Rosé d\'Anjou', 'Růžová vína'), tax('drinks', 'Destiláty', 'Finlandia', 'Vodka'),
+    tax('drinks', 'Pivo & cider', 'Budvar Original', 'Točené'), tax('drinks', 'Pivo & cider', 'Birell nealko'), tax('drinks', 'Nealkoholické nápoje', 'Ginger Ale'),
+    tax('drinks', 'Mléčné koktejly', 'Banánový'), tax('drinks', 'Káva a horké nápoje', 'Espresso')].map(row => `${row.kind} ${row.vatRate}`),
+  ['food 12', 'alcohol 21', 'soft 12', 'soft 12', 'alcohol 21', 'alcohol 21', 'alcohol 21', 'soft 12', 'soft 12', 'soft 12', 'soft 12']);
 });
 
 test('profit by item: revenue without VAT, food cost per piece and what is missing', () => {

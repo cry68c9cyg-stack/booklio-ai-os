@@ -3,8 +3,11 @@ import {isDate} from './time.ts';
 /** Thrown for any input that does not match the contract; the message is a stable error code. */
 export class InputError extends Error {}
 
-/** `vatRate` = the VAT rate of the product in whole percent (12, 21), from the POS; needed for revenue without VAT and profit by item. */
-export type BillItem = {name: string; productId: string | null; category: string | null; quantity: number; totalCents: number; vatRate: number | null};
+/**
+ * `vatRate` = the VAT rate of the product in whole percent (12, 21), from the POS; needed for revenue without VAT and profit by item.
+ * `menuItemId` = the menu item (`MenuItem.id`) the POS product is linked to; OKO1 pairs by it before trying names.
+ */
+export type BillItem = {name: string; productId: string | null; category: string | null; quantity: number; totalCents: number; vatRate: number | null; menuItemId?: string};
 export type Payment = {method: string; amountCents: number};
 export type Void = {name: string; amountCents: number; reason: string; afterPayment: boolean; approvedBy: string | null};
 export type Bill = {
@@ -184,10 +187,12 @@ function bill(raw: Obj): Bill {
     waiterId: value.waiterId == null ? null : id(value.waiterId), reservationId: value.reservationId == null ? null : id(value.reservationId),
     totalCents: int(value.totalCents), discountCents: int(value.discountCents, 0),
     items: list(value.items, 500, item => {
-      const row = object(item, ['name', 'quantity', 'totalCents'], ['productId', 'category', 'vatRate']);
+      const row = object(item, ['name', 'quantity', 'totalCents'], ['productId', 'category', 'vatRate', 'menuItemId']);
       if (typeof row.quantity !== 'number' || !Number.isFinite(row.quantity) || row.quantity <= 0 || row.quantity > 1e6) fail();
       return {name: text(row.name), productId: row.productId == null ? null : id(row.productId), category: optionalText(row.category, 60), quantity: row.quantity as number, totalCents: int(row.totalCents),
-        vatRate: row.vatRate == null ? null : int(row.vatRate, 0, 100)};
+        vatRate: row.vatRate == null ? null : int(row.vatRate, 0, 100),
+        // Only when sent: a batch from before the field resent unchanged keeps its hash (idempotent replay).
+        ...(row.menuItemId == null ? {} : {menuItemId: id(row.menuItemId)})};
     }),
     payments: list(value.payments, 20, item => {
       const row = object(item, ['method', 'amountCents']);
