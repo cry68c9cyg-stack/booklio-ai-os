@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, rankEvents, renderEventRanking, eventTip, renderMenuWeek, renderPriceCheck, renderPriceMismatches, sectionThousands, guestOutlookDay, median, weakDays, webDrop, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, rankEvents, renderEventRanking, eventTip, renderMenuWeek, renderMenuMonth, renderPriceCheck, renderPriceMismatches, sectionThousands, guestOutlookDay, median, weakDays, webDrop, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
@@ -605,6 +605,11 @@ test('events of half a year ranked by guests drawn, the line at the month end, t
     ['Lístek za týden: nová cena 1× (Burger 289 Kč → 309 Kč) · nově Shake, Fries, Wings a další 1']);
   assert.deepEqual(renderMenuWeek({prices: [], added: [], removed: []}), []);
   assert.deepEqual(renderMenuWeek(null), []);
+  assert.deepEqual(renderMenuMonth({month: '2026-10', up: 4, down: 1, added: 3, removed: 0, categories: [{name: 'Burgery', beforeCents: 24000, afterCents: 25000, changePermille: 42},
+    {name: 'Koktejly', beforeCents: 20000, afterCents: 19600, changePermille: -20}, {name: 'Pivo', beforeCents: 9000, afterCents: 9045, changePermille: 5}, {name: 'Víno', beforeCents: 9000, afterCents: 8955, changePermille: -5}]}),
+    ['Lístek v říjnu: zdraženo 4, zlevněno 1, přidáno 3 · průměrná cena proti září: Burgery +4 %, Koktejly −2 %']);
+  assert.deepEqual(renderMenuMonth({month: '2026-01', up: 0, down: 0, added: 0, removed: 1, categories: []}), ['Lístek v lednu: zrušeno 1']);
+  assert.deepEqual(renderMenuMonth(null), []);
   const monday = buildBriefing({businessDate: '2026-10-11', config, bills: [], closings: [], planHistory: [], incomplete: false, menuWeek: {prices: [], added: [], removed: ['Quesadilla']}});
   assert.match(renderBriefing('Test', monday), /\nLístek za týden: zrušeno Quesadilla(\n|$)/);
 });
@@ -729,7 +734,11 @@ test('virtual repricing rounds to 5 Kč, filters by part, category and name, and
   const menu = menuOf([dish('b1', 'Burgery', 'Classic Burger', [22500, 25500]), dish('b2', 'Burgery', 'Texas Burger', [24500]), drink('p5', 'Plzeň', 500, 8900)]);
   const up = repricing(menu, {category: 'burgery', percent: 10}, new Map([['b1', {quantity: 10, grossCents: 225000}]]));
   assert.deepEqual(up.items.map(item => [item.itemId, item.newPricesCents, item.newText]), [['b1', [25000, 28000], '250 / 280 Kč'], ['b2', [27000], '270 Kč']]);
-  assert.deepEqual(up.sales, {items: 1, grossCents: 225000, newGrossCents: 250000, differenceCents: 25000});
+  assert.deepEqual(up.sales, {items: 1, grossCents: 225000, newGrossCents: 250000, differenceCents: 25000, profitDifferenceCents: null, breakEvenDropPermille: 100,
+    ifFewer: [{percent: 5, newGrossCents: 237500}, {percent: 10, newGrossCents: 225000}]});
+  // With the VAT rate the profit changes by the revenue without VAT (the food cost of a piece stays); no filter = the whole menu.
+  const whole = repricing(menu, {percent: 10}, new Map([['b1', {quantity: 10, grossCents: 225000, netCents: 200893}], ['p5', {quantity: 5, grossCents: 44500, netCents: 39732}]]));
+  assert.deepEqual([whole.count, whole.sales?.differenceCents, whole.sales?.profitDifferenceCents], [3, 25000 + 5500, 22321 + 4911]);
   assert.deepEqual(repricing(menu, {part: 'drinks', deltaCents: 1000, stepCents: 100}, new Map()).items.map(item => item.newPricesCents), [[9900]]);
   assert.deepEqual(repricing(menu, {query: 'texas', percent: -50}, new Map()).items.map(item => item.newPricesCents), [[12500]]);
   assert.equal(repricing(menu, {query: 'pizza', percent: 5}, new Map()).count, 0);
@@ -745,9 +754,14 @@ test('price check: too cheap and too expensive in a category (per litre for size
   assert.match(findings[4].text, /za litr/);
   const wine = priceCheck(menuOf([drink('v1', 'Víno 1', 100, 6000), drink('v2', 'Víno 2', 100, 7000), drink('v3', 'Víno 1 láhev', 750, 45000),
     drink('v4', 'Víno 2 láhev', 750, 52000), drink('v5', 'Víno 3', 100, 6500), dish('t', 'Pivo', 'Voda', [0], {part: 'drinks'})]));
-  assert.deepEqual(wine, [], 'sizes are no gap and no outlier, a free item is left out');
+  assert.deepEqual(wine.map(f => [f.kind, f.itemId, f.suggestedCents]), [['ending', 'v5', 7000]], 'sizes are no gap and no outlier, a free item is left out; 65 Kč among round prices is a tip');
   const zeros = priceCheck(menuOf([0, 0, 0, 0, 0, 3000, 3500, 4000, 4500].map((cents, index) => dish(`z${index}`, 'Nealko', `N${index}`, [cents]))));
   assert.ok(zeros.every(finding => finding.kind !== 'expensive'), 'free items do not make every price look expensive');
+  // An odd last digit among prices ending in 5 or 9 (at least 5 priced items), with the nearest usual price; a mixed category says nothing.
+  const endings = priceCheck(menuOf([['a', 22500], ['b', 24500], ['c', 25500], ['d', 26900], ['e', 26300], ['f', 27900]].map(([id, cents]) => dish(id as string, 'Burgery', `B${id}`, [cents as number]))));
+  assert.deepEqual(endings.map(f => [f.kind, f.itemId, f.suggestedCents]), [['ending', 'e', 26500]]);
+  assert.match(endings[0].text, /^cena končí na 3, ostatní v kategorii na 5 nebo 9; návrh 265 Kč$/);
+  assert.deepEqual(priceCheck(menuOf([6200, 8900, 7500, 6800, 9000, 11200, 11600].map((cents, index) => dish(`k${index}`, 'Káva', `K${index}`, [cents])))), []);
 });
 
 test('the POS charging another price than the menu: most pieces of the day, earlier prices count, 1 Kč tolerance', () => {

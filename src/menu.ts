@@ -32,7 +32,7 @@ export function menuChanges(before: Menu, after: Menu): MenuChange[] {
   return changes;
 }
 
-const PART_NAMES: Record<MenuItem['part'], string> = {food: 'Jídlo', cocktails: 'Koktejly', drinks: 'Nápoje'};
+export const PART_NAMES: Record<MenuItem['part'], string> = {food: 'Jídlo', cocktails: 'Koktejly', drinks: 'Nápoje'};
 
 /** The dashboard's view of the menu: items per part and category with the lowest, highest and average base price. */
 export function menuOverview(menu: Menu) {
@@ -156,7 +156,7 @@ export type RepricingInput = {part?: MenuItem['part']; category?: string; query?
  * rounded to a step (5 Kč unless said). Nothing changes on the web or in the POS. With sales of the last days, also the
  * revenue at the same number of pieces sold (OKO1 does not guess how many guests a new price would win or lose).
  */
-export function repricing(menu: Menu, input: RepricingInput, sold: Map<string, {quantity: number; grossCents: number}>) {
+export function repricing(menu: Menu, input: RepricingInput, sold: Map<string, {quantity: number; grossCents: number; netCents?: number | null}>) {
   const step = input.stepCents ?? 500, category = input.category ? nameKey(input.category) : null, query = input.query ? nameKey(input.query) : null;
   const chosen = menu.items.filter(item => (!input.part || item.part === input.part) && (!category || nameKey(item.category).includes(category))
     && (!query || nameKey(`${item.name} ${item.group ?? ''}`).includes(query)));
@@ -167,19 +167,27 @@ export function repricing(menu: Menu, input: RepricingInput, sold: Map<string, {
     const newPricesCents = item.pricesCents.map(change), sale = sold.get(item.id), atMinimum = item.pricesCents.some(cents => cents > 0 && raw(cents) < step / 2);
     return {itemId: item.id, name: item.name, part: item.part, category: item.category, volume: item.volume, oldPricesCents: item.pricesCents, newPricesCents,
       oldText: priceText(item), newText: priceText({...item, pricesCents: newPricesCents}), ...(atMinimum ? {atMinimum: true} : {}),
-      ...(sale ? {quantity: sale.quantity, grossCents: sale.grossCents, newGrossCents: Math.round(sale.grossCents * newPricesCents[0] / Math.max(1, item.pricesCents[0]))} : {})};
+      ...(sale ? {quantity: sale.quantity, grossCents: sale.grossCents, newGrossCents: Math.round(sale.grossCents * newPricesCents[0] / Math.max(1, item.pricesCents[0])),
+        netCents: sale.netCents ?? null, newNetCents: sale.netCents == null ? null : Math.round(sale.netCents * newPricesCents[0] / Math.max(1, item.pricesCents[0]))} : {})};
   });
   const withSales = items.filter(item => item.grossCents !== undefined);
   const before = withSales.reduce((sum, item) => sum + (item.grossCents ?? 0), 0), after = withSales.reduce((sum, item) => sum + (item.newGrossCents ?? 0), 0);
   const avg = (key: 'oldPricesCents' | 'newPricesCents') => items.length ? Math.round(items.reduce((sum, item) => sum + item[key][0], 0) / items.length) : 0;
+  // The food cost of a piece does not change with its price, so at the same pieces the profit changes by the revenue without VAT.
+  const net = withSales.every(item => item.netCents !== null && item.newNetCents !== null)
+    ? {netCents: withSales.reduce((sum, item) => sum + (item.netCents ?? 0), 0), newNetCents: withSales.reduce((sum, item) => sum + (item.newNetCents ?? 0), 0)} : null;
   return {
     items, count: items.length, avgOldCents: avg('oldPricesCents'), avgNewCents: avg('newPricesCents'),
-    sales: withSales.length ? {items: withSales.length, grossCents: before, newGrossCents: after, differenceCents: after - before} : null,
+    sales: withSales.length ? {items: withSales.length, grossCents: before, newGrossCents: after, differenceCents: after - before,
+      profitDifferenceCents: net ? net.newNetCents - net.netCents : null,
+      // How many fewer pieces the new prices bear before the revenue falls under today's, and the revenue with 5 and 10 % fewer.
+      breakEvenDropPermille: after > before ? Math.floor((after - before) * 1000 / after) : null,
+      ifFewer: [5, 10].map(percent => ({percent, newGrossCents: Math.round(after * (1 - percent / 100))}))} : null,
   };
 }
 
 export type PriceFinding = {
-  kind: 'cheap' | 'expensive' | 'gap'; part: MenuItem['part']; category: string; itemId: string | null; name: string | null;
+  kind: 'cheap' | 'expensive' | 'gap' | 'ending'; part: MenuItem['part']; category: string; itemId: string | null; name: string | null;
   priceText: string; suggestedCents: number; text: string;
 };
 
@@ -217,6 +225,8 @@ export function priceCheck(menu: Menu, step = 500): PriceFinding[] {
           text: `přes dvojnásobek běžné ceny kategorie (${kc(median)}${unit}); jestli to není záměr, návrh ${kc(suggested)}`});
       }
     }
+    const flagged = new Set(findings.map(finding => finding.itemId));
+    findings.push(...endingFindings(priced).filter(finding => !flagged.has(finding.itemId)));
     if (perLitre || pool.length < 5) continue;
     const ladder = [...new Set(pool.map(item => item.pricesCents[0]))].sort((a, b) => a - b);
     for (let index = 1; index < ladder.length; index++) {
@@ -229,6 +239,26 @@ export function priceCheck(menu: Menu, step = 500): PriceFinding[] {
     }
   }
   return findings;
+}
+
+/**
+ * A price whose last crown digit stands out in its category of at least 5 priced items: when at least three quarters of the category's prices end
+ * in a few digits (each on at least a quarter of the prices, at least 2), an item ending otherwise gets the nearest price
+ * with one of those endings (the higher one on a tie). A tip for a tidy menu, not an error.
+ */
+function endingFindings(items: MenuItem[]): PriceFinding[] {
+  if (items.length < 5) return [];
+  const crowns = (item: MenuItem) => Math.round(item.pricesCents[0] / 100), counts = new Map<number, number>();
+  for (const item of items) counts.set(crowns(item) % 10, (counts.get(crowns(item) % 10) ?? 0) + 1);
+  const usual = [...counts].filter(([, count]) => count >= Math.max(2, items.length / 4)).map(([digit]) => digit).sort((a, b) => a - b);
+  if (!usual.length || usual.reduce((sum, digit) => sum + (counts.get(digit) ?? 0), 0) * 4 < items.length * 3) return [];
+  return items.filter(item => !usual.includes(crowns(item) % 10)).map(item => {
+    const price = crowns(item);
+    const candidates = usual.flatMap(digit => [price - (((price - digit) % 10) + 10) % 10, price + (((digit - price) % 10) + 10) % 10]).filter(value => value > 0);
+    const suggested = candidates.sort((a, b) => Math.abs(a - price) - Math.abs(b - price) || b - a)[0] * 100;
+    return {kind: 'ending' as const, part: item.part, category: item.category, itemId: item.id, name: item.name, priceText: priceText(item), suggestedCents: suggested,
+      text: `cena končí na ${price % 10}, ostatní v kategorii na ${usual.join(' nebo ')}; návrh ${kc(suggested)}`};
+  });
 }
 
 /** A product the POS charged at a price the menu did not have that day (most pieces of the day at that price). */
