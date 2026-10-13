@@ -4,7 +4,7 @@ import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
 import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, type MenuMonth, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
-import {itemProfit, menuChanges, menuItemTax, menuMatrix, menuOverview, nameKey, PART_NAMES, pairSale, priceText, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
+import {itemProfit, menuChanges, menuGaps, menuItemTax, menuMatrix, menuOverview, nameKey, PART_NAMES, pairSale, priceText, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
 import {czechHolidays, holidayName} from './holidays.ts';
@@ -701,7 +701,8 @@ export class TenantObject extends DurableObject<Env> {
     const findings = priceCheck(menu), sales = this.itemSales(addDays(day, -29), day);
     const profit = sales.length ? itemProfit(menu, sales, this.menuItemCosts()) : null;
     return {...menuOverview(menu), received: stamp(new Date(received), config.timeZone), changes: changes.rows, changesTotal: changes.total,
-      priceCheck: {findings: [...findings].sort((a, b) => FINDING_RANK[a.kind] - FINDING_RANK[b.kind]).slice(0, 10), total: findings.length}, trend: this.menuTrend(), problems: this.menuProblems(new Date()),
+      priceCheck: {findings: [...findings].sort((a, b) => FINDING_RANK[a.kind] - FINDING_RANK[b.kind]).slice(0, 10), total: findings.length},
+      gaps: (gaps => ({items: gaps.slice(0, 20), total: gaps.length}))(menuGaps(menu)), trend: this.menuTrend(), problems: this.menuProblems(new Date()),
       matrix: profit ? menuMatrix(menu, profit, this.newMenuItems(addDays(day, -29), day)).map(part => ({...part, classes: part.classes.map(row => ({...row, count: row.items.length, items: row.items.slice(0, 5)}))})) : null,
       experiments: profit ? this.priceExperiments(day, 5) : null,
       profit: profit && {from: addDays(day, -29), to: day, items: profit.items.slice(0, 10), itemsTotal: profit.items.length, unpaired: profit.unpaired.slice(0, 5),
@@ -891,6 +892,18 @@ export class TenantObject extends DurableObject<Env> {
     return {total: findings.length, top: [...findings].sort((a, b) => FINDING_RANK[a.kind] - FINDING_RANK[b.kind]).slice(0, 2)};
   }
 
+  /** Monday message: what to fix in the menu on the website, by kind with the first names; null when nothing. */
+  private menuGapsSummary() {
+    const menu = this.menu();
+    const gaps = menu ? menuGaps(menu) : [];
+    if (!gaps.length) return null;
+    const kinds = [...new Set(gaps.map(gap => gap.kind))].map(kind => {
+      const rows = gaps.filter(gap => gap.kind === kind);
+      return {kind, count: rows.length, names: rows.map(gap => gap.name)};
+    });
+    return {total: gaps.length, kinds};
+  }
+
   /** Menu items added in `from`–`to`: too new for the matrix, which compares days of sales. */
   private newMenuItems(from: string, to: string) {
     return new Set(this.sql.exec<{item_id: string}>("SELECT item_id FROM menu_changes WHERE kind='added' AND business_date BETWEEN ? AND ?", from, to).toArray().map(row => row.item_id));
@@ -991,7 +1004,7 @@ export class TenantObject extends DurableObject<Env> {
   /** MCP: prices to look at in each category of the menu, each with a suggested price. */
   posPriceCheck() {
     const menu = this.menu();
-    return this.config() && menu ? {items: menu.items.length, findings: priceCheck(menu)} : null;
+    return this.config() && menu ? {items: menu.items.length, findings: priceCheck(menu), webGaps: menuGaps(menu)} : null;
   }
 
   /** MCP: the whole current menu with every item and price, and its changes over the last year. */
@@ -1575,6 +1588,7 @@ export class TenantObject extends DurableObject<Env> {
       slowSellers: addDays(date, 1).endsWith('-01') ? this.slowSellers(date.slice(0, 7), date) : null, priceResults: weekday(date) === 0 ? this.priceResults(date) : [], menuDay: weekday(date) === 0 ? null : this.menuWeek(date, 1), priceMismatches: this.priceMismatchesOn(date),
       menuProblems: this.menuProblems(now),
       priceCheck: weekday(date) === 0 ? this.priceCheckSummary() : null,
+      menuGaps: weekday(date) === 0 ? this.menuGapsSummary() : null,
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
       supplies: this.supplyBriefFor(config, date),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});

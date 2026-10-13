@@ -7,7 +7,7 @@ import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
 import {counted, overdueInvoices, priceRises, renderSupplies, supplyBrief, supplySummary, unitPrice} from '../src/supplies.ts';
 import {weatherDays, weatherText} from '../src/weather.ts';
-import {itemProfit, menuItemTax, menuMatrix, nameKey, pairSale, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, volumeOf, type ItemSale} from '../src/menu.ts';
+import {itemProfit, menuGaps, menuItemTax, menuMatrix, nameKey, pairSale, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, volumeOf, type ItemSale} from '../src/menu.ts';
 import {businessDate, sameClockDaysBefore} from '../src/time.ts';
 import {czechHolidays, easterSunday, holidayName} from '../src/holidays.ts';
 import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type Menu, type MenuItem, type SupplierInvoice, type TenantConfig, type WebTraffic} from '../src/validate.ts';
@@ -776,6 +776,20 @@ test('virtual repricing rounds to 5 Kč, filters by part, category and name, and
   assert.equal(repricing(menu, {query: 'pizza', percent: 5}, new Map()).count, 0);
   const free = repricing(menuOf([dish('w', 'Voda', 'Voda z kohoutku', [0]), dish('e', 'Voda', 'Espresso', [6200])]), {deltaCents: -10000}, new Map());
   assert.deepEqual(free.items.map(item => [item.newPricesCents, item.atMinimum ?? false]), [[[0], false], [[500], true]], 'free stays free, a price stays at one step');
+});
+
+test('what to fix in the menu on the website: descriptions, volumes and one item at two prices', () => {
+  const menu = menuOf([dish('b1', 'Burgery', 'Classic Burger', [22500], {description: 'hovězí'}), dish('b2', 'Burgery', 'Texas Burger', [24500]),
+    dish('h', 'Přílohy', 'Hranolky', [8900]), dish('o', 'Omáčky', 'BBQ', [4500]), dish('d', 'Dezerty', 'Dorty - dle nabídky - 1 porce', [13000]),
+    dish('m1', 'Caipirinhy', 'Mojito', [18900], {part: 'cocktails', description: 'rum, limetka, máta'}), dish('m2', 'XXL Drinky', 'Mojito', [157500], {part: 'cocktails'}),
+    dish('e', 'Káva a horké nápoje', 'Espresso', [6200], {part: 'drinks'}), dish('t', 'Džusy', 'Džus', [7400], {part: 'drinks'}),
+    drink('p1', 'Plzeň', 500, 8900), drink('p2', 'Plzeň', 500, 9900), drink('p3', 'Plzeň', 300, 6500)]);
+  assert.deepEqual(menuGaps(menu).map(gap => [gap.kind, gap.itemId, gap.text]), [
+    ['price', 'p2', 'stejná položka za 89 Kč v Pivo a za 99 Kč v Pivo'],
+    ['description', 'b2', 'chybí popis'],
+    ['description', 'm2', 'chybí složení (je u Caipirinhy: „rum, limetka, máta“)'],
+    ['volume', 't', 'chybí objem']]);
+  assert.deepEqual(menuGaps(menuOf([dish('b1', 'Burgery', 'Classic Burger', [22500], {description: 'hovězí'})])), []);
 });
 
 test('price check: too cheap and too expensive in a category (per litre for sizes) and gaps in the price ladder', () => {
