@@ -131,7 +131,7 @@ Pole `menu` (jen součty za den):
 | `reserved` | int ≥ 0 | z nich návštěvy, které v téže návštěvě poslaly rezervaci |
 | `languages` | pole ≤ 10 `{key, visits, reserved}` | totéž podle jazyka webu (`cs`, `en`, `de`, …), nejčastější první |
 
-OKO1 musí `menu` přijímat dřív, než ho web začne posílat (neznámé pole by celou dávku odmítlo). Den bez `menu` se do zájmu o lístek nepočítá. Pondělní zpráva ukáže týden (návštěvy s lístkem proti minulému týdnu, jen když oba týdny mají 7 dní dat, podíl ze zahraničí, tři nejčastější jazyky a rezervace), dashboard kartu „Zájem o lístek na webu (12 týdnů)“ a MCP nástroj `tyden_mesic_trendy` pole `menuInterest`.
+OKO1 musí `menu` přijímat dřív, než ho web začne posílat (neznámé pole by celou dávku odmítlo). Den bez `menu` se do zájmu o lístek nepočítá. Pondělní zpráva ukáže týden (návštěvy s lístkem proti minulému týdnu, jen když oba týdny mají 7 dní dat, podíl ze zahraničí, tři nejčastější jazyky a rezervace), dashboard kartu „Zájem o lístek na webu (12 týdnů)“ a MCP nástroj `tyden_mesic_trendy` pole `menuInterest`. Ranní zpráva a karta „Návštěvnost webu“ ukáží denní počet návštěv s lístkem; když si ho otevře méně než polovina obvyklého počtu (medián stejného dne v týdnu za 4 týdny, aspoň 3 dny s `menu`, obvykle aspoň 30) a web jinak nepropadl, přijde varování a bod k vyřízení. Od 28 dní dat pondělní zpráva srovná, jak často návštěvy s lístkem poslaly rezervaci, podle jazyka webu (jazyky s aspoň 30 návštěvami).
 
 Ranní zpráva ukáže den proti stejnému dni před týdnem, odeslané rezervace, skeny QR a tři nejčastější zdroje; dashboard totéž jako kartu „Návštěvnost webu“. Pondělní týdenní souhrn sečte `origins` za 7 dní (návštěvy a `withAction` podle `key`).
 

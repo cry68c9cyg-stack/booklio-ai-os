@@ -50,9 +50,13 @@ export type Briefing = {
   /** Guests to expect from bookings over the 7 days from the starting one, by part of the day; `null` = not for this day or no bookings yet. */
   guestOutlook: GuestOutlook | null;
   /** The website on the reported calendar day, against the same weekday a week before. `null` = the website sent nothing. */
-  web: {visits: number; withAction: number; lastWeekVisits: number | null; reservationsSent: number; reviewScans: number; topOrigins: {name: string; visits: number}[]} | null;
+  web: {visits: number; withAction: number; lastWeekVisits: number | null; reservationsSent: number; reviewScans: number; topOrigins: {name: string; visits: number}[];
+    /** Visits that opened the menu that day (`menu` of the web traffic); missing in briefings stored before 14. 10. 2026, `null` = not sent. */
+    menuVisits?: number | null} | null;
   /** The website far below its usual day (same weekday, 4 weeks): too few visits or no booking form sent. `null` = fine or unknown. */
-  webDrop: {visits: number; usualVisits: number; sent: number; usualSent: number; lowVisits: boolean; noSent: boolean} | null;
+  webDrop: {visits: number; usualVisits: number; sent: number; usualSent: number; lowVisits: boolean; noSent: boolean;
+    /** Visits that opened the menu far below the usual while the website itself is not (the menu or its link may be broken). */
+    lowMenu?: {visits: number; usualVisits: number}} | null;
   /** Events of half a year ranked (for weak days and the message about a month's last day); `null` = not asked for. */
   eventRanking: EventRank[] | null;
   /** Changes of the menu over the week (Monday message); `null` = not asked for. */
@@ -75,6 +79,8 @@ export type Briefing = {
   menuGaps?: {total: number; kinds: {kind: MenuGap['kind']; count: number; names: string[]}[]} | null;
   /** Monday: interest in the menu on the website, the week against the one before; `null` = not asked for. */
   menuInterest?: {current: MenuInterest; previous: MenuInterest} | null;
+  /** Monday: the 4 weeks up to the reported day, for how often visits that opened the menu sent a reservation, by the website's language. */
+  menuByLanguage?: MenuInterest | null;
   /** Reviews that reached the website's admin on the reported calendar day, and how many wait there. `null` = nothing sent. */
   reviews: {newCount: number; averageTenths: number | null; low: number; bySource: {name: string; newCount: number}[]; waiting: number; forManagement: number; failed: number} | null;
   /** The 7 days up to the reported day against the 7 before: sums only. `null` = not asked for. */
@@ -322,6 +328,16 @@ export function renderMenuInterest(interest: Briefing['menuInterest']): string[]
     `, ${percentOf(now.abroad, now.visits)} ze zahraničí` + (languages.length ? `; jazyk webu ${languages.join(', ')}` : '') +
     `; z nich rezervaci ${verb(now.reserved, 'poslal')} ${now.reserved} (${rate} %)`];
 }
+/** Days of menu data the comparison by language needs, and visits a language needs to be shown in it. */
+export const MENU_LANGUAGE_DAYS = 28, MENU_LANGUAGE_MIN_VISITS = 30;
+/** The Monday line once 4 weeks of data are in: how often visits that opened the menu sent a reservation, by the website's language. */
+export function renderMenuByLanguage(interest: Briefing['menuByLanguage']): string[] {
+  if (!interest || interest.days < MENU_LANGUAGE_DAYS) return [];
+  const rows = interest.languages.filter(row => row.key !== 'neznamy' && row.visits >= MENU_LANGUAGE_MIN_VISITS);
+  if (rows.length < 2) return [];
+  const rate = (row: {visits: number; reserved: number}) => (Math.round(row.reserved / row.visits * 1000) / 10).toFixed(1).replace('.', ',');
+  return [`Rezervace po otevření lístku za 4 týdny podle jazyka webu: ${rows.map(row => `${LANGUAGE_NAMES[row.key] ?? row.key} ${rate(row)} % (${group(row.reserved)} z ${group(row.visits)})`).join(', ')}`];
+}
 export function renderMenuWeek(week: MenuWeek | null | undefined, title = 'Lístek za týden'): string[] {
   if (!week || !(week.prices.length + week.added.length + week.removed.length)) return [];
   const names = (list: string[]) => list.slice(0, 3).join(', ') + (list.length > 3 ? ` a další ${list.length - 3}` : '');
@@ -371,16 +387,20 @@ export const weakDaysText = (days: GuestOutlookDay[], ranking?: EventRank[] | nu
 export const WEB_DROP_MIN_VISITS = 30;
 export const WEB_DROP_SHARE = 0.5;
 export const WEB_DROP_MIN_SENT = 3;
-export function webDrop(day: WebTraffic | undefined, usual: {visits: number; sent: number}[] | undefined): Briefing['webDrop'] {
+export function webDrop(day: WebTraffic | undefined, usual: {visits: number; sent: number; menuVisits?: number}[] | undefined): Briefing['webDrop'] {
   if (!day || !usual || usual.length < 3) return null;
   const usualVisits = median(usual.map(row => row.visits)), usualSent = median(usual.map(row => row.sent)), sent = day.actions['rezervace-odeslana'] ?? 0;
   const lowVisits = usualVisits >= WEB_DROP_MIN_VISITS && day.visits < usualVisits * WEB_DROP_SHARE, noSent = usualSent >= WEB_DROP_MIN_SENT && sent === 0;
-  return lowVisits || noSent ? {visits: day.visits, usualVisits, sent, usualSent, lowVisits, noSent} : null;
+  // The menu is watched only on days that send it, against at least 3 usual days that sent it too; a website that dropped as a whole says it already.
+  const menuDays = usual.flatMap(row => row.menuVisits === undefined ? [] : [row.menuVisits]), usualMenu = menuDays.length >= 3 ? median(menuDays) : 0;
+  const lowMenu = !lowVisits && day.menu && usualMenu >= WEB_DROP_MIN_VISITS && day.menu.visits < usualMenu * WEB_DROP_SHARE ? {visits: day.menu.visits, usualVisits: usualMenu} : undefined;
+  return lowVisits || noSent || lowMenu ? {visits: day.visits, usualVisits, sent, usualSent, lowVisits, noSent, ...(lowMenu ? {lowMenu} : {})} : null;
 }
 /** "40 návštěv (obvykle 150) a žádný odeslaný rezervační formulář (obvykle 6), zkontroluj, že web a rezervace běží" */
 export const webDropText = (drop: NonNullable<Briefing['webDrop']>) =>
-  [drop.lowVisits ? `${group(drop.visits)} ${visitsWord(drop.visits)} (obvykle ${group(drop.usualVisits)})` : '', drop.noSent ? `žádný odeslaný rezervační formulář (obvykle ${drop.usualSent})` : '']
-    .filter(Boolean).join(' a ') + ', zkontroluj, že web a rezervace běží';
+  [drop.lowVisits ? `${group(drop.visits)} ${visitsWord(drop.visits)} (obvykle ${group(drop.usualVisits)})` : '', drop.noSent ? `žádný odeslaný rezervační formulář (obvykle ${drop.usualSent})` : '',
+    drop.lowMenu ? `lístek si ${verb(drop.lowMenu.visits, 'otevřel')} jen ${group(drop.lowMenu.visits)} ${visitsWord(drop.lowMenu.visits)} (obvykle ${group(drop.lowMenu.usualVisits)})` : '']
+    .filter(Boolean).join(' a ') + (drop.lowVisits || drop.noSent ? ', zkontroluj, že web a rezervace běží' : '') + (drop.lowMenu ? ', zkontroluj, že jde lístek na webu otevřít' : '');
 export type MonthResult = {
   month: string; through: string; rows: {account: string; name: string; amountCents: number}[];
   revenueCents: number; revenueDays: number; error: string | null;
@@ -447,6 +467,7 @@ export function summarizeWeb(day: WebTraffic | undefined, lastWeek: WebTraffic |
     visits: day.visits, withAction: day.visitsWithAction, lastWeekVisits: lastWeek?.visits ?? null,
     reservationsSent: day.actions['rezervace-odeslana'] ?? 0, reviewScans: day.reviewScans,
     topOrigins: [...day.origins].sort((a, b) => b.visits - a.visits || a.key.localeCompare(b.key)).filter(row => row.visits > 0).slice(0, 3).map(({name, visits}) => ({name, visits})),
+    menuVisits: day.menu?.visits ?? null,
   };
 }
 /** New reviews of the day: count, average stars (tenths), how many have 3 ★ or less, per source; and what waits in the admin. */
@@ -638,7 +659,7 @@ export function buildBriefing(input: {
   web?: WebTraffic; webLastWeek?: WebTraffic;
   /** Visits and sent booking forms of the same weekday over the 4 weeks before (days the website sent). */
   webUsual?: {visits: number; sent: number}[];
-  eventRanking?: EventRank[] | null; menuWeek?: MenuWeek | null; menuDay?: MenuWeek | null; menuMonth?: MenuMonth | null; slowSellers?: SlowSellers | null; priceResults?: PriceExperiment[]; menuProblems?: string[]; priceMismatches?: PriceMismatch[]; priceCheck?: Briefing['priceCheck']; menuGaps?: Briefing['menuGaps']; menuInterest?: Briefing['menuInterest'];
+  eventRanking?: EventRank[] | null; menuWeek?: MenuWeek | null; menuDay?: MenuWeek | null; menuMonth?: MenuMonth | null; slowSellers?: SlowSellers | null; priceResults?: PriceExperiment[]; menuProblems?: string[]; priceMismatches?: PriceMismatch[]; priceCheck?: Briefing['priceCheck']; menuGaps?: Briefing['menuGaps']; menuInterest?: Briefing['menuInterest']; menuByLanguage?: Briefing['menuByLanguage'];
   costs?: MonthResult | null; costsPrevious?: MonthResult | null; supplies?: SupplyBrief | null;
   reviews?: ReviewSummary;
   week?: Week | null; silent?: {name: string; since: string}[];
@@ -727,7 +748,7 @@ export function buildBriefing(input: {
     web: summarizeWeb(input.web, input.webLastWeek),
     webDrop: webDrop(input.web, input.webUsual),
     eventRanking: input.eventRanking ?? null,
-    menuWeek: input.menuWeek ?? null, menuDay: input.menuDay ?? null, menuMonth: input.menuMonth ?? null, slowSellers: input.slowSellers ?? null, priceResults: input.priceResults ?? [], menuProblems: input.menuProblems ?? [], priceMismatches: input.priceMismatches ?? [], priceCheck: input.priceCheck ?? null, menuGaps: input.menuGaps ?? null, menuInterest: input.menuInterest ?? null,
+    menuWeek: input.menuWeek ?? null, menuDay: input.menuDay ?? null, menuMonth: input.menuMonth ?? null, slowSellers: input.slowSellers ?? null, priceResults: input.priceResults ?? [], menuProblems: input.menuProblems ?? [], priceMismatches: input.priceMismatches ?? [], priceCheck: input.priceCheck ?? null, menuGaps: input.menuGaps ?? null, menuInterest: input.menuInterest ?? null, menuByLanguage: input.menuByLanguage ?? null,
     reviews: summarizeReviews(input.reviews),
     costs: input.costs ?? null, costsPrevious: input.costsPrevious ?? null, supplies: input.supplies ?? null,
     week: input.week ?? null,
@@ -804,7 +825,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderMenuWeek(briefing.menuDay, 'Lístek se změnil'), ...(briefing.menuProblems ?? []).map(text => `⚠ ${text}`));
   lines.push(...renderNotes(briefing));
   // The week in a few numbers once a week, in the message about Sunday (Monday morning).
-  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceResults(briefing.priceResults), ...renderPriceCheck(briefing.priceCheck), ...renderMenuGaps(briefing.menuGaps), ...renderMenuInterest(briefing.menuInterest));
+  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceResults(briefing.priceResults), ...renderPriceCheck(briefing.priceCheck), ...renderMenuGaps(briefing.menuGaps), ...renderMenuInterest(briefing.menuInterest), ...renderMenuByLanguage(briefing.menuByLanguage));
   // The month so far once a week, and the whole month in the message about its last day (the 1st in the morning).
   lines.push(...renderMonth(briefing.month));
   // Which events draw guests, once a month in the message about its last day.
@@ -900,6 +921,7 @@ export function renderWeb(web: Briefing['web']): string[] {
     line += ` (před týdnem ${group(web.lastWeekVisits)}${change})`;
   }
   line += `, ${group(web.withAction)} s rezervací, telefonem nebo navigací, odeslané rezervace ${web.reservationsSent}`;
+  if (web.menuVisits != null) line += `, lístek si ${verb(web.menuVisits, 'otevřel')} ${group(web.menuVisits)}`;
   if (web.reviewScans) line += `, QR na recenze ${web.reviewScans}×`;
   return web.topOrigins.length ? [line, 'Odkud: ' + web.topOrigins.map(row => `${row.name} ${group(row.visits)}`).join(' · ')] : [line];
 }

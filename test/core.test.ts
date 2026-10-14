@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, rankEvents, renderEventRanking, eventTip, renderMenuWeek, renderMenuMonth, renderSlowSellers, renderPriceResults, renderPriceCheck, renderPriceMismatches, sectionThousands, guestOutlookDay, median, weakDays, webDrop, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, sumMenuInterest, renderMenuInterest, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, rankEvents, renderEventRanking, eventTip, renderMenuWeek, renderMenuMonth, renderSlowSellers, renderPriceResults, renderPriceCheck, renderPriceMismatches, sectionThousands, guestOutlookDay, median, weakDays, webDrop, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, sumMenuInterest, renderMenuInterest, renderMenuByLanguage, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
@@ -586,6 +586,29 @@ test('website watch: visits under half of the usual or no booking form sent, aga
   const briefing = buildBriefing({businessDate: '2026-10-13', config, bills: [], closings: [], planHistory: [], incomplete: false, web: day(40, 0), webUsual: usual});
   assert.match(renderBriefing('Test', briefing), /\n⚠ Web: 40 návštěv \(obvykle 100\) a žádný odeslaný rezervační formulář \(obvykle 5\), zkontroluj, že web a rezervace běží\.(\n|$)/);
   assert.ok(todoList(briefing).some(item => item.text === 'Web: 40 návštěv (obvykle 100) a žádný odeslaný rezervační formulář (obvykle 5), zkontroluj, že web a rezervace běží'));
+  // The menu: only days that send it count, at least 3 of them; a website that dropped as a whole does not warn about it twice.
+  const interest = (visits: number) => ({views: {food: visits, drinks: 0}, visits, abroad: 0, reserved: 0, languages: []});
+  const withMenu = (visits: number, menuVisits: number) => ({...day(visits, 5), menu: interest(menuVisits)});
+  const usualMenu = [{visits: 100, sent: 5, menuVisits: 40}, {visits: 120, sent: 4, menuVisits: 50}, {visits: 90, sent: 6, menuVisits: 30}, {visits: 100, sent: 5}];
+  assert.deepEqual(webDrop(withMenu(100, 15), usualMenu), {visits: 100, usualVisits: 100, sent: 5, usualSent: 5, lowVisits: false, noSent: false, lowMenu: {visits: 15, usualVisits: 40}});
+  assert.equal(webDrop(withMenu(100, 20), usualMenu), null, 'half of the usual is fine');
+  assert.equal(webDrop(withMenu(100, 1), usualMenu.slice(1)), null, 'needs 3 usual days with the menu');
+  assert.equal(webDrop(day(100, 5), usualMenu), null, 'a day without the menu is not watched');
+  assert.equal(webDrop(withMenu(40, 1), usualMenu)?.lowMenu, undefined, 'the website as a whole dropped');
+  const menuBriefing = buildBriefing({businessDate: '2026-10-13', config, bills: [], closings: [], planHistory: [], incomplete: false, web: withMenu(100, 3), webUsual: usualMenu});
+  assert.match(renderBriefing('Test', menuBriefing), /\nWeb: 100 návštěv, 0 s rezervací, telefonem nebo navigací, odeslané rezervace 5, lístek si otevřely 3\n/);
+  assert.match(renderBriefing('Test', menuBriefing), /\n⚠ Web: lístek si otevřely jen 3 návštěvy \(obvykle 40\), zkontroluj, že jde lístek na webu otevřít\.(\n|$)/);
+  assert.ok(todoList(menuBriefing).some(item => item.text === 'Web: lístek si otevřely jen 3 návštěvy (obvykle 40), zkontroluj, že jde lístek na webu otevřít'));
+  assert.equal(summarizeWeb(day(10, 0), undefined)?.menuVisits, null);
+});
+
+test('menu by language: after 4 weeks of data, how often visits that opened the menu sent a reservation', () => {
+  const four = {from: '2026-09-14', to: '2026-10-11', days: 28, visits: 1000, abroad: 600, reserved: 40, food: 0, drinks: 0,
+    languages: [{key: 'en', visits: 600, reserved: 18}, {key: 'cs', visits: 350, reserved: 21}, {key: 'neznamy', visits: 40, reserved: 1}, {key: 'de', visits: 10, reserved: 0}]};
+  assert.deepEqual(renderMenuByLanguage(four), ['Rezervace po otevření lístku za 4 týdny podle jazyka webu: anglicky 3,0 % (18 z 600), česky 6,0 % (21 z 350)']);
+  assert.deepEqual(renderMenuByLanguage({...four, days: 27}), [], 'not before 4 weeks of data');
+  assert.deepEqual(renderMenuByLanguage({...four, languages: four.languages.slice(0, 1)}), [], 'nothing to compare');
+  assert.deepEqual(renderMenuByLanguage(null), []);
 });
 
 test('events looked back on in the weekly summary', () => {
