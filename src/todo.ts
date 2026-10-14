@@ -1,5 +1,5 @@
 import {weekday} from './time.ts';
-import {duplicateText, overdueText, riseText} from './supplies.ts';
+import {dueText, duplicateText, foodCostText, overdueText, riseText, unusualText} from './supplies.ts';
 import {CASH_DIFFERENCE_CENTS, crowns, menuGapsText, mismatch, mismatchText, noShowAlarm, noShowText, pendingAheadText, reviewDrop, reviewDropText, unusual, weakDays, weakDaysText, webDropText, type Briefing} from './briefing.ts';
 
 export type TodoItem = {level: 'warn' | 'info'; text: string; amountCents: number | null};
@@ -34,6 +34,10 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   for (const rise of briefing.supplies?.rises ?? []) warn(`Zdražení: ${riseText(rise)}`, rise.extraCents);
   for (const row of briefing.supplies?.overdue ?? []) warn(`Faktura po splatnosti: ${overdueText(row)}`, row.grossCents);
   for (const row of briefing.supplies?.duplicates ?? []) warn(`Možná duplicitní faktura: ${duplicateText(row)}`, row.grossCents);
+  for (const row of briefing.supplies?.unusual ?? []) warn(`Neobvyklý nákup: ${unusualText(row)}`, row.netCents);
+  if (briefing.supplies?.foodCostAlert) warn(`${foodCostText(briefing.supplies.foodCostAlert)}.`);
+  // Invoices to pay this week: not late yet, so info, but with their amount so nothing slips past its due date.
+  for (const row of briefing.supplies?.dueSoon ?? []) items.push({level: 'info', text: `Zaplatit: ${dueText(row)}`, amountCents: row.grossCents});
   // Products the POS charges at another price than the menu: weighted by what it made the day's revenue differ.
   // One line for all of them, so a POS not yet repriced does not push the other warnings out of the list.
   const mismatches = briefing.priceMismatches ?? [];

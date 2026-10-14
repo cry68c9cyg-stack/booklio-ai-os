@@ -5,7 +5,7 @@ import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts'
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
-import {counted, drinkMargins, duplicateInvoices, litresPerUnit, overdueInvoices, priceRises, renderSupplies, risesBySupplier, supplyBrief, supplySummary, unitPrice} from '../src/supplies.ts';
+import {counted, drinkMargins, dueSoon, duplicateInvoices, foodCostAlert, litresPerUnit, monthOverMonth, overdueInvoices, priceRises, renderSupplies, risesBySupplier, supplyBrief, supplySummary, unitPrice, unusualPurchases} from '../src/supplies.ts';
 import {weatherDays, weatherText} from '../src/weather.ts';
 import {itemProfit, menuGaps, menuItemTax, menuMatrix, nameKey, pairSale, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, volumeOf, type ItemSale} from '../src/menu.ts';
 import {businessDate, sameClockDaysBefore} from '../src/time.ts';
@@ -14,7 +14,7 @@ import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type
 
 const config: TenantConfig = {
   name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9],
-  registers: ['bar', 'klub'], sections: {diner: 'Diner', bar: 'Bar', club: 'Klub'}, recipients: [], bottleCheck: null, reportsLink: null, dashboardPhones: null, web: null, location: null, disabledSources: [],
+  registers: ['bar', 'klub'], sections: {diner: 'Diner', bar: 'Bar', club: 'Klub'}, recipients: [], bottleCheck: null, reportsLink: null, dashboardPhones: null, web: null, location: null, disabledSources: [], foodCostLimitPermille: null,
 };
 const bill = (id: string, extra: Partial<Bill> = {}): Bill => ({
   type: 'bill', id, version: 1, businessDate: '2026-10-08', closedAt: '2026-10-08T20:00:00.000Z', registerId: 'bar', section: 'bar',
@@ -948,4 +948,43 @@ test('a price change as an experiment: per day before and after, waiting under 7
   assert.equal(priceExperiment(change, {days: 28, quantity: 28, grossCents: 1000}, {days: 3, quantity: 3, grossCents: 100}).status, 'waiting');
   const young = priceExperiment(change, {days: 5, quantity: 5, grossCents: 1000}, {days: 28, quantity: 28, grossCents: 6000});
   assert.deepEqual([young.status, young.quantityPermille], ['no_history', null], 'too few days of bills before the change');
+});
+
+test('payments and cost budget: due soon, food cost limit, month against month, unusual purchases', () => {
+  const invoice = (id: string, businessDate: string, netCents: number, extra: Partial<SupplierInvoice> = {}): SupplierInvoice => ({type: 'supplier_invoice', id, version: 1,
+    businessDate, source: 'dishboard', supplier: 'Makro', supplierId: null, number: null, dueDate: null, paidDate: null, status: 'active',
+    netCents, grossCents: Math.round(netCents * 1.12), kind: 'food', category: 'Maso', items: [], ...extra});
+  // Due soon: from today to 6 days after, unpaid; overdue and paid ones are not here.
+  const due = [invoice('d0', '2026-10-01', 1000, {dueDate: '2026-10-14', number: 'A'}), invoice('d1', '2026-10-01', 1000, {dueDate: '2026-10-16'}),
+    invoice('d2', '2026-10-01', 1000, {dueDate: '2026-10-20'}), invoice('d3', '2026-10-01', 1000, {dueDate: '2026-10-21'}),
+    invoice('d4', '2026-10-01', 1000, {dueDate: '2026-10-15', paidDate: '2026-10-10'}), invoice('d5', '2026-10-01', 1000, {dueDate: '2026-10-13'})];
+  assert.deepEqual(dueSoon(due, '2026-10-14').map(row => [row.dueDate, row.days]), [['2026-10-14', 0], ['2026-10-16', 2], ['2026-10-20', 6]]);
+  // Food cost limit: the venue's or 30 %, only from 7 days of revenue.
+  const month = (permille: number | null, revenueDays: number) => ({...supplySummary([], '2026-10-01', '2026-10-10', {revenueCents: 0, revenueDays}), foodCostPermille: permille});
+  assert.deepEqual(foodCostAlert(month(342, 10), null), {permille: 342, limitPermille: 300});
+  assert.equal(foodCostAlert(month(342, 6), null), null, 'too few days of revenue');
+  assert.equal(foodCostAlert(month(342, 10), 350), null, 'under the venue\'s own limit');
+  assert.equal(foodCostAlert(month(300, 10), null), null, 'at the limit is fine');
+  // Month against the same days of the month before; the 31st against September takes its 30th.
+  const compare = monthOverMonth([invoice('m1', '2026-10-05', 50000), invoice('m2', '2026-09-05', 20000), invoice('m3', '2026-09-20', 99999),
+    invoice('m4', '2026-09-03', 7000, {category: 'Zelenina'}), invoice('m5', '2026-10-31', 1000, {category: 'Pečivo'}), invoice('m6', '2026-09-30', 3000, {category: 'Pečivo'})], '2026-10-11');
+  assert.deepEqual(compare.map(row => [row.name, row.netCents, row.previousCents, row.changeCents]), [['Maso', 50000, 20000, 30000], ['Zelenina', 0, 7000, -7000]]);
+  assert.deepEqual(monthOverMonth([invoice('e1', '2026-10-31', 1000, {category: 'Pečivo'}), invoice('e2', '2026-09-30', 3000, {category: 'Pečivo'})], '2026-10-31')
+    .map(row => row.previousCents), [3000]);
+  // Unusual: a new supplier once the purchases reach 60 days back, and an invoice 3× over the supplier's median.
+  const history = ['2026-07-01', '2026-08-01', '2026-09-01'].map((date, i) => invoice(`h${i}`, date, 10000 + i * 1000));
+  const unusual = unusualPurchases([...history, invoice('big', '2026-10-10', 33000, {number: '77'}), invoice('ok', '2026-10-11', 25000),
+    invoice('new', '2026-10-12', 5000, {supplier: 'Řeznictví Novák'})], '2026-10-06', '2026-10-12');
+  assert.deepEqual(unusual.map(row => [row.kind, row.supplier, row.netCents, row.usualCents]), [['large', 'Makro', 33000, 11000], ['new_supplier', 'Řeznictví Novák', 5000, null]]);
+  assert.deepEqual(unusualPurchases([invoice('n1', '2026-10-10', 5000)], '2026-10-06', '2026-10-12'), [], 'no history yet: nobody is new');
+  // The morning message and the to-do list.
+  const brief = supplyBrief([...history, invoice('big', '2026-10-10', 33000, {dueDate: '2026-10-16', number: '77'})], '2026-10-13', {revenueCents: 100000, revenueDays: 13})!;
+  const lines = renderSupplies(brief);
+  assert.ok(lines.includes('⚠ Food cost 33 % z tržeb s DPH je nad hranicí 30 %'), lines.join('\n'));
+  assert.ok(lines.includes('Splatné do 7 dní: 1 za 370 Kč (nejbližší Makro č. 77, 370 Kč, splatná 16. 10. (za 2 dny))'), lines.join('\n'));
+  assert.ok(lines.includes('⚠ Neobvyklý nákup: Makro 330 Kč (10. 10.), obvykle 110 Kč'), lines.join('\n'));
+  const todo = todoList({...buildBriefing({businessDate: '2026-10-13', config, bills: [], closings: [], planHistory: [], incomplete: false}), supplies: brief}).map(item => [item.level, item.text]);
+  assert.ok(todo.some(([level, text]) => level === 'warn' && text === 'Neobvyklý nákup: Makro 330 Kč (10. 10.), obvykle 110 Kč'), JSON.stringify(todo));
+  assert.ok(todo.some(([level, text]) => level === 'warn' && text === 'Food cost 33 % z tržeb s DPH je nad hranicí 30 %.'), JSON.stringify(todo));
+  assert.ok(todo.some(([level, text]) => level === 'info' && text === 'Zaplatit: Makro č. 77, 370 Kč, splatná 16. 10. (za 2 dny)'), JSON.stringify(todo));
 });
