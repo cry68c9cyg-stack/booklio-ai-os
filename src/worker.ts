@@ -1,10 +1,10 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
-import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
+import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, type MenuMonth, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, sumMenuInterest, type MenuInterest, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
-import {menuChanges, menuOverview} from './menu.ts';
+import {itemProfit, menuChanges, menuGaps, menuItemTax, menuMatrix, menuOverview, nameKey, PART_NAMES, pairSale, priceText, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
 import {czechHolidays, holidayName} from './holidays.ts';
@@ -15,7 +15,7 @@ import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
 import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
 import {counted, drinkMargins, duplicateInvoices, overdueInvoices, priceRises, supplyBrief, supplySummary} from './supplies.ts';
 import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
-import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
+import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Batch, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
 import {dashboardWeb} from './web-views.ts';
 import {WEATHER_AGENT, WEATHER_URL, weatherDays, type WeatherDay} from './weather.ts';
@@ -62,6 +62,10 @@ const same = (a: string, b: string) => {
 
 const randomHex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
 const PREPARE_BUDGET_MS = 60000;
+/** Order of the price findings in the Monday line: prices far off first, an odd ending last. */
+const FINDING_RANK = {cheap: 0, expensive: 0, gap: 1, ending: 2} as const;
+/** Record types of the ingest contract; a refused batch logs only these (anything else as `other`). */
+const RECORD_TYPES = new Set(['bill', 'cash_closing', 'bottle_check', 'reservation', 'web_traffic', 'review_summary', 'event', 'menu', 'supplier_invoice']);
 const SESSION_MS = 30 * 86400000;
 /** A session renews itself on use, but never lives longer than a year from the SMS code that opened it. */
 const SESSION_MAX_MS = 365 * 86400000;
@@ -129,6 +133,14 @@ export class TenantObject extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS menu_changes(at TEXT NOT NULL, business_date TEXT NOT NULL, menu_id TEXT NOT NULL, item_id TEXT NOT NULL, name TEXT NOT NULL,
         kind TEXT NOT NULL CHECK(kind IN ('added','removed','price')), old_cents INTEGER, new_cents INTEGER, old_text TEXT, new_text TEXT);
       CREATE INDEX IF NOT EXISTS menu_changes_item ON menu_changes(item_id, at);
+      -- A menu that would drop over a tenth of the items at once waits here (a broken website?) and takes over after 24 hours.
+      CREATE TABLE IF NOT EXISTS menu_held(id TEXT PRIMARY KEY, held_at TEXT NOT NULL, version INTEGER NOT NULL, json TEXT NOT NULL, installation_id TEXT NOT NULL,
+        removed INTEGER NOT NULL, total INTEGER NOT NULL);
+      -- Prices of the menu per month, part and category (last state of the month), for the price trend.
+      CREATE TABLE IF NOT EXISTS menu_months(month TEXT NOT NULL, part TEXT NOT NULL, category TEXT NOT NULL, items INTEGER NOT NULL, avg_cents INTEGER NOT NULL,
+        PRIMARY KEY(month, part, category));
+      -- Batches OKO1 refused as not matching the contract: when, from whom, which record types (no content).
+      CREATE TABLE IF NOT EXISTS ingest_rejects(at TEXT NOT NULL, installation_id TEXT NOT NULL, code TEXT NOT NULL, types TEXT NOT NULL);
     `));
     // Wrong codes for unknown venues are counted per venue name in the shared stand-in (see `loginStub`).
     if (!this.sql.exec<{name: string}>('PRAGMA table_info(login_failures)').toArray().some(column => column.name === 'scope')) {
@@ -145,6 +157,7 @@ export class TenantObject extends DurableObject<Env> {
   async handle(tenant: string, route: string, method: string, body: unknown, token: string | null, query: Record<string, string>): Promise<Result> {
     try {
       if (route === 'v1/ingest' && method === 'POST') return this.ingest(tenant, body, token);
+      if (route === 'v1/menu' && method === 'GET') return this.menuForPos(token, query);
       if (route === 'admin/report' && method === 'PUT') return ok(this.saveReport(validateDailyReport(body)));
       if (route === 'admin/report' && method === 'GET') return isDate(query.date) ? ok({report: this.report(query.date), notes: this.notes(query.date)}) : failure('INVALID_REQUEST', 400);
       if (route === 'admin/fetch' && method === 'POST') {
@@ -300,7 +313,7 @@ export class TenantObject extends DurableObject<Env> {
     const stored = this.sql.exec<{text: string}>('SELECT text FROM briefings WHERE business_date=?', day).toArray()[0];
     const todo = this.todoFor(day, briefing);
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
-      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day)});
+      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day)});
   }
 
   /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
@@ -382,7 +395,7 @@ export class TenantObject extends DurableObject<Env> {
   posTrends(date: string) {
     const config = this.config();
     if (!config) return null;
-    return {businessDate: date, week: this.week(date), month: this.month(config, date), trends: this.trends(date)};
+    return {businessDate: date, week: this.week(date), month: this.month(config, date), trends: this.trends(date), menuInterest: this.menuInterestWeeks(date)};
   }
 
   /** MCP: sums over any stretch of days (revenue, bookings, guests, no-shows, cancellations, sources, lead time, web, reviews) and its events. */
@@ -447,12 +460,42 @@ export class TenantObject extends DurableObject<Env> {
     };
   }
 
-  private ingest(tenant: string, body: unknown, token: string | null): Result {
-    const installationId = (body as {installationId?: unknown})?.installationId;
+  /** A paired installation (the POS) and its token, as the ingest checks them. */
+  private paired(installationId: unknown, token: string | null) {
     const row = typeof installationId === 'string'
       ? this.sql.exec<{token_hash: string}>('SELECT token_hash FROM installations WHERE installation_id=?', installationId).toArray()[0] : undefined;
-    if (!row || !token || !same(sha256(token), row.token_hash)) return failure('UNAUTHORIZED', 401);
-    const batch = validateBatch(body);
+    return !!row && !!token && same(sha256(token), row.token_hash);
+  }
+
+  /**
+   * The menu for the POS (docs/ingest-v1.md, „Lístek pro pokladnu“): the latest menu with each item's kind and VAT rate,
+   * so Pexeso takes it over and offers price changes. `since` = the version the POS has; the same one returns no items.
+   */
+  private menuForPos(token: string | null, query: Record<string, string>): Result {
+    if (!this.paired(query.installationId, token)) return failure('UNAUTHORIZED', 401);
+    // The website's menu (another sender, e.g. a test, never replaces it for the POS).
+    const menu = this.menu('menu-web') ?? this.menu();
+    if (!menu) return ok({menu: null});
+    if (query.since !== undefined && query.since === String(menu.version)) return ok({menu: null, unchanged: true, version: menu.version});
+    const received = this.sql.exec<{at: string}>("SELECT received_at AS at FROM records WHERE type='menu' AND id=?", menu.id).toArray()[0].at;
+    return ok({menu: {version: menu.version, businessDate: menu.businessDate, receivedAt: received,
+      items: menu.items.map(item => ({...item, ...menuItemTax(item)})), notes: menu.notes}});
+  }
+
+  private ingest(tenant: string, body: unknown, token: string | null): Result {
+    const installationId = (body as {installationId?: unknown})?.installationId;
+    if (!this.paired(installationId, token)) return failure('UNAUTHORIZED', 401);
+    let batch: Batch;
+    try { batch = validateBatch(body); } catch (error) {
+      // Kept so a sender whose data OKO1 keeps refusing (a broken menu from the website) is seen, not silently lost.
+      if (error instanceof InputError) {
+        const records = (body as {records?: unknown})?.records;
+        const types = [...new Set((Array.isArray(records) ? records : []).map(record => (record as {type?: unknown})?.type).map(type => typeof type === 'string' && RECORD_TYPES.has(type) ? type : 'other'))].slice(0, 10);
+        this.sql.exec('INSERT INTO ingest_rejects VALUES(?,?,?,?)', new Date().toISOString(), installationId, error.message.slice(0, 60), types.join(','));
+        this.sql.exec("DELETE FROM ingest_rejects WHERE at < ?", new Date(Date.now() - 90 * 86400000).toISOString());
+      }
+      throw error;
+    }
     const payloadHash = sha256(JSON.stringify(batch));
     return this.ctx.storage.transactionSync(() => {
       const replay = this.sql.exec<{payload_hash: string; result: string}>('SELECT payload_hash, result FROM batches WHERE batch_id=?', batch.batchId).toArray()[0];
@@ -461,7 +504,11 @@ export class TenantObject extends DurableObject<Env> {
       let accepted = 0, stale = 0;
       // A booking first sent with counts only takes its guest details (12 Oct 2026) and the time it was made at the same version (resent once).
       for (const record of batch.records) {
-        const before = record.type === 'menu' ? this.menu(record.id) : null;
+        if (record.type === 'menu') {
+          const result = this.storeMenu(record, batch.installationId, now, false);
+          if (result === 'stale') stale++; else accepted++;
+          continue;
+        }
         const changed = this.sql.exec(`INSERT INTO records(type, id, version, business_date, register_id, json, installation_id, received_at) VALUES(?,?,?,?,?,?,?,?)
           ON CONFLICT(type, id) DO UPDATE SET version=excluded.version, business_date=excluded.business_date, register_id=excluded.register_id,
           json=excluded.json, installation_id=excluded.installation_id, received_at=excluded.received_at WHERE excluded.version > records.version
@@ -470,13 +517,6 @@ export class TenantObject extends DurableObject<Env> {
             AND (instr(excluded.json, '"guest":') > 0 OR instr(records.json, '"guest":') = 0))`,
         record.type, record.id, record.version, record.businessDate, 'registerId' in record ? record.registerId : '', JSON.stringify(record), batch.installationId, now).rowsWritten;
         if (changed) accepted++; else stale++;
-        // The first menu is the starting point; from then on every new item, removed item and new price is kept.
-        if (changed && before && record.type === 'menu') {
-          for (const change of menuChanges(before, record)) {
-            this.sql.exec('INSERT INTO menu_changes VALUES(?,?,?,?,?,?,?,?,?,?)', now, record.businessDate, record.id, change.itemId, change.name, change.kind,
-              change.oldCents, change.newCents, change.oldText, change.newText);
-          }
-        }
       }
       const result = {batchId: batch.batchId, accepted, stale};
       this.sql.exec('INSERT INTO batches VALUES(?,?,?,?,?)', batch.batchId, batch.installationId, payloadHash, JSON.stringify(result), now);
@@ -558,6 +598,85 @@ export class TenantObject extends DurableObject<Env> {
     }
   }
 
+  /**
+   * Stores a newer menu with its changes (the first one is the starting point), or holds it when it would drop more than
+   * a tenth of the items at once (at least 3): a website error must not wipe the menu. A held menu takes over after
+   * 24 hours (`releaseHeldMenu`) or is replaced by a newer menu; `force` stores it anyway, valid from `effectiveDate`
+   * (the business day it takes over, not the day the website sent it).
+   */
+  private storeMenu(record: Menu, installationId: string, now: string, force: boolean, effectiveDate = record.businessDate): 'stored' | 'held' | 'stale' {
+    const before = this.menu(record.id);
+    if (before && before.version >= record.version) return 'stale';
+    const held = this.sql.exec<{version: number}>('SELECT version FROM menu_held WHERE id=?', record.id).toArray()[0];
+    if (held && held.version >= record.version && !force) return 'stale';
+    if (before && !force) {
+      const ids = new Set(record.items.map(item => item.id)), removed = before.items.filter(item => !ids.has(item.id)).length;
+      if (removed >= 3 && removed * 10 > before.items.length) {
+        // A newer menu still without the items replaces the held one, but the 24 hours run from the first.
+        this.sql.exec(`INSERT INTO menu_held VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET version=excluded.version, json=excluded.json,
+          installation_id=excluded.installation_id, removed=excluded.removed, total=excluded.total`, record.id, now, record.version, JSON.stringify(record), installationId, removed, before.items.length);
+        return 'held';
+      }
+    }
+    this.sql.exec(`INSERT INTO records(type, id, version, business_date, register_id, json, installation_id, received_at) VALUES('menu',?,?,?,'',?,?,?)
+      ON CONFLICT(type, id) DO UPDATE SET version=excluded.version, business_date=excluded.business_date, json=excluded.json,
+      installation_id=excluded.installation_id, received_at=excluded.received_at`, record.id, record.version, effectiveDate, JSON.stringify({...record, businessDate: effectiveDate}), installationId, now);
+    this.sql.exec('DELETE FROM menu_held WHERE id=?', record.id);
+    for (const change of before ? menuChanges(before, record) : []) {
+      this.sql.exec('INSERT INTO menu_changes VALUES(?,?,?,?,?,?,?,?,?,?)', now, effectiveDate, record.id, change.itemId, change.name, change.kind,
+        change.oldCents, change.newCents, change.oldText, change.newText);
+    }
+    // The month's prices per category for the trend: the last menu of the month wins.
+    const month = effectiveDate.slice(0, 7);
+    this.sql.exec('DELETE FROM menu_months WHERE month=?', month);
+    for (const part of menuOverview(record).parts) for (const category of part.categories) {
+      this.sql.exec('INSERT INTO menu_months VALUES(?,?,?,?,?)', month, part.part, category.name, category.items, category.avgCents);
+    }
+    return 'stored';
+  }
+
+  /**
+   * A held menu that nobody replaced within 24 hours was meant: it takes over (the morning run), valid from the business
+   * day of the release, so the days before keep their old prices. A failure never stops the morning message.
+   */
+  private releaseHeldMenu(at: Date, config: TenantConfig) {
+    for (const row of this.sql.exec<{id: string; json: string; installation_id: string}>('SELECT id, json, installation_id FROM menu_held WHERE held_at <= ?', new Date(at.getTime() - 86400000).toISOString()).toArray()) {
+      try {
+        this.ctx.storage.transactionSync(() => {
+          const result = this.storeMenu(JSON.parse(row.json) as Menu, row.installation_id, at.toISOString(), true, businessDate(at, config.timeZone, config.businessDayCutoffHour));
+          if (result === 'stale') this.sql.exec('DELETE FROM menu_held WHERE id=?', row.id);
+        });
+      } catch (error) {
+        console.error('menu release failed', error instanceof Error ? error.message : 'unknown');
+      }
+    }
+  }
+
+  /** What is wrong with the menu's flow: a held menu, or menu batches refused over the last 7 days (to-do list, morning message). */
+  private menuProblems(at: Date): string[] {
+    const problems = this.sql.exec<{removed: number; total: number; held_at: string}>('SELECT removed, total, held_at FROM menu_held').toArray()
+      .map(row => `Web poslal lístek bez ${row.removed} z ${row.total} položek; OKO1 drží předchozí lístek a nový převezme ráno po 24 hodinách, jestli ho web mezitím neopraví.`);
+    const refused = this.sql.exec<{count: number; code: string}>("SELECT count(*) AS count, max(code) AS code FROM ingest_rejects WHERE at >= ? AND (',' || types || ',') LIKE '%,menu,%'",
+      new Date(at.getTime() - 7 * 86400000).toISOString()).toArray()[0];
+    if (refused.count) problems.push(`Lístek z webu OKO1 ${refused.count}× odmítlo (${refused.code}); platí poslední přijatý lístek.`);
+    return problems;
+  }
+
+  /** Average base price per part and category by month (the last 12 months with a menu); the current month from the current menu. */
+  private menuTrend() {
+    const menu = this.menu();
+    if (!menu) return null;
+    const current = menu.businessDate.slice(0, 7);
+    const rows = this.sql.exec<{month: string; part: string; category: string; avg_cents: number}>('SELECT month, part, category, avg_cents FROM menu_months WHERE month < ? ORDER BY month DESC LIMIT 2000', current).toArray();
+    const months = [...new Set(rows.map(row => row.month))].slice(0, 11).reverse().concat(current);
+    const now = menuOverview(menu);
+    return {months, categories: now.parts.flatMap(part => part.categories.map(category => {
+      const values = months.map(month => month === current ? category.avgCents : rows.find(row => row.month === month && row.part === part.part && row.category === category.name)?.avg_cents ?? null);
+      const first = values.find(value => value !== null) ?? null;
+      return {part: part.part, name: category.name, values, changePermille: first ? Math.round((category.avgCents / first - 1) * 1000) : null};
+    }))};
+  }
+
   /** The latest menu from one sender (`id`), or the latest of any sender. */
   private menu(id?: string): Menu | null {
     const row = this.sql.exec<{json: string}>(`SELECT json FROM records WHERE type='menu'${id ? ' AND id=?' : ''} ORDER BY received_at DESC LIMIT 1`, ...(id ? [id] : [])).toArray()[0];
@@ -579,7 +698,313 @@ export class TenantObject extends DurableObject<Env> {
     if (!menu) return null;
     const received = this.sql.exec<{at: string}>("SELECT max(received_at) AS at FROM records WHERE type='menu'").toArray()[0].at;
     const changes = this.menuChangesBetween(addDays(day, -29), addDays(day, 1), 30);
-    return {...menuOverview(menu), received: stamp(new Date(received), config.timeZone), changes: changes.rows, changesTotal: changes.total};
+    const findings = priceCheck(menu), sales = this.itemSales(addDays(day, -29), day);
+    const profit = sales.length ? itemProfit(menu, sales, this.menuItemCosts()) : null;
+    return {...menuOverview(menu), received: stamp(new Date(received), config.timeZone), changes: changes.rows, changesTotal: changes.total,
+      priceCheck: {findings: [...findings].sort((a, b) => FINDING_RANK[a.kind] - FINDING_RANK[b.kind]).slice(0, 10), total: findings.length},
+      gaps: (gaps => ({items: gaps.slice(0, 20), total: gaps.length}))(menuGaps(menu)), trend: this.menuTrend(), problems: this.menuProblems(new Date()),
+      matrix: profit ? menuMatrix(menu, profit, this.newMenuItems(addDays(day, -29), day)).map(part => ({...part, classes: part.classes.map(row => ({...row, count: row.items.length, items: row.items.slice(0, 5)}))})) : null,
+      experiments: profit ? this.priceExperiments(day, 5) : null,
+      profit: profit && {from: addDays(day, -29), to: day, items: profit.items.slice(0, 10), itemsTotal: profit.items.length, unpaired: profit.unpaired.slice(0, 5),
+        unpairedTotal: profit.unpaired.length, totals: profit.totals, missing: profit.missing}};
+  }
+
+  /**
+   * What the POS sold over some days per product (closed bills only), with revenue without VAT where every line has its
+   * VAT rate. A product is its POS id, or its name when the POS sends none. A line's revenue is its share of what the bill
+   * was paid (`totalCents`), so a discount on the whole bill falls on its lines in proportion (docs/ingest-v1.md).
+   */
+  private itemSales(from: string, to: string): ItemSale[] {
+    // `product` and not `key`, `bill` and not `json`: json_each has columns of those names.
+    // A product linked to a menu item by the POS (`menuItemId`) is counted per item it was linked to when sold.
+    return this.sql.exec<{product: string; product_id: string | null; menu_item_id: string | null; name: string; quantity: number; gross_cents: number; net: number | null; without_vat: number}>(`
+      SELECT coalesce(json_extract(i.value, '$.productId'), 'name:' || json_extract(i.value, '$.name')) AS product, max(json_extract(i.value, '$.productId')) AS product_id,
+        json_extract(i.value, '$.menuItemId') AS menu_item_id,
+        max(json_extract(i.value, '$.name')) AS name, sum(json_extract(i.value, '$.quantity')) AS quantity, sum(json_extract(i.value, '$.totalCents') * b.paid) AS gross_cents,
+        sum(json_extract(i.value, '$.totalCents') * b.paid * 100.0 / (100 + json_extract(i.value, '$.vatRate'))) AS net,
+        sum(json_extract(i.value, '$.vatRate') IS NULL) AS without_vat
+      FROM (SELECT r.json AS bill, coalesce(json_extract(r.json, '$.totalCents') * 1.0
+          / nullif((SELECT sum(json_extract(l.value, '$.totalCents')) FROM json_each(r.json, '$.items') l), 0), 1) AS paid
+        FROM records r WHERE r.type='bill' AND r.business_date BETWEEN ? AND ? AND json_extract(r.json, '$.status') = 'closed') b, json_each(b.bill, '$.items') i
+      GROUP BY product, menu_item_id ORDER BY gross_cents DESC`, from, to).toArray()
+      .map(row => ({key: row.menu_item_id === null ? row.product : `${row.product} ${row.menu_item_id}`, productId: row.product_id, menuItemId: row.menu_item_id, name: row.name, quantity: Math.round(row.quantity * 1000) / 1000, grossCents: Math.round(row.gross_cents),
+        netCents: row.without_vat || row.net === null ? null : Math.round(row.net)}));
+  }
+
+  /**
+   * Food cost per piece of a menu item without VAT in haléře, by menu item id. Empty until the purchase prices and
+   * recipes are joined to the menu (the batch „Zisk a marže“ of the Dishboard work fills it); profit by item uses it as is.
+   */
+  private menuItemCosts(): Map<string, number> {
+    return new Map();
+  }
+
+  /** MCP: profit by menu item over some days (POS bills paired to the menu); null without a venue or a menu. */
+  posItemProfit(from: string, to: string) {
+    const menu = this.menu();
+    if (!this.config() || !menu) return null;
+    const sales = this.itemSales(from, to);
+    return {from, to, bills: sales.length > 0, ...itemProfit(menu, sales, this.menuItemCosts())};
+  }
+
+  /** MCP: virtual repricing of the menu, with the revenue of the last 30 days at the same pieces sold. */
+  posRepricing(input: RepricingInput) {
+    const config = this.config(), menu = this.menu();
+    if (!config || !menu) return null;
+    const today = businessDate(new Date(), config.timeZone, config.businessDayCutoffHour), from = addDays(today, -30), to = addDays(today, -1);
+    const sold = new Map<string, {quantity: number; grossCents: number; netCents: number | null}>();
+    for (const sale of this.itemSales(from, to)) {
+      const pairing = pairSale(menu, sale);
+      if (!pairing) continue;
+      const row = sold.get(pairing.itemId) ?? {quantity: 0, grossCents: 0, netCents: 0};
+      sold.set(pairing.itemId, {quantity: row.quantity + sale.quantity, grossCents: row.grossCents + sale.grossCents,
+        netCents: row.netCents === null || sale.netCents === null ? null : row.netCents + sale.netCents});
+    }
+    return {salesFrom: from, salesTo: to, ...repricing(menu, input, sold)};
+  }
+
+  /**
+   * MCP: how the price of items (words of the name) went over two years: today's prices, every change (new item, price,
+   * removed) oldest first, and for each change of price how it sold before and after (the experiment), once there are bills.
+   */
+  posPriceHistory(query: string) {
+    const config = this.config(), menu = this.menu();
+    if (!config || !menu) return null;
+    const key = nameKey(query);
+    if (!key) return {query, truncated: false, items: [], changes: []};
+    const today = businessDate(new Date(), config.timeZone, config.businessDayCutoffHour);
+    const matches = (name: string, group?: string | null) => nameKey(`${name} ${group ?? ''}`).includes(key);
+    const items = menu.items.filter(item => matches(item.name, item.group));
+    // An item found today (also by its group) brings all its changes, even under an older name; a removed one is found by name.
+    const ids = new Set([...items.map(item => item.id), ...this.sql.exec<{item_id: string; name: string}>('SELECT DISTINCT item_id, name FROM menu_changes WHERE business_date >= ?', addDays(today, -730)).toArray()
+      .filter(row => matches(row.name)).map(row => row.item_id)]);
+    const from = addDays(today, -730), list = [...ids];
+    const changes: ReturnType<typeof this.menuChangesBetween>['rows'] = [];
+    for (let index = 0; index < list.length; index += 50) {
+      const chunk = list.slice(index, index + 50);
+      changes.push(...this.sql.exec<{business_date: string; item_id: string; name: string; kind: string; old_cents: number | null; new_cents: number | null; old_text: string | null; new_text: string | null}>(
+        `SELECT * FROM menu_changes WHERE business_date >= ? AND item_id IN (${chunk.map(() => '?').join(',')})`, from, ...chunk).toArray()
+        .map(row => ({date: row.business_date, itemId: row.item_id, name: row.name, kind: row.kind, oldCents: row.old_cents, newCents: row.new_cents, oldText: row.old_text, newText: row.new_text})));
+    }
+    changes.sort((a, b) => a.date.localeCompare(b.date));
+    const priced = [...new Set(changes.filter(row => row.kind === 'price').map(row => row.itemId))];
+    const experiments = priced.length ? this.priceExperiments(addDays(today, 1), 2000, {from, itemIds: priced}) : [];
+    return {query, truncated: changes.length > 200,
+      items: items.map(item => ({itemId: item.id, name: item.name, part: item.part, category: item.category, volume: item.volume, price: priceText(item)})),
+      changes: changes.slice(-200).map(row => {
+        const experiment = row.kind === 'price' ? experiments.find(entry => entry.itemId === row.itemId && entry.date === row.date && entry.newText === row.newText) : undefined;
+        return {...row, ...(experiment ? {experiment} : {})};
+      })};
+  }
+
+  /** Price changes whose 28 days after ended in the week up to a Sunday (Monday message): how they sold before and after. */
+  private priceResults(date: string) {
+    // Only the changes 27–33 days back can have ended their 28 days this week, so only their bills are read.
+    return this.priceExperiments(date, 2000, {from: addDays(date, -33)}).filter(entry => entry.status === 'done' && entry.revenuePermille !== null
+      && addDays(entry.date, 27) >= addDays(date, -6) && addDays(entry.date, 27) <= date);
+  }
+
+  /**
+   * Menu items that barely sold over a month (at most 2 pieces), for the message about its last day: only items on the
+   * menu the whole month (not added in it) and with a price, and only when the POS sent bills on at least 14 days of it.
+   */
+  private slowSellers(month: string, through: string) {
+    const menu = this.menu();
+    const days = this.sql.exec<{days: number}>("SELECT count(DISTINCT business_date) AS days FROM records WHERE type='bill' AND business_date BETWEEN ? AND ?", `${month}-01`, through).toArray()[0].days;
+    if (!menu || days < 14) return null;
+    const sold = new Map<string, number>();
+    let all = 0, paired = 0;
+    for (const sale of this.itemSales(`${month}-01`, through)) {
+      const pairing = pairSale(menu, sale);
+      all += sale.grossCents;
+      if (pairing) { sold.set(pairing.itemId, (sold.get(pairing.itemId) ?? 0) + sale.quantity); paired += sale.grossCents; }
+    }
+    // When the POS names do not pair well with the menu, a missing sale may only be a missing pair: no list then.
+    if (!all || paired < all * 0.9) return null;
+    // Items added since the month began (also after it) are too new; a size whose other sizes sold may only be booked under them.
+    const fresh = this.newMenuItems(`${month}-01`, '9999-12-31');
+    const soldNames = new Set(menu.items.filter(item => (sold.get(item.id) ?? 0) > 2).map(item => nameKey(item.name)));
+    const items = menu.items.filter(item => item.pricesCents[0] > 0 && !fresh.has(item.id) && (sold.get(item.id) ?? 0) <= 2 && !soldNames.has(nameKey(item.name)))
+      .map(item => ({name: item.name + (item.volume ? ` ${item.volume}` : ''), quantity: Math.round((sold.get(item.id) ?? 0) * 10) / 10}))
+      .sort((a, b) => a.quantity - b.quantity || a.name.localeCompare(b.name, 'cs'));
+    return items.length ? {month, items} : null;
+  }
+
+  /** The menu over a month for the message about its last day: changes, and the average price per category against the month before. */
+  private menuMonth(month: string): MenuMonth | null {
+    const rows = this.menuChangesBetween(`${month}-01`, `${month}-31`, 5000).rows;
+    const prices = rows.filter(row => row.kind === 'price' && row.oldCents !== null && row.newCents !== null);
+    const last = (before: string) => this.sql.exec<{month: string | null}>('SELECT max(month) AS month FROM menu_months WHERE month <= ?', before).toArray()[0].month;
+    const now = last(month), [year, number] = month.split('-').map(Number);
+    const previous = last(number === 1 ? `${year - 1}-12` : `${year}-${String(number - 1).padStart(2, '0')}`);
+    const categories: MenuMonth['categories'] = [];
+    if (now && previous && now !== previous) {
+      const read = (which: string) => new Map(this.sql.exec<{part: string; category: string; avg_cents: number}>('SELECT part, category, avg_cents FROM menu_months WHERE month=?', which).toArray()
+        .map(row => [`${row.part}\u0000${row.category}`, row.avg_cents]));
+      const after = read(now), before = read(previous);
+      const names = [...after.keys()].map(key => key.split('\u0000')[1]);
+      for (const [key, cents] of after) {
+        const old = before.get(key), [part, name] = key.split('\u0000');
+        // A name in two parts of the menu (Ostatní) says which.
+        const label = names.filter(entry => entry === name).length > 1 ? `${name} (${PART_NAMES[part as keyof typeof PART_NAMES] ?? part})` : name;
+        if (old && cents !== old) categories.push({name: label, beforeCents: old, afterCents: cents, changePermille: Math.round((cents / old - 1) * 1000)});
+      }
+      categories.sort((a, b) => Math.abs(b.changePermille) - Math.abs(a.changePermille) || a.name.localeCompare(b.name));
+    }
+    // Like the week: an item priced more times counts once, from its first old price to its last one. The base price
+    // decides; when it stayed, the other sizes do (225 / 255 → 225 / 265 Kč is a rise); back where it was counts as neither.
+    const byItem = new Map<string, {oldCents: number; newCents: number; oldText: string | null; newText: string | null}>();
+    for (const row of prices) {
+      const seen = byItem.get(row.itemId);
+      byItem.set(row.itemId, seen ? {...seen, oldCents: row.oldCents ?? 0, oldText: row.oldText} : {oldCents: row.oldCents ?? 0, newCents: row.newCents ?? 0, oldText: row.oldText, newText: row.newText});
+    }
+    const total = (text: string | null) => pricesOfText(text).reduce((sum, cents) => sum + cents, 0);
+    const sign = (row: {oldCents: number; newCents: number; oldText: string | null; newText: string | null}) =>
+      Math.sign(row.newCents - row.oldCents) || Math.sign(total(row.newText) - total(row.oldText));
+    const moves = [...byItem.values()].map(sign);
+    const result = {month, up: moves.filter(move => move > 0).length, down: moves.filter(move => move < 0).length, added: rows.filter(row => row.kind === 'added').length, removed: rows.filter(row => row.kind === 'removed').length, categories};
+    return result.up + result.down + result.added + result.removed + categories.length ? result : null;
+  }
+
+  /** Products the POS charged on a day at a price the menu did not have then (to-do list and morning message). */
+  private priceMismatchesOn(date: string) {
+    const menu = this.menu();
+    if (!menu) return [];
+    const lines = this.sql.exec<{name: string; menu_item_id: string | null; unit: number; quantity: number}>(`
+      SELECT json_extract(i.value, '$.name') AS name, json_extract(i.value, '$.menuItemId') AS menu_item_id, CAST(round(json_extract(i.value, '$.totalCents') * 1.0 / json_extract(i.value, '$.quantity')) AS INTEGER) AS unit,
+        sum(json_extract(i.value, '$.quantity')) AS quantity
+      FROM records r, json_each(r.json, '$.items') i
+      WHERE r.type='bill' AND r.business_date=? AND json_extract(r.json, '$.status') = 'closed' AND json_extract(i.value, '$.quantity') > 0 GROUP BY 1, 2, 3`, date).toArray();
+    if (!lines.length) return [];
+    // Every price an item had before a change made that day or later was still right that day (all sizes, from the old text).
+    const earlier = new Map<string, number[]>();
+    for (const row of this.sql.exec<{item_id: string; old_text: string | null}>("SELECT item_id, old_text FROM menu_changes WHERE kind='price' AND business_date >= ?", date).toArray()) {
+      earlier.set(row.item_id, [...(earlier.get(row.item_id) ?? []), ...pricesOfText(row.old_text)]);
+    }
+    return priceMismatches(menu, lines.map(row => ({name: row.name, menuItemId: row.menu_item_id, unitCents: row.unit, quantity: Math.round(row.quantity * 1000) / 1000})), earlier);
+  }
+
+  /** Monday message: how many prices to look at and the two weighing most (cheap and expensive items before gaps). */
+  private priceCheckSummary() {
+    const menu = this.menu();
+    if (!menu) return null;
+    const findings = priceCheck(menu);
+    return {total: findings.length, top: [...findings].sort((a, b) => FINDING_RANK[a.kind] - FINDING_RANK[b.kind]).slice(0, 2)};
+  }
+
+  /** Monday message: what to fix in the menu on the website, by kind with the first names; null when nothing. */
+  private menuGapsSummary() {
+    const menu = this.menu();
+    const gaps = menu ? menuGaps(menu) : [];
+    if (!gaps.length) return null;
+    const kinds = [...new Set(gaps.map(gap => gap.kind))].map(kind => {
+      const rows = gaps.filter(gap => gap.kind === kind);
+      return {kind, count: rows.length, names: rows.map(gap => gap.name)};
+    });
+    return {total: gaps.length, kinds};
+  }
+
+  /** Menu items added in `from`–`to`: too new for the matrix, which compares days of sales. */
+  private newMenuItems(from: string, to: string) {
+    return new Set(this.sql.exec<{item_id: string}>("SELECT item_id FROM menu_changes WHERE kind='added' AND business_date BETWEEN ? AND ?", from, to).toArray().map(row => row.item_id));
+  }
+
+  /**
+   * Every price change of the year up to a day as an experiment: pieces and revenue per day 28 days before the change
+   * (not before the first POS bill) against the days after it (up to 28, until the day). One read of the bills for all
+   * changes; only once the POS sends bills; newest first.
+   */
+  private priceExperiments(day: string, limit: number, only?: {from: string; itemIds?: string[]}) {
+    const menu = this.menu();
+    const first = this.sql.exec<{d: string | null}>("SELECT min(business_date) AS d FROM records WHERE type='bill'").toArray()[0].d;
+    if (!menu || !first) return [];
+    // `only`: the changes of some items from a day on (the price history of one item), so the bills read cover just those.
+    const changes = this.sql.exec<{business_date: string; item_id: string; name: string; old_text: string | null; new_text: string | null}>(
+      `SELECT business_date, item_id, name, old_text, new_text FROM menu_changes WHERE kind='price' AND business_date BETWEEN ? AND ?${only?.itemIds ? ` AND item_id IN (${only.itemIds.map(() => '?').join(',')})` : ''}
+        ORDER BY business_date DESC, rowid DESC LIMIT ?`,
+      only ? only.from : addDays(day, -365), day, ...(only?.itemIds ?? []), limit).toArray();
+    if (!changes.length) return [];
+    const from = addDays(changes.map(change => change.business_date).sort()[0], -28);
+    const byItem = this.dailyItemSales(menu, from, day);
+    const window = (itemId: string, start: string, end: string) => {
+      const rows = (byItem.get(itemId) ?? []).filter(row => row.date >= start && row.date <= end);
+      return {days: end < start ? 0 : Math.round((Date.parse(end) - Date.parse(start)) / 86400000) + 1,
+        quantity: Math.round(rows.reduce((sum, row) => sum + row.quantity, 0) * 1000) / 1000, grossCents: Math.round(rows.reduce((sum, row) => sum + row.grossCents, 0))};
+    };
+    return changes.map(change => {
+      const beforeStart = [addDays(change.business_date, -28), first].sort()[1];
+      const after = window(change.item_id, change.business_date, [addDays(change.business_date, 27), day].sort()[0]);
+      return priceExperiment({date: change.business_date, itemId: change.item_id, name: change.name, oldText: change.old_text, newText: change.new_text},
+        window(change.item_id, beforeStart, addDays(change.business_date, -1)), after);
+    });
+  }
+
+  /** Pieces and revenue per day and menu item over some days (closed bills, each product name paired with the menu once). */
+  private dailyItemSales(menu: Menu, from: string, to: string) {
+    const daily = this.sql.exec<{date: string; name: string; menu_item_id: string | null; quantity: number; gross_cents: number}>(`
+      SELECT b.date, json_extract(i.value, '$.name') AS name, json_extract(i.value, '$.menuItemId') AS menu_item_id, sum(json_extract(i.value, '$.quantity')) AS quantity, sum(json_extract(i.value, '$.totalCents') * b.paid) AS gross_cents
+      FROM (SELECT r.business_date AS date, r.json AS bill, coalesce(json_extract(r.json, '$.totalCents') * 1.0
+          / nullif((SELECT sum(json_extract(l.value, '$.totalCents')) FROM json_each(r.json, '$.items') l), 0), 1) AS paid
+        FROM records r WHERE r.type='bill' AND r.business_date BETWEEN ? AND ? AND json_extract(r.json, '$.status') = 'closed') b, json_each(b.bill, '$.items') i
+      GROUP BY 1, 2, 3`, from, to).toArray();
+    const totals = new Map<string, {name: string; menuItemId: string | null; quantity: number; grossCents: number}>(), byItem = new Map<string, {date: string; quantity: number; grossCents: number}[]>();
+    const keyOf = (row: {name: string; menu_item_id: string | null}) => JSON.stringify([row.name, row.menu_item_id]);
+    for (const row of daily) {
+      const total = totals.get(keyOf(row)) ?? {name: row.name, menuItemId: row.menu_item_id, quantity: 0, grossCents: 0};
+      totals.set(keyOf(row), {...total, quantity: total.quantity + row.quantity, grossCents: total.grossCents + row.gross_cents});
+    }
+    const paired = new Map([...totals].map(([key, total]) => [key, pairSale(menu, total)?.itemId ?? null]));
+    for (const row of daily) {
+      const itemId = paired.get(keyOf(row));
+      if (itemId) byItem.set(itemId, [...(byItem.get(itemId) ?? []), {date: row.date, quantity: row.quantity, grossCents: row.gross_cents}]);
+    }
+    return byItem;
+  }
+
+  /**
+   * Dashboard: one menu item over 26 weeks (Monday to Sunday, the last one up to today): its base price at the end of each
+   * week and the pieces and revenue sold. `query` = words of the name; `itemId` picks one of the matches (else the first).
+   */
+  posItemTrend(query: string, itemId: string | null) {
+    const config = this.config(), menu = this.menu();
+    if (!config || !menu) return null;
+    const key = nameKey(query);
+    const matches = key ? menu.items.filter(item => nameKey(`${item.name} ${item.group ?? ''}`).includes(key)).slice(0, 20) : [];
+    const item = matches.find(entry => entry.id === itemId) ?? matches[0];
+    const list = matches.map(entry => ({itemId: entry.id, name: entry.name, volume: entry.volume, price: priceText(entry)}));
+    if (!item) return {query, matches: list, item: null, weeks: []};
+    const today = businessDate(new Date(), config.timeZone, config.businessDayCutoffHour);
+    const monday = addDays(today, -((weekday(today) + 6) % 7)), first = addDays(monday, -25 * 7);
+    const changes = this.sql.exec<{business_date: string; old_cents: number | null}>("SELECT business_date, old_cents FROM menu_changes WHERE item_id=? AND kind='price' AND business_date > ? ORDER BY business_date, rowid",
+      item.id, first).toArray();
+    // Weeks that ended before the item came onto the menu have no price.
+    const added = this.sql.exec<{d: string | null}>("SELECT max(business_date) AS d FROM menu_changes WHERE item_id=? AND kind='added'", item.id).toArray()[0].d;
+    const sales = this.dailyItemSales(menu, first, today).get(item.id) ?? [];
+    const weeks = Array.from({length: 26}, (_, index) => {
+      const start = addDays(first, index * 7), end = [addDays(start, 6), today].sort()[0];
+      // The price at the end of the week: the old price of the first change after it, else today's.
+      const later = changes.find(change => change.business_date > end);
+      const rows = sales.filter(row => row.date >= start && row.date <= end);
+      return {week: start, priceCents: added && end < added ? null : later ? later.old_cents : item.pricesCents[0],
+        quantity: Math.round(rows.reduce((sum, row) => sum + row.quantity, 0) * 1000) / 1000, grossCents: Math.round(rows.reduce((sum, row) => sum + row.grossCents, 0))};
+    });
+    return {query, matches: list, item: {itemId: item.id, name: item.name, category: item.category, volume: item.volume, price: priceText(item)}, weeks,
+      hasSales: sales.length > 0};
+  }
+
+  /** MCP: menu engineering over some days and how the price changes of the year went. */
+  posMenuEngineering(from: string, to: string) {
+    const menu = this.menu();
+    if (!this.config() || !menu) return null;
+    const sales = this.itemSales(from, to);
+    return {from, to, bills: sales.length > 0, matrix: sales.length ? menuMatrix(menu, itemProfit(menu, sales, this.menuItemCosts()), this.newMenuItems(from, to)) : [],
+      experiments: this.priceExperiments(to, 50)};
+  }
+
+  /** MCP: prices to look at in each category of the menu, each with a suggested price. */
+  posPriceCheck() {
+    const menu = this.menu();
+    return this.config() && menu ? {items: menu.items.length, findings: priceCheck(menu), webGaps: menuGaps(menu)} : null;
   }
 
   /** MCP: the whole current menu with every item and price, and its changes over the last year. */
@@ -1012,9 +1437,9 @@ export class TenantObject extends DurableObject<Env> {
     try { return rankEvents(this.eventReviews(addDays(date, -181), date)); } finally { this.revenueMemo = outer; }
   }
 
-  /** The menu's changes over the 7 days up to a day (Monday message). */
-  private menuWeek(date: string): MenuWeek | null {
-    const rows = this.menuChangesBetween(addDays(date, -6), date, 500).rows;
+  /** The menu's changes over the 7 days (Monday message) or the one day (other days) up to a day. */
+  private menuWeek(date: string, days = 7): MenuWeek | null {
+    const rows = this.menuChangesBetween(addDays(date, 1 - days), date, 500).rows;
     if (!rows.length) return null;
     // Newest first: an item priced twice in the week shows once, from its first old price to its latest one.
     const prices = new Map<string, {name: string; oldText: string | null; newText: string | null}>();
@@ -1053,6 +1478,27 @@ export class TenantObject extends DurableObject<Env> {
       return {from, to, revenueCents: part.revenueCents, revenueDays: part.revenueDays, reservations: part.reservations, guests: part.guests, noShowGuests: part.noShowGuests,
         visits: part.visits, webSent: part.webSent, webConfirmed: part.webConfirmed, reviews: part.reviews, starsTenths: part.starsTenths,
         errorPermille: rows.length >= 4 ? Math.round(rows.reduce((sum, row) => sum + Math.abs(row.actual - row.forecast) / row.forecast, 0) / rows.length * 1000) : null};
+    });
+  }
+
+  /** The website's days (web traffic records, oldest first, the first one of a day) between two days. */
+  private webDays(from: string, to: string): WebTraffic[] {
+    return this.sql.exec<{json: string}>("SELECT json FROM records WHERE type='web_traffic' AND business_date BETWEEN ? AND ? ORDER BY business_date, id", from, to).toArray()
+      .map(row => JSON.parse(row.json) as WebTraffic);
+  }
+
+  /** Interest in the menu on the website: the 7 days up to the reported day against the 7 before. */
+  private menuInterestWeek(date: string) {
+    const days = this.webDays(addDays(date, -13), date);
+    return {current: sumMenuInterest(days, addDays(date, -6), date), previous: sumMenuInterest(days, addDays(date, -13), addDays(date, -7))};
+  }
+
+  /** Interest in the menu on the website over twelve weeks up to the shown day, oldest first (weeks as in `trends`). */
+  private menuInterestWeeks(date: string): MenuInterest[] {
+    const days = this.webDays(addDays(date, -83), date);
+    return Array.from({length: 12}, (_, i) => 11 - i).map(back => {
+      const to = addDays(date, -7 * back);
+      return sumMenuInterest(days, addDays(to, -6), to);
     });
   }
 
@@ -1167,7 +1613,12 @@ export class TenantObject extends DurableObject<Env> {
       ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast: this.forecast(date), pendingAhead: this.pendingAhead(config, date, now), events: this.todayEvents(config, addDays(date, 1)), guestOutlook,
       // The ranking only when it is shown: tips for weak days, and the message about a month's last day.
       eventRanking: guestOutlook?.days.some(day => day.weak) || addDays(date, 1).endsWith('-01') ? this.eventRanking(date) : null,
-      menuWeek: weekday(date) === 0 ? this.menuWeek(date) : null,
+      menuWeek: weekday(date) === 0 ? this.menuWeek(date) : null, menuMonth: addDays(date, 1).endsWith('-01') ? this.menuMonth(date.slice(0, 7)) : null,
+      slowSellers: addDays(date, 1).endsWith('-01') ? this.slowSellers(date.slice(0, 7), date) : null, priceResults: weekday(date) === 0 ? this.priceResults(date) : [], menuDay: weekday(date) === 0 ? null : this.menuWeek(date, 1), priceMismatches: this.priceMismatchesOn(date),
+      menuProblems: this.menuProblems(now),
+      priceCheck: weekday(date) === 0 ? this.priceCheckSummary() : null,
+      menuGaps: weekday(date) === 0 ? this.menuGapsSummary() : null,
+      menuInterest: weekday(date) === 0 ? this.menuInterestWeek(date) : null,
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
       supplies: this.supplyBriefFor(config, date),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
@@ -1185,6 +1636,7 @@ export class TenantObject extends DurableObject<Env> {
   async tick(at: Date, tenant: string) {
     const config = this.config();
     if (!config) return {decision: 'not-configured'};
+    this.releaseHeldMenu(at, config);
     const date = reportDate(at, config.timeZone, config.businessDayCutoffHour);
     const sent = this.sql.exec<{status: string}>("SELECT status FROM briefings WHERE business_date=? AND status IN ('stored','delivered')", date).toArray().length > 0;
     const hour = localHour(at, config.timeZone);
@@ -1279,7 +1731,7 @@ export class Registry extends DurableObject<Env> {
 }
 
 const routes: Record<string, string[]> = {
-  'v1/ingest': ['POST'], 'admin/config': ['GET', 'PUT'], 'admin/pair': ['POST'], 'admin/history': ['POST'],
+  'v1/ingest': ['POST'], 'v1/menu': ['GET'], 'admin/config': ['GET', 'PUT'], 'admin/pair': ['POST'], 'admin/history': ['POST'],
   'admin/briefing': ['GET'], 'admin/briefings': ['GET'], 'admin/tick': ['POST'], 'admin/report': ['GET', 'PUT'], 'admin/fetch': ['POST'], 'admin/logout': ['POST'],
   'admin/web': ['GET'], 'admin/ingest': ['GET'],
 };
@@ -1334,6 +1786,13 @@ async function dashboard(request: Request, env: Env, tenant: string, action: str
   if (action === 'web' && request.method === 'GET') {
     if (!known || !await stub.validSession(cookie(request))) return json(failure('UNAUTHORIZED', 401));
     return json(ok({card: await webCard(env, tenant, stub)}));
+  }
+  // One menu item over half a year: price and sales by week (the search in the menu card).
+  if (action === 'item' && request.method === 'GET') {
+    if (!known || !await stub.validSession(cookie(request))) return json(failure('UNAUTHORIZED', 401));
+    const params = new URL(request.url).searchParams, query = (params.get('q') ?? '').slice(0, 100), id = params.get('id');
+    const trend = await stub.posItemTrend(query, id ? id.slice(0, 200) : null);
+    return json(trend ? ok(trend) : failure('NOT_FOUND', 404));
   }
   if (request.method !== 'POST' || !['login', 'verify', 'logout', 'todo'].includes(action ?? '')) return json(failure('NOT_FOUND', 404));
   // Only same-site JSON posts: a form on another site cannot send them.

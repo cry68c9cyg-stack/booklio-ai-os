@@ -114,6 +114,59 @@ export function createServer(context: ToolContext): McpServer {
     return menu ? result(menu) : failed('Lístek zatím do OKO1 nedorazil.');
   });
 
+  tool('vydelek_polozek', 'Výdělek po položkách', 'Co se za období (nejvýš 400 dní) prodalo po položkách lístku: účty pokladny spárované s lístkem (stejný název, u velikostí objem nebo nejbližší cena), ' +
+    'kusy, tržba s DPH a bez DPH, food cost za kus, náklad a zisk = tržba bez DPH − food cost × kusy. null znamená, že údaj chybí (seznam "missing"). "unpaired" = produkty pokladny, ' +
+    'které OKO1 v lístku nenašlo. Dokud neběží pokladna s účty, je prázdné. Částky v haléřích.', {od: from, do: to},
+  async ({od, do: until}: {od: string; do: string}) => {
+    const bad = badRange(od, until);
+    if (bad) return bad;
+    const profit = await context.venue.posItemProfit(od, until);
+    return profit ? result(profit) : failed('Lístek zatím do OKO1 nedorazil.');
+  });
+  tool('preceneni', 'Virtuální přecenění', 'Simulace nových cen lístku: vybrané položky (část, kategorie, slova z názvu; bez výběru celý lístek) o procento nebo o částku, zaokrouhleno na krok (výchozí 5 Kč). ' +
+    'Na webu ani v pokladně se nic nemění. S prodeji za posledních 30 dní ukáže odhad tržby při stejném počtu prodaných kusů (podle změny základní ceny), změnu výdělku (profitDifferenceCents = změna tržby bez DPH, ' +
+    'food cost kusu se cenou nemění; null bez sazby DPH), o kolik promile kusů smí prodej klesnout, aby tržba nebyla nižší (breakEvenDropPermille), a tržbu při 5 a 10 % kusů méně (ifFewer). ' +
+    'atMinimum = cena by klesla pod krok a zůstala na něm. Částky v haléřích.', {
+    cast: zod.enum(['food', 'cocktails', 'drinks']).optional().describe('Část lístku: food = jídlo, cocktails = koktejly, drinks = nápoje.'),
+    kategorie: zod.string().max(100).optional().describe('Kategorie nebo její část, např. "burgery".'),
+    hledat: zod.string().max(100).optional().describe('Slova z názvu položky, např. "cheeseburger".'),
+    procenta: zod.number().min(-50).max(100).optional().describe('Změna v procentech, např. 10 = o 10 % dráž.'),
+    korun: zod.number().int().min(-500).max(500).optional().describe('Změna o pevnou částku v korunách, např. 20.'),
+    krok_korun: zod.number().int().min(1).max(100).optional().describe('Zaokrouhlit na celé násobky (výchozí 5 Kč).'),
+  }, async (args: {cast?: 'food' | 'cocktails' | 'drinks'; kategorie?: string; hledat?: string; procenta?: number; korun?: number; krok_korun?: number}) => {
+    if (args.procenta === undefined && args.korun === undefined) return failed('Zadej změnu: procenta, nebo korun.');
+    const repriced = await context.venue.posRepricing({part: args.cast, category: args.kategorie, query: args.hledat, percent: args.procenta,
+      deltaCents: args.korun === undefined ? undefined : args.korun * 100, stepCents: args.krok_korun === undefined ? undefined : args.krok_korun * 100});
+    if (!repriced) return failed('Lístek zatím do OKO1 nedorazil.');
+    return repriced.count ? result(repriced) : failed('Výběru neodpovídá žádná položka lístku.');
+  });
+  tool('menu_engineering', 'Menu engineering a změny cen', 'Matice obliba × výdělek za období (nejvýš 400 dní) po částech lístku: hvězdy, tahouni, hádanky a slabé kusy s doporučením, ' +
+    'výdělek za kus = tržba bez DPH − food cost, dokud food cost chybí, cena za kus s DPH (basis "price"). A každá změna ceny za rok do konce období jako pokus: kusy a tržba za den ' +
+    '28 dní před změnou (ne před prvním účtem pokladny) proti dnům po ní (nejvýš 28), v promile; status no_history = před změnou méně než 7 dní účtů, waiting = po změně zatím méně než 7 dní. ' +
+    'Položky přidané do lístku v období (newItems) se nehodnotí. Dokud neběží pokladna s účty, je prázdné. Částky v haléřích.', {od: from, do: to},
+  async ({od, do: until}: {od: string; do: string}) => {
+    const bad = badRange(od, until);
+    if (bad) return bad;
+    const engineering = await context.venue.posMenuEngineering(od, until);
+    return engineering ? result(engineering) : failed('Lístek zatím do OKO1 nedorazil.');
+  });
+  tool('historie_ceny', 'Historie ceny položky', 'Jak se měnila cena položek lístku za poslední dva roky: dnešní cena položek, jejichž název obsahuje hledaná slova, a každá změna od nejstarší ' +
+    '(added = nová položka, price = nová cena, removed = zrušená) s datem, starou a novou cenou. U změny ceny "experiment": kusy a tržba za den 28 dní před změnou proti dnům po ní (v promile, ' +
+    'status no_history / waiting / running / done), jakmile jsou účty z pokladny. Částky v haléřích.', {
+    hledat: zod.string().min(2).max(100).describe('Slova z názvu položky, např. "texas burger" nebo "mojito".'),
+  }, async ({hledat}: {hledat: string}) => {
+    const history = await context.venue.posPriceHistory(hledat);
+    if (!history) return failed('Lístek zatím do OKO1 nedorazil.');
+    return history.items.length || history.changes.length ? result(history) : failed('Žádná položka lístku ani její změna neodpovídá hledání.');
+  });
+
+  tool('kontrola_cen', 'Kontrola cen', 'Ceny lístku k prověření v každé kategorii od 4 položek: položka pod polovinou nebo nad dvojnásobkem běžné ceny kategorie (u nápojů různých objemů za litr) ' +
+    's navrženou cenou na dolním nebo horním kvartilu, mezery v cenové řadě (od 5 položek) s cenou uprostřed a ceny s neobvyklou poslední číslicí (ending: aspoň tři čtvrtiny kategorie končí na pár číslic) s nejbližší obvyklou cenou. Jen k posouzení, cena může být záměr. webGaps = co doplnit v lístku na webu: jídlo nebo koktejl bez popisu či složení (s místem, odkud ho převzít), nápoj bez objemu, stejná položka za dvě ceny. Částky v haléřích.', {},
+  async () => {
+    const check = await context.venue.posPriceCheck();
+    return check ? result(check) : failed('Lístek zatím do OKO1 nedorazil.');
+  });
+
   tool('naklady_dodavatele', 'Náklady a dodavatelé', 'Faktury dodavatelů za období (nejvýš 400 dní, zatím z Dishboardu, později z Pexesa): nákupy bez DPH po druzích (jídlo, nápoje, ostatní), kategoriích a dodavatelích, ' +
     'food cost (jídlo a nápoje bez DPH k tržbám s DPH týchž dní, v promile), zdražení položek od 5 % proti předchozímu nákupu, faktury dnes po splatnosti, možné duplicity (stejný dodavatel, den a částka), marže nápojů z lístku proti poslednímu nákupu (párování podle názvu) a samotné faktury s položkami a cenami za jednotku. Částky v haléřích.',
   {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
@@ -132,7 +185,7 @@ export function createServer(context: ToolContext): McpServer {
     return outlook ? result(outlook) : failed('Provozovna není v OKO1 nastavená.');
   });
   tool('tyden_mesic_trendy', 'Týden, měsíc a trendy', 'K provoznímu dni: posledních 7 dní proti 7 předtím (tržba, rezervace, hosté, nedorazili, storna, odkud a jak dopředu se rezervuje, web, recenze, akce), ' +
-    'měsíc od 1. dne proti minulému a 12 týdnů trendů s chybou odhadu. Jen počty, částky v haléřích.', {datum: date},
+    'měsíc od 1. dne proti minulému, 12 týdnů trendů s chybou odhadu a 12 týdnů zájmu o lístek na webu (menuInterest: návštěvy, které si ho otevřely, zobrazení jídla a nápojů, ze zahraničí, jazyky, rezervace). Jen počty, částky v haléřích.', {datum: date},
   async ({datum}: {datum: string}) => {
     if (!isDate(datum)) return badDate;
     const trends = await context.venue.posTrends(datum);

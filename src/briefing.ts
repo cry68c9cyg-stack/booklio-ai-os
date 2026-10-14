@@ -1,9 +1,10 @@
-import {DEFAULT_BOTTLE_LOSS_CENTS, type Bill, type BottleCheck, type CashClosing, type Reservation, type ReviewSummary, type TenantConfig, type WebTraffic} from './validate.ts';
+import {DEFAULT_BOTTLE_LOSS_CENTS, type Bill, type BottleCheck, type CashClosing, type Reservation, type ReviewSummary, type TenantConfig, type WebMenuInterest, type WebTraffic} from './validate.ts';
 import {addDays, localTime, weekday} from './time.ts';
 import {line, total, type DailyReport} from './daily-report.ts';
 import type {NotePoint, NotesAnalysis} from './notes.ts';
 import {weatherText, type WeatherDay} from './weather.ts';
 import {renderSupplies, type SupplyBrief} from './supplies.ts';
+import {pricesOfText, type MenuGap, type PriceExperiment, type PriceFinding, type PriceMismatch} from './menu.ts';
 
 export type Briefing = {
   businessDate: string;
@@ -56,6 +57,24 @@ export type Briefing = {
   eventRanking: EventRank[] | null;
   /** Changes of the menu over the week (Monday message); `null` = not asked for. */
   menuWeek: MenuWeek | null;
+  /** Changes of the menu on the reported day (every message but Monday's, which has the week); a briefing stored before has none. */
+  menuDay?: MenuWeek | null;
+  /** The menu over the month, in the message about its last day; a briefing stored before has none. */
+  menuMonth?: MenuMonth | null;
+  /** Menu items that barely sold over the month (message about its last day); `null` = not asked for or too few days of bills. */
+  slowSellers?: SlowSellers | null;
+  /** Price changes evaluated after 28 days in the week (Monday message). */
+  priceResults?: PriceExperiment[];
+  /** A held menu or refused menu batches (src/worker.ts `menuProblems`); a briefing stored before has none. */
+  menuProblems?: string[];
+  /** Products the POS charged that day at a price the menu did not have (src/menu.ts); a briefing stored before has none. */
+  priceMismatches?: PriceMismatch[];
+  /** Prices of the menu to look at (Monday message); `null` = not asked for. */
+  priceCheck?: {total: number; top: PriceFinding[]} | null;
+  /** Monday: what to fix in the menu on the website (`menuGaps`), by kind with the first names. */
+  menuGaps?: {total: number; kinds: {kind: MenuGap['kind']; count: number; names: string[]}[]} | null;
+  /** Monday: interest in the menu on the website, the week against the one before; `null` = not asked for. */
+  menuInterest?: {current: MenuInterest; previous: MenuInterest} | null;
   /** Reviews that reached the website's admin on the reported calendar day, and how many wait there. `null` = nothing sent. */
   reviews: {newCount: number; averageTenths: number | null; low: number; bySource: {name: string; newCount: number}[]; waiting: number; forManagement: number; failed: number} | null;
   /** The 7 days up to the reported day against the 7 before: sums only. `null` = not asked for. */
@@ -210,12 +229,105 @@ export function sectionThousands(cents: number, rows: {label: string; cents: num
 
 /** Changes of the menu over the week (Monday message): new prices, new items and removed items. */
 export type MenuWeek = {prices: {name: string; oldText: string | null; newText: string | null}[]; added: string[]; removed: string[]};
-export function renderMenuWeek(week: MenuWeek | null | undefined): string[] {
+/** Changes of the menu over a month (counts) and the categories whose average base price moved against the month before. */
+export type MenuMonth = {month: string; up: number; down: number; added: number; removed: number;
+  categories: {name: string; beforeCents: number; afterCents: number; changePermille: number}[]};
+export type SlowSellers = {month: string; items: {name: string; quantity: number}[]};
+export function renderSlowSellers(slow: SlowSellers | null | undefined): string[] {
+  if (!slow?.items.length) return [];
+  const where = MONTH_LOCATIVE[monthName(slow.month)] ?? monthName(slow.month);
+  return [`Skoro neprodané ${where} (kandidáti na vyřazení z lístku): ${slow.items.slice(0, 5).map(item => `${item.name} ${String(item.quantity).replace('.', ',')}×`).join(', ')}${slow.items.length > 5 ? ` a další ${slow.items.length - 5}` : ''}`];
+}
+/** A price change after 28 days: pieces and revenue per day against the 28 days before, and whether the revenue rose. */
+export function renderPriceResults(results: PriceExperiment[] | undefined): string[] {
+  if (!results?.length) return [];
+  const percent = (permille: number) => { const value = Math.sign(permille) * Math.round(Math.abs(permille) / 10); return `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.abs(value)} %`; };
+  // A rise (the base price, or another size when the base stayed) that brings more revenue a day paid off: each piece earns
+  // more than before. Less revenue may still be more profit (fewer pieces cost less food), which needs the food cost to judge.
+  const sum = (text: string | null) => pricesOfText(text).reduce((total, cents) => total + cents, 0);
+  const rise = (row: PriceExperiment) => { const [now, before] = [pricesOfText(row.newText)[0] ?? 0, pricesOfText(row.oldText)[0] ?? 0]; return now > before || (now === before && sum(row.newText) > sum(row.oldText)); };
+  const verdict = (row: PriceExperiment) => !rise(row) ? '' : (row.revenuePermille ?? 0) >= 5 ? ' (zdražení se vyplatilo)' : (row.revenuePermille ?? 0) <= -5 ? ' (tržba klesla, vyplatilo se jen při velkém food costu)' : '';
+  return [`Změny cen po 4 týdnech: ${results.slice(0, 3).map(row => `${row.name} ${row.oldText ?? '?'} → ${row.newText ?? '?'}: kusů ${percent(row.quantityPermille ?? 0)}, tržba ${percent(row.revenuePermille ?? 0)} denně${verdict(row)}`).join('; ')}${results.length > 3 ? `; další ${results.length - 3}` : ''}`];
+}
+export function renderMenuMonth(month: MenuMonth | null | undefined): string[] {
+  if (!month) return [];
+  const changes = [month.up ? `zdraženo ${month.up}` : '', month.down ? `zlevněno ${month.down}` : '', month.added ? `přidáno ${month.added}` : '', month.removed ? `zrušeno ${month.removed}` : ''].filter(Boolean);
+  const [year, number] = month.month.split('-').map(Number), before = monthName(number === 1 ? `${year - 1}-12` : `${year}-${String(number - 1).padStart(2, '0')}`);
+  const percent = (permille: number) => `${permille > 0 ? '+' : '−'}${Math.round(Math.abs(permille) / 10)} %`;
+  const moved = month.categories.filter(row => Math.abs(row.changePermille) >= 10);
+  const averages = moved.length ? `průměrná cena proti ${MONTH_DATIVE[before] ?? before}: ${moved.slice(0, 3).map(row => `${row.name} ${percent(row.changePermille)}`).join(', ')}${moved.length > 3 ? ` a další ${moved.length - 3}` : ''}` : '';
+  const parts = [changes.length ? changes.join(', ') : '', averages].filter(Boolean);
+  return parts.length ? [`Lístek ${MONTH_LOCATIVE[monthName(month.month)] ?? monthName(month.month)}: ${parts.join(' · ')}`] : [];
+}
+const MONTH_LOCATIVE: Record<string, string> = {leden: 'v lednu', únor: 'v únoru', březen: 'v březnu', duben: 'v dubnu', květen: 'v květnu', červen: 'v červnu',
+  červenec: 'v červenci', srpen: 'v srpnu', září: 'v září', říjen: 'v říjnu', listopad: 'v listopadu', prosinec: 'v prosinci'};
+const MONTH_DATIVE: Record<string, string> = {leden: 'lednu', únor: 'únoru', březen: 'březnu', duben: 'dubnu', květen: 'květnu', červen: 'červnu',
+  červenec: 'červenci', srpen: 'srpnu', září: 'září', říjen: 'říjnu', listopad: 'listopadu', prosinec: 'prosinci'};
+/** One product charged at another price than the menu has, e.g. "Classic Burger 225 Kč (lístek 250 Kč, 4×)". */
+export const mismatchText = (row: PriceMismatch) => `${row.posName} ${crowns(row.posCents)} (lístek ${row.menuText}, ${row.quantity}×)`;
+export function renderPriceMismatches(rows: PriceMismatch[] | undefined): string[] {
+  if (!rows?.length) return [];
+  return [`⚠ Pokladna účtuje jinou cenu než lístek: ${rows.slice(0, 3).map(mismatchText).join(', ')}${rows.length > 3 ? ` a další ${rows.length - 3}` : ''}`];
+}
+/** Monday: how many prices of the menu are worth a look, the first two with the suggested price. */
+export function renderPriceCheck(check: Briefing['priceCheck']): string[] {
+  if (!check?.total) return [];
+  return [`Ceny k prověření: ${check.total} (${check.top.slice(0, 2).map(row => `${row.name ?? row.category} ${row.priceText} → návrh ${crowns(row.suggestedCents)}`).join(', ')}${check.total > 2 ? ', další na dashboardu' : ''})`];
+}
+/** Monday: e.g. "chybí popis nebo složení 8× (Virgin Mule, Virgin Cosmopolitan …), chybí objem 1× (Džus)". */
+export const menuGapsText = (gaps: NonNullable<Briefing['menuGaps']>) => gaps.kinds.map(row =>
+  `${GAP_WORDS[row.kind]} ${row.count}× (${row.names.slice(0, 2).join(', ')}${row.count > 2 ? ' …' : ''})`).join(', ');
+const GAP_WORDS: Record<MenuGap['kind'], string> = {price: 'rozdílná cena', description: 'chybí popis nebo složení', volume: 'chybí objem'};
+export function renderMenuGaps(gaps: Briefing['menuGaps']): string[] {
+  return gaps?.total ? [`Na webu opravit v lístku: ${menuGapsText(gaps)}`] : [];
+}
+/**
+ * Interest in the menu on the website over some days: sums of the days whose web traffic carries `menu` (sent by the
+ * website since 13. 10. 2026). `days` = how many days had it; one record per day (the first one, as everywhere).
+ */
+export type MenuInterest = {
+  from: string; to: string; days: number; visits: number; abroad: number; reserved: number; food: number; drinks: number;
+  languages: {key: string; visits: number; reserved: number}[];
+};
+export function sumMenuInterest(records: {businessDate: string; menu?: WebMenuInterest}[], from: string, to: string): MenuInterest {
+  const sum: MenuInterest = {from, to, days: 0, visits: 0, abroad: 0, reserved: 0, food: 0, drinks: 0, languages: []};
+  const seen = new Set<string>(), languages = new Map<string, {key: string; visits: number; reserved: number}>();
+  for (const {businessDate, menu} of records) {
+    if (businessDate < from || businessDate > to || seen.has(businessDate)) continue;
+    seen.add(businessDate);
+    if (!menu) continue;
+    sum.days++; sum.visits += menu.visits; sum.abroad += menu.abroad; sum.reserved += menu.reserved; sum.food += menu.views.food; sum.drinks += menu.views.drinks;
+    for (const language of menu.languages) {
+      const row = languages.get(language.key) ?? {key: language.key, visits: 0, reserved: 0};
+      row.visits += language.visits; row.reserved += language.reserved;
+      languages.set(language.key, row);
+    }
+  }
+  sum.languages = [...languages.values()].sort((a, b) => b.visits - a.visits || a.key.localeCompare(b.key));
+  return sum;
+}
+export const LANGUAGE_NAMES: Record<string, string> = {cs: 'česky', en: 'anglicky', de: 'německy'};
+const verb = (n: number, stem: string) => stem + (n === 1 ? 'a' : n >= 2 && n <= 4 ? 'y' : 'o');
+const percentOf = (part: number, whole: number) => `${Math.round(part / whole * 100)} %`;
+/** The Monday line: visits that opened the menu, from abroad, the website's languages and how many sent a reservation in that visit. */
+export function renderMenuInterest(interest: Briefing['menuInterest']): string[] {
+  const now = interest?.current, before = interest?.previous;
+  if (!now?.days || !now.visits) return [];
+  const days = now.days < 7 ? ` (${now.days} ${now.days === 1 ? 'den' : now.days <= 4 ? 'dny' : 'dní'} s daty)` : '';
+  const change = now.days === 7 && before?.days === 7 && before.visits ? Math.round((now.visits / before.visits - 1) * 100) : null;
+  const languages = now.languages.filter(row => row.visits && row.key !== 'neznamy').slice(0, 3).map(row => `${LANGUAGE_NAMES[row.key] ?? row.key} ${percentOf(row.visits, now.visits)}`);
+  const rate = (Math.round(now.reserved / now.visits * 1000) / 10).toFixed(1).replace('.', ',');
+  return [`Lístek na webu za týden${days}: ${verb(now.visits, 'otevřel')} si ho ${now.visits} ${visitsWord(now.visits)}` +
+    (change === null ? '' : ` (${change === 0 ? '±0' : (change > 0 ? '+' : '−') + Math.abs(change)} % proti minulému týdnu)`) +
+    `, ${percentOf(now.abroad, now.visits)} ze zahraničí` + (languages.length ? `; jazyk webu ${languages.join(', ')}` : '') +
+    `; z nich rezervaci ${verb(now.reserved, 'poslal')} ${now.reserved} (${rate} %)`];
+}
+export function renderMenuWeek(week: MenuWeek | null | undefined, title = 'Lístek za týden'): string[] {
   if (!week || !(week.prices.length + week.added.length + week.removed.length)) return [];
   const names = (list: string[]) => list.slice(0, 3).join(', ') + (list.length > 3 ? ` a další ${list.length - 3}` : '');
   const parts = [week.prices.length ? `nová cena ${week.prices.length}× (${names(week.prices.map(row => `${row.name} ${row.oldText ?? '?'} → ${row.newText ?? '?'}`))})` : '',
     week.added.length ? `nově ${names(week.added)}` : '', week.removed.length ? `zrušeno ${names(week.removed)}` : ''].filter(Boolean);
-  return [`Lístek za týden: ${parts.join(' · ')}`];
+  return [`${title}: ${parts.join(' · ')}`];
 }
 /** Parts of the day for the shifts: day 6–17 h, evening 17–22 h, night 22–6 h (local time of the booking's start). */
 export const DAY_PARTS = [{key: 'day', name: 'přes den'}, {key: 'evening', name: 'večer'}, {key: 'night', name: 'noc'}] as const;
@@ -526,7 +638,7 @@ export function buildBriefing(input: {
   web?: WebTraffic; webLastWeek?: WebTraffic;
   /** Visits and sent booking forms of the same weekday over the 4 weeks before (days the website sent). */
   webUsual?: {visits: number; sent: number}[];
-  eventRanking?: EventRank[] | null; menuWeek?: MenuWeek | null;
+  eventRanking?: EventRank[] | null; menuWeek?: MenuWeek | null; menuDay?: MenuWeek | null; menuMonth?: MenuMonth | null; slowSellers?: SlowSellers | null; priceResults?: PriceExperiment[]; menuProblems?: string[]; priceMismatches?: PriceMismatch[]; priceCheck?: Briefing['priceCheck']; menuGaps?: Briefing['menuGaps']; menuInterest?: Briefing['menuInterest'];
   costs?: MonthResult | null; costsPrevious?: MonthResult | null; supplies?: SupplyBrief | null;
   reviews?: ReviewSummary;
   week?: Week | null; silent?: {name: string; since: string}[];
@@ -615,7 +727,7 @@ export function buildBriefing(input: {
     web: summarizeWeb(input.web, input.webLastWeek),
     webDrop: webDrop(input.web, input.webUsual),
     eventRanking: input.eventRanking ?? null,
-    menuWeek: input.menuWeek ?? null,
+    menuWeek: input.menuWeek ?? null, menuDay: input.menuDay ?? null, menuMonth: input.menuMonth ?? null, slowSellers: input.slowSellers ?? null, priceResults: input.priceResults ?? [], menuProblems: input.menuProblems ?? [], priceMismatches: input.priceMismatches ?? [], priceCheck: input.priceCheck ?? null, menuGaps: input.menuGaps ?? null, menuInterest: input.menuInterest ?? null,
     reviews: summarizeReviews(input.reviews),
     costs: input.costs ?? null, costsPrevious: input.costsPrevious ?? null, supplies: input.supplies ?? null,
     week: input.week ?? null,
@@ -688,13 +800,15 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderReviews(briefing.reviews));
   lines.push(...renderCosts(briefing.costs, briefing.costsPrevious));
   lines.push(...renderSupplies(briefing.supplies));
+  lines.push(...renderPriceMismatches(briefing.priceMismatches));
+  lines.push(...renderMenuWeek(briefing.menuDay, 'Lístek se změnil'), ...(briefing.menuProblems ?? []).map(text => `⚠ ${text}`));
   lines.push(...renderNotes(briefing));
   // The week in a few numbers once a week, in the message about Sunday (Monday morning).
-  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek));
+  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceResults(briefing.priceResults), ...renderPriceCheck(briefing.priceCheck), ...renderMenuGaps(briefing.menuGaps), ...renderMenuInterest(briefing.menuInterest));
   // The month so far once a week, and the whole month in the message about its last day (the 1st in the morning).
   lines.push(...renderMonth(briefing.month));
   // Which events draw guests, once a month in the message about its last day.
-  if (addDays(briefing.businessDate, 1).endsWith('-01')) lines.push(...renderEventRanking(briefing.eventRanking));
+  if (addDays(briefing.businessDate, 1).endsWith('-01')) lines.push(...renderEventRanking(briefing.eventRanking), ...renderMenuMonth(briefing.menuMonth), ...renderSlowSellers(briefing.slowSellers));
   return lines.join('\n');
 }
 

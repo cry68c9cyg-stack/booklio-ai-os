@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, rankEvents, renderEventRanking, eventTip, renderMenuWeek, sectionThousands, guestOutlookDay, median, weakDays, webDrop, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, rankEvents, renderEventRanking, eventTip, renderMenuWeek, renderMenuMonth, renderSlowSellers, renderPriceResults, renderPriceCheck, renderPriceMismatches, sectionThousands, guestOutlookDay, median, weakDays, webDrop, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, sumMenuInterest, renderMenuInterest, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
 import {counted, drinkMargins, duplicateInvoices, litresPerUnit, overdueInvoices, priceRises, renderSupplies, risesBySupplier, supplyBrief, supplySummary, unitPrice} from '../src/supplies.ts';
 import {weatherDays, weatherText} from '../src/weather.ts';
+import {itemProfit, menuGaps, menuItemTax, menuMatrix, nameKey, pairSale, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, volumeOf, type ItemSale} from '../src/menu.ts';
 import {businessDate, sameClockDaysBefore} from '../src/time.ts';
 import {czechHolidays, easterSunday, holidayName} from '../src/holidays.ts';
-import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Menu, type Reservation, type SupplierInvoice, type TenantConfig, type WebTraffic} from '../src/validate.ts';
+import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type Menu, type MenuItem, type SupplierInvoice, type TenantConfig, type WebTraffic} from '../src/validate.ts';
 
 const config: TenantConfig = {
   name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9],
@@ -18,7 +19,7 @@ const config: TenantConfig = {
 const bill = (id: string, extra: Partial<Bill> = {}): Bill => ({
   type: 'bill', id, version: 1, businessDate: '2026-10-08', closedAt: '2026-10-08T20:00:00.000Z', registerId: 'bar', section: 'bar',
   status: 'closed', tableId: null, guests: 2, waiterId: null, reservationId: null, totalCents: 50000, discountCents: 0,
-  items: [{name: 'Burger', productId: null, category: null, quantity: 2, totalCents: 50000}],
+  items: [{name: 'Burger', productId: null, category: null, quantity: 2, totalCents: 50000, vatRate: null}],
   payments: [{method: 'card', amountCents: 50000}], voids: [], ...extra,
 });
 
@@ -216,6 +217,36 @@ test('website traffic: a short line against last week, top origins only with vis
     'Web: 1 250 návštěv (před týdnem 1 500, −17 %), 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0', 'Odkud: B 900 · A 5']);
   assert.deepEqual(renderWeb(summarizeWeb({...day, visits: 3, origins: []}, undefined)), ['Web: 3 návštěvy, 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0']);
   assert.deepEqual(renderWeb(summarizeWeb({...day, visits: 1, origins: []}, {...day, visits: 0})), ['Web: 1 návštěva (před týdnem 0), 3 s rezervací, telefonem nebo navigací, odeslané rezervace 0']);
+});
+
+test('menu interest on the website: weekly sums of the days that carry it, the Monday line', () => {
+  const menu = (visits: number, abroad: number, reserved: number, languages: [string, number, number][]) =>
+    ({views: {food: visits * 2, drinks: visits}, visits, abroad, reserved, languages: languages.map(([key, v, r]) => ({key, visits: v, reserved: r}))});
+  const day = (businessDate: string, value?: ReturnType<typeof menu>) => ({businessDate, ...(value ? {menu: value} : {})});
+  const days = [day('2026-10-05', menu(100, 60, 3, [['en', 50, 2], ['cs', 40, 1], ['de', 10, 0]])), day('2026-10-05', menu(999, 0, 0, [])), day('2026-10-06'),
+    day('2026-10-07', menu(20, 10, 1, [['de', 10, 0], ['cs', 10, 1]])), day('2026-10-12', menu(1, 1, 1, []))];
+  const week = sumMenuInterest(days, '2026-10-05', '2026-10-11');
+  assert.deepEqual(week, {from: '2026-10-05', to: '2026-10-11', days: 2, visits: 120, abroad: 70, reserved: 4, food: 240, drinks: 120,
+    languages: [{key: 'cs', visits: 50, reserved: 2}, {key: 'en', visits: 50, reserved: 2}, {key: 'de', visits: 20, reserved: 0}]}, 'the first record of a day only, a day without menu not counted');
+  assert.deepEqual(renderMenuInterest({current: week, previous: sumMenuInterest([], '2026-09-28', '2026-10-04')}),
+    ['Lístek na webu za týden (2 dny s daty): otevřelo si ho 120 návštěv, 58 % ze zahraničí; jazyk webu česky 42 %, anglicky 42 %, německy 17 %; z nich rezervaci poslaly 4 (3,3 %)']);
+  const full = {...week, days: 7}, before = {...week, days: 7, visits: 100};
+  assert.match(renderMenuInterest({current: full, previous: before})[0], /^Lístek na webu za týden: otevřelo si ho 120 návštěv \(\+20 % proti minulému týdnu\), /);
+  assert.match(renderMenuInterest({current: {...full, visits: 3, abroad: 0, reserved: 0, languages: [{key: 'neznamy', visits: 3, reserved: 0}]}, previous: {...before, days: 6}})[0], /^Lístek na webu za týden: otevřely si ho 3 návštěvy, 0 % ze zahraničí; z nich rezervaci poslalo 0 \(0,0 %\)$/);
+  assert.deepEqual(renderMenuInterest({current: sumMenuInterest([day('2026-10-06')], '2026-10-05', '2026-10-11'), previous: before}), []);
+  assert.deepEqual(renderMenuInterest(null), []);
+  const config = validateConfig({name: 'Test', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9], registers: ['bar'], sections: {bar: 'Bar'}, recipients: []});
+  const sunday = (date: string) => renderBriefing('Test', buildBriefing({businessDate: date, config, bills: [], closings: [], planHistory: [], incomplete: false, menuInterest: {current: full, previous: before}}));
+  assert.match(sunday('2026-10-11'), /\nLístek na webu za týden: /);
+  // Validation: the field is optional, counts only.
+  const traffic = {type: 'web_traffic', id: 'web-2026-10-05', version: 1, businessDate: '2026-10-05', visits: 5, visitsWithAction: 0, origins: [], actions: {}, reviewScans: 0};
+  const batch = (record: unknown) => ({batchId: 'batch-0001', installationId: 'booklio-web', records: [record]});
+  assert.equal('menu' in validateBatch(batch(traffic)).records[0], false, 'stored only when sent');
+  assert.deepEqual((validateBatch(batch({...traffic, menu: menu(3, 1, 0, [['en', 3, 0]])})).records[0] as WebTraffic).menu, menu(3, 1, 0, [['en', 3, 0]]));
+  for (const bad of [{...menu(3, 1, 0, []), views: {food: 1}}, {...menu(3, 1, 0, []), visits: -1}, {...menu(3, 1, 0, []), country: 'DE'},
+    menu(3, 1, 0, Array.from({length: 11}, (_, i) => [`l${i}`, 1, 0] as [string, number, number])), menu(3, 1, 0, [['bad key', 1, 0]])]) {
+    assert.throws(() => validateBatch(batch({...traffic, menu: bad})), InputError);
+  }
 });
 
 test('reviews: counts only, one line with the average and weak ones, nothing when all is quiet, weak ones in the to-do list', () => {
@@ -604,6 +635,22 @@ test('events of half a year ranked by guests drawn, the line at the month end, t
     ['Lístek za týden: nová cena 1× (Burger 289 Kč → 309 Kč) · nově Shake, Fries, Wings a další 1']);
   assert.deepEqual(renderMenuWeek({prices: [], added: [], removed: []}), []);
   assert.deepEqual(renderMenuWeek(null), []);
+  assert.deepEqual(renderMenuMonth({month: '2026-10', up: 4, down: 1, added: 3, removed: 0, categories: [{name: 'Burgery', beforeCents: 24000, afterCents: 25000, changePermille: 42},
+    {name: 'Koktejly', beforeCents: 20000, afterCents: 19600, changePermille: -20}, {name: 'Pivo', beforeCents: 9000, afterCents: 9045, changePermille: 5}, {name: 'Víno', beforeCents: 9000, afterCents: 8955, changePermille: -5}]}),
+    ['Lístek v říjnu: zdraženo 4, zlevněno 1, přidáno 3 · průměrná cena proti září: Burgery +4 %, Koktejly −2 %']);
+  assert.deepEqual(renderMenuMonth({month: '2026-01', up: 0, down: 0, added: 0, removed: 1, categories: []}), ['Lístek v lednu: zrušeno 1']);
+  assert.deepEqual(renderMenuMonth(null), []);
+  assert.deepEqual(renderSlowSellers({month: '2026-10', items: [{name: 'Chai', quantity: 0}, {name: 'Grappa 0,04 l', quantity: 1}, ...['A', 'B', 'C', 'D'].map(name => ({name, quantity: 2}))]}),
+    ['Skoro neprodané v říjnu (kandidáti na vyřazení z lístku): Chai 0×, Grappa 0,04 l 1×, A 2×, B 2×, C 2× a další 1']);
+  assert.deepEqual(renderSlowSellers(null), []);
+  const experiment = (name: string, oldText: string, newText: string, quantityPermille: number, revenuePermille: number) => ({date: '2026-09-01', itemId: name, name, oldText, newText,
+    before: {days: 28, quantity: 100, grossCents: 1}, after: {days: 28, quantity: 90, grossCents: 1}, quantityPermille, revenuePermille, status: 'done' as const});
+  assert.deepEqual(renderPriceResults([experiment('Texas Burger', '245 Kč', '259 Kč', -80, 30), experiment('Cola', '74 Kč', '79 Kč', -150, -95), experiment('Pivo', '95 Kč', '89 Kč', 120, 50)]),
+    ['Změny cen po 4 týdnech: Texas Burger 245 Kč → 259 Kč: kusů −8 %, tržba +3 % denně (zdražení se vyplatilo); Cola 74 Kč → 79 Kč: kusů −15 %, tržba −10 % denně (tržba klesla, vyplatilo se jen při velkém food costu); Pivo 95 Kč → 89 Kč: kusů +12 %, tržba +5 % denně']);
+  // A larger size up is a rise too; a change under half a per cent shows as 0 %.
+  assert.deepEqual(renderPriceResults([experiment('Burger', '225 / 255 Kč', '225 / 269 Kč', 40, -4)]), ['Změny cen po 4 týdnech: Burger 225 / 255 Kč → 225 / 269 Kč: kusů +4 %, tržba 0 % denně']);
+  assert.deepEqual(renderPriceResults([experiment('Burger', '225 / 255 Kč', '225 / 269 Kč', 40, 25)]), ['Změny cen po 4 týdnech: Burger 225 / 255 Kč → 225 / 269 Kč: kusů +4 %, tržba +3 % denně (zdražení se vyplatilo)']);
+  assert.deepEqual(renderPriceResults([]), []);
   const monday = buildBriefing({businessDate: '2026-10-11', config, bills: [], closings: [], planHistory: [], incomplete: false, menuWeek: {prices: [], added: [], removed: ['Quesadilla']}});
   assert.match(renderBriefing('Test', monday), /\nLístek za týden: zrušeno Quesadilla(\n|$)/);
 });
@@ -722,4 +769,158 @@ test('profit and margins: duplicates, rises per supplier, litres from names, dri
   assert.ok(lines.includes('Provozní výsledek od 1. 10.: tržby 50 000 Kč − nákupy 3 780 Kč − výplaty z kasy 3 000 Kč = 43 220 Kč (hrubý odhad, bez mezd mimo kasu a režií)'), lines.join('\n'));
   assert.ok(lines.includes('Nejnižší marže nápojů: Rum Diplomático 0,04 l: 64 % (prodej 100 Kč bez DPH, nákup 36 Kč)'), lines.join('\n'));
   assert.equal(supplyBrief(purchases, '2026-10-10', {revenueCents: 0, revenueDays: 0})!.weekly, null, 'weekly lines only about a Sunday');
+});
+
+const menuOf = (items: MenuItem[]): Menu => ({type: 'menu', id: 'menu-web', version: 1, businessDate: '2026-10-08', source: 'web', items, notes: []});
+const dish = (id: string, category: string, name: string, pricesCents: number[], extra: Partial<MenuItem> = {}): MenuItem =>
+  ({id, part: 'food', category, group: null, name, description: null, volume: null, volumeMl: null, pricesCents, tip: false, ...extra});
+const drink = (id: string, name: string, volumeMl: number, cents: number): MenuItem =>
+  dish(id, 'Pivo', name, [cents], {part: 'drinks', volume: `${volumeMl / 1000} l`, volumeMl});
+
+test('POS products are paired to the menu by name, size by volume or price, and only clear look-alikes', () => {
+  const menu = menuOf([dish('b1', 'Burgery', 'Classic Burger', [22500, 25500]), dish('b2', 'Burgery', 'Texas Burger', [24500]),
+    drink('p3', 'Plzeň', 300, 6500), drink('p5', 'Plzeň', 500, 8900), dish('s1', 'Saláty', 'Caesar salát', [19500])]);
+  assert.equal(nameKey('Coca-Cola 0,33 l'), 'coca cola');
+  assert.equal(volumeOf('Finlandia 4cl'), 40);
+  assert.deepEqual(pairSale(menu, {name: 'CLASSIC BURGER', quantity: 2, grossCents: 45000}), {itemId: 'b1', how: 'name'});
+  assert.deepEqual(pairSale(menu, {name: 'Plzeň 0,5 l', quantity: 3, grossCents: 26700}), {itemId: 'p5', how: 'name'});
+  assert.deepEqual(pairSale(menu, {name: 'Plzen', quantity: 2, grossCents: 13000}), {itemId: 'p3', how: 'name'}, 'no volume: the closest price');
+  assert.deepEqual(pairSale(menu, {name: 'Caesar salát s kuřetem', quantity: 1, grossCents: 21500}), {itemId: 's1', how: 'similar'});
+  assert.equal(pairSale(menu, {name: 'Burger', quantity: 1, grossCents: 22500}), null, 'two burgers share the word: unpaired');
+  assert.equal(pairSale(menu, {name: 'Tonic', quantity: 1, grossCents: 6000}), null);
+  assert.deepEqual([volumeOf('Víno 1/8 l'), volumeOf('Pivo 1/2 l'), nameKey('Víno 1/8 l')], [125, 500, 'vino']);
+  const burgers = menuOf([dish('c', 'Burgery', 'Cheeseburger', [21500]), dish('d', 'Burgery', 'Double bacon cheeseburger', [29500]),
+    dish('k', 'Hlavní', 'Kuře na grilu', [26500]), dish('h', 'Přílohy', 'Batátové hranolky', [8900])]);
+  assert.equal(pairSale(burgers, {name: 'Double cheeseburger', quantity: 1, grossCents: 26500}), null, 'two burgers close: unpaired');
+  assert.equal(pairSale(burgers, {name: 'Kuře na pepři', quantity: 1, grossCents: 26500}), null, 'filler words do not pair');
+  assert.equal(pairSale(burgers, {name: 'Hranolky', quantity: 1, grossCents: 6900}), null, 'half the words are not enough');
+});
+
+test('a POS line linked to a menu item pairs by its id; the menu says the kind and VAT rate of each item', () => {
+  const menu = menuOf([dish('b1', 'Burgery', 'Classic Burger', [22500]), dish('b2', 'Burgery', 'Texas Burger', [24500])]);
+  assert.deepEqual(pairSale(menu, {name: 'Burger', menuItemId: 'b2', quantity: 1, grossCents: 22500}), {itemId: 'b2', how: 'id'});
+  assert.deepEqual(pairSale(menu, {name: 'Classic Burger', menuItemId: 'gone', quantity: 1, grossCents: 22500}), {itemId: 'b1', how: 'name'}, 'an id off the menu: by name');
+  // The same POS name linked to the other burger is checked against that burger's price.
+  assert.deepEqual(priceMismatches(menu, [{name: 'Burger', menuItemId: 'b2', unitCents: 22500, quantity: 2}, {name: 'Burger', unitCents: 22500, quantity: 1}], new Map())
+    .map(row => [row.itemId, row.posCents, row.menuCents, row.quantity]), [['b2', 22500, 24500, 2]]);
+  assert.deepEqual(priceMismatches(menu, [{name: 'Texas Burger', menuItemId: 'b2', unitCents: 23000, quantity: 2}, {name: 'Texas Burger', unitCents: 23000, quantity: 1}], new Map())
+    .map(row => [row.itemId, row.quantity]), [['b2', 3]], 'linked and unlinked lines of one product: one row');
+  const unpaired = itemProfit(menu, [{key: 'p9 gone', productId: 'p9', menuItemId: 'gone', name: 'Tonic', quantity: 1, grossCents: 6000, netCents: null},
+    {key: 'p9', productId: 'p9', name: 'Tonic', quantity: 2, grossCents: 12000, netCents: null}], new Map()).unpaired;
+  assert.deepEqual(unpaired.map(row => [row.name, row.quantity, row.grossCents]), [['Tonic', 3, 18000]]);
+  const tax = (part: MenuItem['part'], category: string, name: string, group: string | null = null) => menuItemTax({part, category, group, name});
+  assert.deepEqual([tax('food', 'Dezerty', 'Apple Pie'), tax('cocktails', 'Signature Drinks', 'Mai Tai'), tax('cocktails', 'Nealkoholické', 'Crodino Spritz'),
+    tax('cocktails', 'Tiki', 'Virgin Mojito'), tax('drinks', 'Vína', 'Rosé d\'Anjou', 'Růžová vína'), tax('drinks', 'Destiláty', 'Finlandia', 'Vodka'),
+    tax('drinks', 'Pivo & cider', 'Budvar Original', 'Točené'), tax('drinks', 'Pivo & cider', 'Birell nealko'), tax('drinks', 'Nealkoholické nápoje', 'Ginger Ale'),
+    tax('drinks', 'Mléčné koktejly', 'Banánový'), tax('drinks', 'Káva a horké nápoje', 'Espresso'), tax('drinks', 'Káva a horké nápoje', 'Irská káva'),
+    tax('drinks', 'Lihoviny', 'Becherovka'), tax('drinks', 'Nápoje', 'Aperol Spritz'), tax('drinks', 'Nealkoholické nápoje', 'Zázvorové pivo')].map(row => `${row.kind} ${row.vatRate}`),
+  ['food 12', 'alcohol 21', 'soft 12', 'soft 12', 'alcohol 21', 'alcohol 21', 'alcohol 21', 'soft 12', 'soft 12', 'soft 12', 'soft 12', 'alcohol 21', 'alcohol 21', 'alcohol 21', 'soft 12']);
+});
+
+test('profit by item: revenue without VAT, food cost per piece and what is missing', () => {
+  const menu = menuOf([dish('b1', 'Burgery', 'Classic Burger', [22500]), dish('b2', 'Burgery', 'Texas Burger', [24500])]);
+  const sales: ItemSale[] = [{key: 'p1', productId: 'p1', name: 'Classic Burger', quantity: 4, grossCents: 89600, netCents: 80000},
+    {key: 'p2', productId: 'p2', name: 'Texas Burger', quantity: 1, grossCents: 22400, netCents: 20000}, {key: 'name:Tonic', productId: null, name: 'Tonic', quantity: 2, grossCents: 11200, netCents: 10000}];
+  const profit = itemProfit(menu, sales, new Map([['b1', 7000]]));
+  assert.deepEqual(profit.items.map(row => [row.itemId, row.quantity, row.netCents, row.costCents, row.profitCents]), [['b1', 4, 80000, 28000, 52000], ['b2', 1, 20000, null, null]]);
+  assert.deepEqual(profit.unpaired.map(row => row.name), ['Tonic']);
+  assert.deepEqual([profit.totals.pairedPermille, profit.totals.profitCents, profit.missing], [909, null, ['food cost za kus (nákupní ceny a receptury)']]);
+  const noVat = itemProfit(menu, [{...sales[0], netCents: null}], new Map([['b1', 7000]]));
+  assert.deepEqual([noVat.items[0].profitCents, noVat.missing], [null, ['sazba DPH u položek pokladny']]);
+});
+
+test('virtual repricing rounds to 5 Kč, filters by part, category and name, and keeps pieces sold', () => {
+  const menu = menuOf([dish('b1', 'Burgery', 'Classic Burger', [22500, 25500]), dish('b2', 'Burgery', 'Texas Burger', [24500]), drink('p5', 'Plzeň', 500, 8900)]);
+  const up = repricing(menu, {category: 'burgery', percent: 10}, new Map([['b1', {quantity: 10, grossCents: 225000}]]));
+  assert.deepEqual(up.items.map(item => [item.itemId, item.newPricesCents, item.newText]), [['b1', [25000, 28000], '250 / 280 Kč'], ['b2', [27000], '270 Kč']]);
+  assert.deepEqual(up.sales, {items: 1, grossCents: 225000, newGrossCents: 250000, differenceCents: 25000, profitDifferenceCents: null, breakEvenDropPermille: 100,
+    ifFewer: [{percent: 5, newGrossCents: 237500}, {percent: 10, newGrossCents: 225000}]});
+  // With the VAT rate the profit changes by the revenue without VAT (the food cost of a piece stays); no filter = the whole menu.
+  const whole = repricing(menu, {percent: 10}, new Map([['b1', {quantity: 10, grossCents: 225000, netCents: 200893}], ['p5', {quantity: 5, grossCents: 44500, netCents: 39732}]]));
+  assert.deepEqual([whole.count, whole.sales?.differenceCents, whole.sales?.profitDifferenceCents], [3, 25000 + 5500, 22321 + 4911]);
+  assert.deepEqual(repricing(menu, {part: 'drinks', deltaCents: 1000, stepCents: 100}, new Map()).items.map(item => item.newPricesCents), [[9900]]);
+  assert.deepEqual(repricing(menu, {query: 'texas', percent: -50}, new Map()).items.map(item => item.newPricesCents), [[12500]]);
+  assert.equal(repricing(menu, {query: 'pizza', percent: 5}, new Map()).count, 0);
+  const free = repricing(menuOf([dish('w', 'Voda', 'Voda z kohoutku', [0]), dish('e', 'Voda', 'Espresso', [6200])]), {deltaCents: -10000}, new Map());
+  assert.deepEqual(free.items.map(item => [item.newPricesCents, item.atMinimum ?? false]), [[[0], false], [[500], true]], 'free stays free, a price stays at one step');
+});
+
+test('what to fix in the menu on the website: descriptions, volumes and one item at two prices', () => {
+  const menu = menuOf([dish('b1', 'Burgery', 'Classic Burger', [22500], {description: 'hovězí'}), dish('b2', 'Burgery', 'Texas Burger', [24500]),
+    dish('h', 'Přílohy', 'Hranolky', [8900]), dish('o', 'Omáčky', 'BBQ', [4500]), dish('d', 'Dezerty', 'Dorty - dle nabídky - 1 porce', [13000]),
+    dish('m1', 'Caipirinhy', 'Mojito', [18900], {part: 'cocktails', description: 'rum, limetka, máta'}), dish('m2', 'XXL Drinky', 'Mojito', [157500], {part: 'cocktails'}),
+    dish('e', 'Káva a horké nápoje', 'Espresso', [6200], {part: 'drinks'}), dish('t', 'Džusy', 'Džus', [7400], {part: 'drinks'}),
+    drink('p1', 'Plzeň', 500, 8900), drink('p2', 'Plzeň', 500, 9900), drink('p3', 'Plzeň', 300, 6500), drink('p4', 'Plzeň', 500, 8900),
+    dish('i', 'Domácí ledové čaje', 'Citrus Green Ice Tea', [7800], {part: 'drinks'})]);
+  assert.deepEqual(menuGaps(menu).map(gap => [gap.kind, gap.itemId, gap.text]), [
+    ['price', 'p1', 'v Pivo dvakrát s jinou cenou: 89 Kč a 99 Kč'],
+    ['description', 'b2', 'chybí popis'],
+    ['description', 'm2', 'chybí složení (převzít z Caipirinhy: „rum, limetka, máta“)'],
+    ['volume', 't', 'chybí objem'], ['volume', 'i', 'chybí objem']]);
+  // After copying the description, the XXL jug for eight is another category: not a typo.
+  const copied = menuOf([dish('m1', 'Caipirinhy', 'Mojito', [18900], {part: 'cocktails', description: 'rum, limetka, máta'}),
+    dish('m2', 'XXL Drinky', 'Mojito', [157500], {part: 'cocktails', description: 'rum, limetka, máta'})]);
+  assert.deepEqual(menuGaps(copied), []);
+  const tea = (id: string, volume: string, cents: number) => dish(id, 'Ledové čaje', 'Ice Tea', [cents], {part: 'drinks', volume});
+  assert.deepEqual(menuGaps(menuOf([tea('a', '0,3 l', 7800), tea('b', '1 l', 24500), tea('c', '0,3 l', 8800)])).map(gap => gap.text), ['v Ledové čaje dvakrát s jinou cenou: 78 Kč a 88 Kč'],
+    'sizes by their volume text are not a typo');
+  assert.deepEqual(menuGaps(menuOf([dish('b1', 'Burgery', 'Classic Burger', [22500], {description: 'hovězí'})])), []);
+});
+
+test('price check: too cheap and too expensive in a category (per litre for sizes) and gaps in the price ladder', () => {
+  const findings = priceCheck(menuOf([dish('b1', 'Burgery', 'A', [22500]), dish('b2', 'Burgery', 'B', [24500]), dish('b3', 'Burgery', 'C', [25500]),
+    dish('b4', 'Burgery', 'D', [9900]), dish('b5', 'Burgery', 'E', [59900]), dish('x1', 'Malé', 'Jen tři', [100]),
+    drink('p1', 'Pivo 1', 300, 6500), drink('p2', 'Pivo 2', 500, 8900), drink('p3', 'Pivo 3', 500, 9500), drink('p4', 'Pivo 4', 300, 2500)]));
+  assert.deepEqual(findings.map(f => [f.kind, f.itemId, f.suggestedCents]), [['cheap', 'b4', 22500], ['expensive', 'b5', 25500], ['gap', null, 16000], ['gap', null, 42500], ['cheap', 'p4', 4500]]);
+  assert.match(findings[4].text, /za litr/);
+  const wine = priceCheck(menuOf([drink('v1', 'Víno 1', 100, 6000), drink('v2', 'Víno 2', 100, 7000), drink('v3', 'Víno 1 láhev', 750, 45000),
+    drink('v4', 'Víno 2 láhev', 750, 52000), drink('v5', 'Víno 3', 100, 6500), dish('t', 'Pivo', 'Voda', [0], {part: 'drinks'})]));
+  assert.deepEqual(wine.map(f => [f.kind, f.itemId, f.suggestedCents]), [['ending', 'v5', 7000]], 'sizes are no gap and no outlier, a free item is left out; 65 Kč among round prices is a tip');
+  const zeros = priceCheck(menuOf([0, 0, 0, 0, 0, 3000, 3500, 4000, 4500].map((cents, index) => dish(`z${index}`, 'Nealko', `N${index}`, [cents]))));
+  assert.ok(zeros.every(finding => finding.kind !== 'expensive'), 'free items do not make every price look expensive');
+  // An odd last digit among prices ending in 5 or 9 (at least 5 priced items), with the nearest usual price; a mixed category says nothing.
+  const endings = priceCheck(menuOf([['a', 22500], ['b', 24500], ['c', 25500], ['d', 26900], ['e', 26300], ['f', 27900]].map(([id, cents]) => dish(id as string, 'Burgery', `B${id}`, [cents as number]))));
+  assert.deepEqual(endings.map(f => [f.kind, f.itemId, f.suggestedCents]), [['ending', 'e', 26500]]);
+  assert.match(endings[0].text, /^cena končí na 3, ostatní v kategorii na 5 nebo 9; návrh 265 Kč$/);
+  assert.deepEqual(priceCheck(menuOf([6200, 8900, 7500, 6800, 9000, 11200, 11600].map((cents, index) => dish(`k${index}`, 'Káva', `K${index}`, [cents])))), []);
+});
+
+test('the POS charging another price than the menu: most pieces of the day, earlier prices count, 1 Kč tolerance', () => {
+  const menu = menuOf([dish('b1', 'Burgery', 'Classic Burger', [22500, 25500]), dish('b2', 'Burgery', 'Texas Burger', [24500]), drink('p5', 'Plzeň', 500, 8900)]);
+  const rows = priceMismatches(menu, [{name: 'Classic Burger', unitCents: 22500, quantity: 3}, {name: 'Classic Burger', unitCents: 20000, quantity: 1},
+    {name: 'Texas Burger', unitCents: 22500, quantity: 2}, {name: 'Plzeň 0,5 l', unitCents: 8950, quantity: 9}, {name: 'Tonic', unitCents: 6000, quantity: 1}], new Map());
+  assert.deepEqual(rows.map(row => [row.itemId, row.posCents, row.menuCents, row.quantity]), [['b2', 22500, 24500, 2]]);
+  assert.deepEqual(priceMismatches(menu, [{name: 'Texas Burger', unitCents: 22500, quantity: 2}], new Map([['b2', [22500]]])), [], 'the price before a later change was right');
+  assert.deepEqual(priceMismatches(menu, [{name: 'Texas Burger', unitCents: 17500, quantity: 9}, {name: 'Texas Burger', unitCents: 24500, quantity: 1}], new Map()), [], 'happy hour next to the menu price');
+  assert.deepEqual([pricesOfText('225 / 1 255 Kč'), pricesOfText(null), pricesOfText('cena?')], [[22500, 125500], [], []]);
+  assert.equal(renderPriceMismatches(rows)[0], '⚠ Pokladna účtuje jinou cenu než lístek: Texas Burger 225 Kč (lístek 245 Kč, 2×)');
+  const todo = todoList(buildBriefing({businessDate: '2026-10-08', config, bills: [], closings: [], planHistory: [], incomplete: false, priceMismatches: rows}));
+  assert.ok(todo.some(item => item.text === 'Cena v pokladně nesedí s lístkem: Texas Burger 225 Kč (lístek 245 Kč, 2×)' && item.amountCents === 4000));
+  assert.equal(renderPriceCheck({total: 3, top: priceCheck(menuOf([dish('a', 'K', 'A', [22500]), dish('b', 'K', 'B', [24500]), dish('c', 'K', 'C', [25500]), dish('d', 'K', 'D', [9900])])).slice(0, 2)})[0],
+    'Ceny k prověření: 3 (D 99 Kč → návrh 195 Kč, další na dashboardu)');
+});
+
+test('menu engineering: stars, plowhorses, puzzles and weak items by pieces and contribution', () => {
+  const menu = menuOf([dish('a', 'B', 'A', [30000]), dish('b', 'B', 'B', [20000]), dish('c', 'B', 'C', [35000]), dish('d', 'B', 'D', [15000]), dish('w', 'B', 'Voda', [0])]);
+  const sale = (name: string, quantity: number, grossCents: number): ItemSale => ({key: name, productId: null, name, quantity, grossCents, netCents: grossCents});
+  const profit = itemProfit(menu, [sale('A', 40, 1200000), sale('B', 50, 1000000), sale('C', 5, 175000), sale('D', 5, 75000)], new Map());
+  const [food] = menuMatrix(menu, profit);
+  assert.equal(food.basis, 'price');
+  assert.deepEqual(food.classes.map(row => [row.kind, row.items.map(item => item.itemId)]), [['star', ['a']], ['plowhorse', ['b']], ['puzzle', ['c']], ['dog', ['d']]]);
+  const withCost = menuMatrix(menu, itemProfit(menu, [sale('A', 40, 1200000), sale('B', 50, 1000000)], new Map([['a', 25000], ['b', 5000]])))[0];
+  assert.deepEqual([withCost.basis, withCost.classes.map(row => row.items.map(item => item.itemId))], ['margin', [['b'], ['a'], [], ['c', 'd']]]);
+  assert.deepEqual(menuMatrix(menu, itemProfit(menu, [], new Map())), [], 'nothing sold: no matrix');
+  const fresh = menuMatrix(menu, profit, new Set(['d']))[0];
+  assert.deepEqual([fresh.newItems, fresh.classes[3].items.map(item => item.itemId)], [['D'], []], 'a new item is not judged');
+  assert.equal(menuMatrix(menu, itemProfit(menu, [sale('A', 0, 0), sale('B', 5, 100000)], new Map()))[0].averageContributionCents, 20000, 'no NaN from pieces netting to 0');
+});
+
+test('a price change as an experiment: per day before and after, waiting under 7 days', () => {
+  const change = {date: '2026-10-01', itemId: 'a', name: 'A', oldText: '225 Kč', newText: '245 Kč'};
+  const done = priceExperiment(change, {days: 28, quantity: 280, grossCents: 6300000}, {days: 28, quantity: 252, grossCents: 6174000});
+  assert.deepEqual([done.quantityPermille, done.revenuePermille, done.status], [-100, -20, 'done']);
+  assert.equal(priceExperiment(change, {days: 28, quantity: 0, grossCents: 0}, {days: 10, quantity: 5, grossCents: 1000}).quantityPermille, null);
+  assert.equal(priceExperiment(change, {days: 28, quantity: 28, grossCents: 1000}, {days: 3, quantity: 3, grossCents: 100}).status, 'waiting');
+  const young = priceExperiment(change, {days: 5, quantity: 5, grossCents: 1000}, {days: 28, quantity: 28, grossCents: 6000});
+  assert.deepEqual([young.status, young.quantityPermille], ['no_history', null], 'too few days of bills before the change');
 });

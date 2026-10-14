@@ -1,6 +1,6 @@
 import {weekday} from './time.ts';
 import {duplicateText, overdueText, riseText} from './supplies.ts';
-import {CASH_DIFFERENCE_CENTS, crowns, mismatch, noShowAlarm, noShowText, pendingAheadText, reviewDrop, reviewDropText, unusual, weakDays, weakDaysText, webDropText, type Briefing} from './briefing.ts';
+import {CASH_DIFFERENCE_CENTS, crowns, menuGapsText, mismatch, mismatchText, noShowAlarm, noShowText, pendingAheadText, reviewDrop, reviewDropText, unusual, weakDays, weakDaysText, webDropText, type Briefing} from './briefing.ts';
 
 export type TodoItem = {level: 'warn' | 'info'; text: string; amountCents: number | null};
 const LIMIT = 15;
@@ -34,6 +34,14 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   for (const rise of briefing.supplies?.rises ?? []) warn(`Zdražení: ${riseText(rise)}`, rise.extraCents);
   for (const row of briefing.supplies?.overdue ?? []) warn(`Faktura po splatnosti: ${overdueText(row)}`, row.grossCents);
   for (const row of briefing.supplies?.duplicates ?? []) warn(`Možná duplicitní faktura: ${duplicateText(row)}`, row.grossCents);
+  // Products the POS charges at another price than the menu: weighted by what it made the day's revenue differ.
+  // One line for all of them, so a POS not yet repriced does not push the other warnings out of the list.
+  const mismatches = briefing.priceMismatches ?? [];
+  if (mismatches.length) warn(`Cena v pokladně nesedí s lístkem: ${mismatches.slice(0, 3).map(mismatchText).join(', ')}${mismatches.length > 3 ? ` a další ${mismatches.length - 3}` : ''}`,
+    Math.round(mismatches.reduce((sum, row) => sum + row.quantity * Math.abs(row.posCents - row.menuCents), 0)));
+  for (const text of briefing.menuProblems ?? []) warn(text);
+  // Monday: the menu on the website lacks something guests read (not money, so after the warnings).
+  if (briefing.menuGaps?.total) items.push({level: 'info', text: `Na webu opravit v lístku: ${menuGapsText(briefing.menuGaps)}`, amountCents: null});
   if (briefing.bottleCheckMissing) warn('Ranní kontrola lahví chybí.');
   for (const row of briefing.bottles?.losses ?? []) warn(`Manko ${row.name}: −${row.lossMl} ml (${crowns(row.lossCents)})`, row.lossCents);
   for (const point of briefing.notes?.points ?? []) items.push({level: point.kind === 'incident' || point.kind === 'problem' ? 'warn' : 'info', text: point.text, amountCents: point.amountCents});

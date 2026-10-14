@@ -38,7 +38,7 @@ Pokladna (Pexeso, později i jiné) posílá AI OS uzavřené účty, uzávěrky
 | `tableId`, `guests`, `waiterId`, `reservationId` | volitelné | `reservationId` z Booklio, až bude vazba |
 | `totalCents` | int | zaplaceno celkem |
 | `discountCents` | int ≥ 0 | |
-| `items[]` | `{name, quantity, totalCents, productId?, category?}` | nejvýše 500 |
+| `items[]` | `{name, quantity, totalCents, productId?, category?, vatRate?, menuItemId?}` | nejvýše 500; `vatRate` = sazba DPH produktu v celých procentech (12, 21) z pokladny, doplněno 13. 10. 2026 zpětně kompatibilně: bez ní OKO1 nespočítá tržbu bez DPH a výdělek po položkách; `menuItemId` = `id` položky lístku (`[\w.:-]{1,100}`), se kterou má pokladna produkt spojený, doplněno 13. 10. 2026 zpětně kompatibilně (viz „Lístek pro pokladnu“) |
 | `payments[]` | `{method, amountCents}` | `cash`, `card`, `voucher`, `transfer`, …; nejvýše 20 |
 | `voids[]` | `{name, amountCents, reason, afterPayment, approvedBy?}` | storna položek; `afterPayment: true` = storno po zaplacení |
 
@@ -109,7 +109,7 @@ Prázdný řetězec znamená totéž co `null`. Neznámé pole v `guest` dávku 
 
 Doplněno 12. 10. 2026 zpětně kompatibilně. Web posílá každou hodinu souhrn za včerejšek a dnešek (pražský kalendářní den 0:00–24:00, ne provozní den do 6:00); vyšší `version` (čas odeslání v ms) den přepíše. Jen součty, nic o jednotlivých návštěvnících ani hostech.
 
-`{type: "web_traffic", id, version, businessDate, visits, visitsWithAction, origins, actions, reviewScans}`
+`{type: "web_traffic", id, version, businessDate, visits, visitsWithAction, origins, actions, reviewScans, menu?}`
 
 | Pole | Typ | Poznámka |
 |---|---|---|
@@ -119,6 +119,19 @@ Doplněno 12. 10. 2026 zpětně kompatibilně. Web posílá každou hodinu souhr
 | `origins` | pole ≤ 50 `{key, name, visits, withAction}` | odkud návštěvy přišly (skupiny webu, např. `google`, `instagram`, `qr`), `name` je český název |
 | `actions` | objekt `{akce: počet}`, ≤ 100 klíčů | počet návštěv s danou akcí, např. `rezervace-otevrena`, `rezervace-odeslana`, `telefon` |
 | `reviewScans` | int ≥ 0 | skeny QR kódu na stole s odkazem na hodnocení na Googlu |
+| `menu` | volitelný objekt `{views, visits, abroad, reserved, languages}` | zájem o lístek na webu (doplněno 13. 10. 2026 zpětně kompatibilně, viz níže) |
+
+Pole `menu` (jen součty za den):
+
+| Pole | Typ | Poznámka |
+|---|---|---|
+| `views` | `{food, drinks}`, int ≥ 0 | kolikrát se zobrazil jídelní lístek (`food`) a nápojový lístek (`drinks`) |
+| `visits` | int ≥ 0 | návštěvy, které si otevřely jídelní nebo nápojový lístek |
+| `abroad` | int ≥ 0 | z nich návštěvy ze známé země mimo Česko |
+| `reserved` | int ≥ 0 | z nich návštěvy, které v téže návštěvě poslaly rezervaci |
+| `languages` | pole ≤ 10 `{key, visits, reserved}` | totéž podle jazyka webu (`cs`, `en`, `de`, …), nejčastější první |
+
+OKO1 musí `menu` přijímat dřív, než ho web začne posílat (neznámé pole by celou dávku odmítlo). Den bez `menu` se do zájmu o lístek nepočítá. Pondělní zpráva ukáže týden (návštěvy s lístkem proti minulému týdnu, jen když oba týdny mají 7 dní dat, podíl ze zahraničí, tři nejčastější jazyky a rezervace), dashboard kartu „Zájem o lístek na webu (12 týdnů)“ a MCP nástroj `tyden_mesic_trendy` pole `menuInterest`.
 
 Ranní zpráva ukáže den proti stejnému dni před týdnem, odeslané rezervace, skeny QR a tři nejčastější zdroje; dashboard totéž jako kartu „Návštěvnost webu“. Pondělní týdenní souhrn sečte `origins` za 7 dní (návštěvy a `withAction` podle `key`).
 
@@ -185,6 +198,34 @@ Položka `items[]`: `{id, part, category, name, pricesCents, group?, description
 | `tip` | bool | tip šéfkuchaře / doporučení |
 
 Změnou ceny se rozumí jiná kterákoli z cen položky; OKO1 zapíše starou a novou základní cenu i oba texty („225 / 255 Kč“ → „225 / 265 Kč“). První lístek je výchozí stav, změny se počítají až od dalšího. Přejmenování položky, její kategorie nebo objemu je nové `id`, tedy zrušená a nová položka, ne změna ceny. Ceny jsou s DPH; sazbu DPH (jídlo a alkohol mají různou) lístek nenese, pro výdělek po položkách ji OKO1 vezme z produktu pokladny (Pexeso). Dashboard má kartu „Jídelní a nápojový lístek“ (položky po kategoriích s cenami od–do a průměrem, změny za 30 dní), MCP server nástroj `listek` (celý lístek a změny za rok).
+
+Ceny a výdělek po položkách (13. 10. 2026, schválil MC): OKO1 páruje položky účtů pokladny s lístkem samo (stejný název bez diakritiky a objemu, u velikostí objem z názvu nebo nejbližší cena; jiný název jen tehdy, když jsou všechna slova jednoho názvu v druhém, sdílí aspoň 60 % slov a žádné jiné jídlo není blízko; jinak zůstane nespárovaný), takže pokladna nemusí znát id z webu. Z toho počítá prodej po položkách (kusy, tržba s DPH a podle `vatRate` bez DPH; tržba řádku je jeho podíl na zaplacené částce účtu `totalCents`, takže sleva na celý účet se rozpočítá na řádky poměrně, ať pokladna posílá řádky před slevou, nebo po ní) a zisk = tržba bez DPH − food cost za kus × kusy; food cost za kus doplní nákupní ceny a receptury, do té doby je zisk `null` a odpověď říká, co chybí. Kontrola cen hledá v kategoriích od 4 položek položky pod polovinou nebo nad dvojnásobkem běžné (prostřední) ceny kategorie, u nápojů různých objemů za litr, a od 5 položek mezery v cenové řadě (ne u nápojů porovnávaných za litr, tam jsou rozdíly cen dané objemem); položky zdarma se nepočítají; ke každé navrhne cenu. Virtuální přecenění jen počítá, na webu ani v pokladně nic nemění; položka zdarma zůstane zdarma a tržba po přecenění je odhad při stejném počtu kusů podle změny základní ceny. Dashboard má v kartě lístku „Ceny k prověření“ a „Prodej po položkách za 30 dní“ (s nespárovanými produkty pokladny), MCP server nástroje `preceneni`, `kontrola_cen` a `vydelek_polozek(od, do)`.
+
+Hlídání cen a menu engineering (13. 10. 2026, schválil MC): produkt dne, jehož žádný kus se neprodal za žádnou z cen spárované položky lístku (cena za kus = řádek `totalCents` / `quantity`; rozdíl pod 1 Kč se nepočítá), je „Cena v pokladně nesedí s lístkem“: jeden souhrnný řádek v seznamu k vyřízení (váha = kusy × rozdíl) a řádek v ranní zprávě, s cenou, za kterou se prodalo nejvíc kusů. Happy hour, ceny pro personál nebo příplatky vedle ceny z lístku tak poplach nespustí. Platí i všechny ceny, které položka měla před změnou lístku provedenou ten den nebo později. Pokladna, která rozpouští slevu účtu do řádků, by poplach spouštěla, proto má posílat řádky před slevou. Matice obliba × výdělek (Kasavana–Smith) po částech lístku: oblíbená = aspoň 70 % rovného podílu kusů části, výdělečná = výdělek za kus aspoň průměr části vážený kusy; výdělek = tržba bez DPH − food cost, dokud food cost chybí, cena za kus s DPH; položky zdarma se nepočítají, neprodané jsou slabé kusy, položky přidané do lístku v hodnoceném období se nehodnotí (jsou jen vypsané). Každá změna ceny je pokus: kusy a tržba za den 28 dní před změnou (ne před prvním účtem pokladny; méně než 7 dní = „málo prodejů před změnou“) proti dnům po ní (nejvýš 28; do 7 dní „čeká“). Pondělní ranní zpráva má řádek „Ceny k prověření“. Dashboard ukazuje matici a pokusy v kartě lístku, MCP server nástroj `menu_engineering(od, do)`.
+
+Lístek pod dohledem (13. 10. 2026, schválil MC): lístek, ve kterém oproti platnému chybí aspoň 3 položky a víc než desetina z nich, OKO1 přijme (`accepted`), ale nepoužije: drží předchozí lístek, seznam k vyřízení, karta lístku a ranní zpráva hlásí „Web poslal lístek bez X z Y položek“. Když web do 24 hodin pošle novější lístek, platí ten (a zadržený se zahodí); jinak ho ranní běh po 24 hodinách (počítáno od prvního zadrženého lístku) převezme i se změnami, platný od provozního dne převzetí, takže dny předtím mají staré ceny. Zadržená nebo starší verze je `stale`. Dávku, kterou OKO1 odmítne (400) a která obsahuje lístek, si zapíše (čas, instalace, kód chyby, typy záznamů ze smlouvy, jiné jako `other`, nic z obsahu, 90 dní); za posledních 7 dní hlásí počet odmítnutých odeslání jako „Lístek z webu OKO1 N× odmítlo (kód); platí poslední přijatý lístek.“ Ranní zpráva má řádek „Lístek se změnil“ v den po změně lístku (v neděli týdenní řádek „Lístek za týden“). OKO1 si ke každému měsíci ukládá průměrnou cenu (základní, s DPH) a počet položek po části a kategorii lístku; karta lístku ukazuje „Vývoj cen po měsících“ (posledních 12 měsíců).
+
+Ceny v Claudovi (13. 10. 2026, schválil MC): MCP nástroj `historie_ceny(hledat)` vrací dnešní cenu položek podle slov z názvu a všechny jejich změny za dva roky, u změny ceny i pokus (prodej před a po). `preceneni` bez výběru přeceňuje celý lístek a k odhadu tržby přidává změnu výdělku (= změna tržby bez DPH při stejných kusech, food cost kusu se nemění), o kolik promile kusů může prodej klesnout, aby tržba nebyla nižší, a tržbu při 5 a 10 % kusů méně. Ranní zpráva o posledním dni měsíce má řádek „Lístek v <měsíci>“: počet zdražených (i jen větší porce) a zlevněných položek (položka přeceněná víckrát se počítá jednou, od první staré ceny k poslední), přidaných a zrušených položek a kategorie, jejichž průměrná základní cena se proti minulému měsíci pohnula aspoň o 1 %. Kontrola cen nově hlásí cenu s neobvyklou poslední číslicí (kategorie aspoň 5 položek s cenou, aspoň tři čtvrtiny cen končí na pár číslic, každá aspoň na čtvrtině a aspoň dvou cen) s nejbližší obvyklou cenou; v pondělním řádku jde až za ostatními nálezy.
+
+Výsledky změn cen (13. 10. 2026, schválil MC): pondělní ranní zpráva má řádek „Změny cen po 4 týdnech“ se změnami cen, kterým v uplynulém týdnu skončilo 28 dní po změně: kusy a tržba za den proti 28 dnům před změnou; u zdražení (základní ceny, nebo jiné velikosti, když základní zůstala) „vyplatilo se“, když tržba za den vzrostla aspoň o 0,5 %, a „tržba klesla, vyplatilo se jen při velkém food costu“, když klesla (méně kusů může znamenat i vyšší zisk; rozhodne food cost). Ranní zpráva o posledním dni měsíce má řádek „Skoro neprodané“: položky lístku s cenou, které v lístku byly celý měsíc a prodaly se nejvýš dvakrát (bez velikostí, jejichž jiná velikost se prodávala), jen když pokladna poslala účty aspoň za 14 dní měsíce a aspoň 90 % tržby je spárováno s lístkem. Dashboard má v kartě lístku hledání položky: cena na konci každého z 26 týdnů (před přidáním položky žádná) a prodané kusy a tržba po týdnech (graf), cesta `GET /d/<provozovna>/item?q=<slova>&id=<položka>` jen s přihlášením.
+
+Lístek na webu bez chyb (13. 10. 2026, schválil MC): OKO1 hlídá, co lístku na webu chybí: jídlo bez popisu (kromě příloh, omáček, dresinků, příplatků a položek „dle nabídky“), koktejl bez složení (s místem, kde je popis stejně pojmenované položky, ze kterého jde převzít), nápoj bez objemu (kromě kávy a čaje) a stejnou položku (název, objem, popis) dvakrát v jedné kategorii s jinou cenou (v jiné kategorii, třeba XXL džbán nebo láhev, může jít o záměr). Pondělní ranní zpráva a seznam k vyřízení mají řádek „Na webu opravit v lístku“, karta lístku sekci „Co opravit na webu“, MCP `kontrola_cen` pole `webGaps`. Úplnost anglického a německého překladu lístku hlídá už web sám (test `test/preklady.test.ts` neprojde, dokud některý text překlad nemá), takže lístek bez překladu na web nedojde.
+
+### Lístek pro pokladnu (`GET /v1/t/{tenant}/menu`)
+
+Doplněno 13. 10. 2026 zpětně kompatibilně (dávka „Lístek do Pexesa“, schválil MC): pokladna si lístek z OKO1 převezme, takže ho nikdo nepřepisuje, a při změně ceny na webu nabídne vedoucímu stejnou změnu v pokladně k potvrzení (sama ceny nemění). Spárovaná pokladna volá `GET /v1/t/{tenant}/menu?installationId=<id>` s hlavičkou `Authorization: Bearer <token>` (stejný token jako pro příjem dat; jiná nebo nespárovaná instalace 401). Odpověď:
+
+```json
+{"menu": {"version": 1760367600000, "businessDate": "2026-10-13", "receivedAt": "2026-10-13T12:00:00.000Z",
+  "items": [{"id": "food:burgery:classic", "part": "food", "category": "Burgery", "group": null, "name": "Classic Burger", "description": "…",
+    "volume": null, "volumeMl": null, "pricesCents": [22500, 25500], "tip": false, "kind": "food", "vatRate": 12}],
+  "notes": [{"part": "drinks", "category": "Káva", "text": "Alternativní mléko za příplatek 20 Kč."}]}}
+```
+
+- Položky jsou platný lístek webu (`menu-web`; zadržený lístek z „Lístek pod dohledem“ se nevydává) se všemi poli záznamu `menu` a navíc `kind` (`food` jídlo, `soft` nealko, `alcohol` alkohol) a `vatRate` (česká sazba DPH v pohostinství: jídlo a nealko 12 %, alkohol 21 %). Druh a sazbu OKO1 odhaduje z části, kategorie, podskupiny a názvu (koktejl je alkohol, pokud není nealko či „virgin“; nápoj je alkohol podle slov jako víno, pivo, lihoviny, destiláty, gin, rum, aperol, irská káva, svařák; nealko, „virgin“ a zázvorové pivo jsou nealko); pokladna je ukáže, než je použije.
+- Bez lístku `{"menu": null}`. S `&since=<version>` a stejnou verzí `{"menu": null, "unchanged": true, "version": N}`.
+- Pokladna si drží spojení produkt ↔ položka lístku (a která z cen `pricesCents` to je) a u každého prodaného řádku účtu posílá `menuItemId`. OKO1 pak páruje podle něj: produkt s jakýmkoli názvem (i velikosti a podobné názvy) patří přesně k té položce. `menuItemId`, které už v lístku není, se páruje podle názvu jako dřív. Prodej, výdělek, kontrola cen v pokladně a pokusy se změnou ceny počítají produkt spojený s položkou zvlášť od stejně pojmenovaného nespojeného.
+
 
 ### Faktura dodavatele (`supplier_invoice`)
 

@@ -220,6 +220,24 @@ function trendsCard(t) {
     rows + '</table></div><div class="muted">↑ ↓ = o víc než 5 % proti týdnu předtím; odchylka odhadu = jak daleko byla tržba od plánu z ranní zprávy (od 4 dní v týdnu)</div></div>';
 }
 
+// Interest in the menu on the website over 12 weeks (only once the website sends it): visits that opened it, page views by part, from abroad, languages and reservations.
+function menuInterestCard(weeks) {
+  if (!weeks || !weeks.some(w => w.days)) return '';
+  const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.', num = v => String(v).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ' ');
+  const share = (a, b) => b ? Math.round(a / b * 100) + ' %' : '–';
+  const language = (w, key) => share((w.languages.find(l => l.key === key) || {visits: 0}).visits, w.visits);
+  const rows = weeks.slice().reverse().map((w, i, all) => {
+    if (!w.days) return '';
+    const prev = all[i + 1], arrow = prev && prev.days === 7 && w.days === 7 ? (w.visits > prev.visits * 1.05 ? ' <span class="muted">↑</span>' : w.visits < prev.visits * 0.95 ? ' <span class="muted">↓</span>' : '') : '';
+    return '<tr><td>' + esc(short(w.from)) + '–' + esc(short(w.to)) + (w.days < 7 ? ' <span class="muted">(' + w.days + ' d)</span>' : '') + '</td>' +
+      '<td class="n">' + num(w.visits) + arrow + '</td><td class="n">' + num(w.food) + ' / ' + num(w.drinks) + '</td><td class="n">' + share(w.abroad, w.visits) + '</td>' +
+      '<td class="n">' + language(w, 'cs') + '</td><td class="n">' + language(w, 'en') + '</td><td class="n">' + language(w, 'de') + '</td>' +
+      '<td class="n">' + w.reserved + ' <span class="muted">(' + (w.visits ? (Math.round(w.reserved / w.visits * 1000) / 10).toFixed(1).replace('.', ',') : '0,0') + ' %)</span></td></tr>';
+  }).join('');
+  return '<div class="card"><h2>Zájem o lístek na webu (12 týdnů)</h2><div class="scroll"><table><tr><th>Týden</th><th class="n">Otevřelo</th><th class="n">Jídlo / nápoje</th><th class="n">Ze zahraničí</th><th class="n">česky</th><th class="n">anglicky</th><th class="n">německy</th><th class="n">Rezervace</th></tr>' +
+    rows + '</table></div><div class="muted">otevřelo = návštěvy webu, které si otevřely jídelní nebo nápojový lístek; jídlo / nápoje = kolikrát se která část zobrazila; ze zahraničí podle země návštěvy, jazyk podle jazyka webu; rezervace = z těch návštěv poslaly rezervaci; ↑ ↓ = o víc než 5 % proti týdnu předtím</div></div>';
+}
+
 // Events of the half year before the shown day, the strongest first: guests and revenue against the same weekday without an event.
 function eventsCard(ranking) {
   if (!ranking || !ranking.length) return '';
@@ -306,6 +324,40 @@ function menuCard(m) {
   const range = c => c.minCents === c.maxCents ? kc(c.minCents) : kc(c.minCents) + ' – ' + kc(c.maxCents);
   let h = '<div class="card"><h2>Jídelní a nápojový lístek</h2><div class="muted">' + m.items + (m.items === 1 ? ' položka' : m.items >= 2 && m.items <= 4 ? ' položky' : ' položek') + ' · ' + m.parts.map(p => esc(p.name.toLowerCase()) + ' ' + p.items).join(', ') + ' · z webu, naposledy ' + esc(m.received) + '</div>';
   h += '<h3>Změny za 30 dní</h3>' + (m.changes.length ? '<ul>' + m.changes.map(c => '<li>' + esc(short(c.date)) + ' <b>' + esc(c.name) + '</b>: ' + changeText(c) + '</li>').join('') + '</ul>' + (m.changesTotal > m.changes.length ? '<div class="muted">… a další ' + (m.changesTotal - m.changes.length) + '</div>' : '') : '<span class="muted">beze změn</span>');
+  if (m.problems && m.problems.length) h += '<div class="warn">' + m.problems.map(esc).join('<br>') + '</div>';
+  const pc = m.priceCheck;
+  h += '<h3>Ceny k prověření</h3>' + (pc.findings.length ? '<ul>' + pc.findings.map(f => '<li>' + (f.name ? '<b>' + esc(f.name) + '</b> ' + esc(f.priceText) : '<b>' + esc(f.category) + '</b>') +
+    (f.name ? ' (' + esc(f.category) + ')' : '') + ': ' + esc(f.text) + '</li>').join('') + '</ul>' + (pc.total > pc.findings.length ? '<div class="muted">… a další ' + (pc.total - pc.findings.length) + '</div>' : '') : '<span class="muted">nic nápadného</span>');
+  const gp = m.gaps;
+  if (gp) h += '<h3>Co opravit na webu</h3>' + (gp.items.length ? '<ul>' + gp.items.map(g => '<li><b>' + esc(g.name) + '</b> (' + esc(g.group ? g.category + ' › ' + g.group : g.category) + '): ' + esc(g.text) + '</li>').join('') + '</ul>' +
+    (gp.total > gp.items.length ? '<div class="muted">… a další ' + (gp.total - gp.items.length) + '</div>' : '') : '<span class="muted">nic, lístek je úplný</span>');
+  const pr = m.profit;
+  if (pr) {
+    h += '<h3>Prodej po položkách za 30 dní</h3><div class="scroll"><table><tr><th>Položka</th><th class="n">Kusů</th><th class="n">Tržba</th><th class="n">Zisk</th></tr>' +
+      pr.items.map(i => '<tr><td>' + esc(i.name) + '</td><td class="n">' + i.quantity + '</td><td class="n">' + kc(i.grossCents) + '</td><td class="n">' + (i.profitCents === null ? '<span class="muted">–</span>' : kc(i.profitCents)) + '</td></tr>').join('') + '</table></div>' +
+      '<div class="muted">spárováno s lístkem ' + (pr.totals.pairedPermille === null ? '–' : Math.round(pr.totals.pairedPermille / 10) + ' %') + ' tržby' + (pr.itemsTotal > pr.items.length ? ' · položek celkem ' + pr.itemsTotal : '') +
+      (pr.missing.length ? ' · k zisku chybí: ' + esc(pr.missing.join(', ')) : '') + '</div>' +
+      (pr.unpaired.length ? '<div class="muted">nespárováno: ' + pr.unpaired.map(u => esc(u.name) + ' ' + kc(u.grossCents)).join(', ') + (pr.unpairedTotal > pr.unpaired.length ? ' a další ' + (pr.unpairedTotal - pr.unpaired.length) : '') + '</div>' : '');
+  }
+  if (m.matrix && m.matrix.length) {
+    h += '<h3>Obliba × výdělek za 30 dní</h3>' + m.matrix.map(part => '<details><summary>' + esc(part.name) + (part.basis === 'price' ? ' <span class="muted">(podle ceny, food cost chybí)</span>' : '') + '</summary><ul>' +
+      part.classes.filter(c => c.count).map(c => '<li><b>' + esc(c.name) + '</b> (' + c.count + '): ' + c.items.map(i => esc(i.name)).join(', ') + (c.count > c.items.length ? ' …' : '') + '<br><span class="muted">' + esc(c.advice) + '</span></li>').join('') + '</ul>' +
+      (part.newItems.length ? '<div class="muted">nové, zatím nehodnocené: ' + part.newItems.map(esc).join(', ') + '</div>' : '') + '</details>').join('');
+  }
+  if (m.experiments && m.experiments.length) {
+    const pct = p => p === null ? '–' : (p > 0 ? '+' : '') + Math.round(p / 10) + ' %';
+    h += '<h3>Změny cen jako pokus</h3><ul>' + m.experiments.map(e => '<li>' + esc(short(e.date)) + ' <b>' + esc(e.name) + '</b> ' + esc(e.oldText || '?') + ' → ' + esc(e.newText || '?') + ': ' +
+      (e.status === 'no_history' ? '<span class="muted">málo prodejů před změnou</span>' : e.status === 'waiting' ? '<span class="muted">čeká na 7 dní prodeje</span>' : 'kusy za den ' + pct(e.quantityPermille) + ', tržba za den ' + pct(e.revenuePermille) + (e.status === 'running' ? ' <span class="muted">(zatím ' + e.after.days + ' dní)</span>' : '')) + '</li>').join('') + '</ul>';
+  }
+  h += '<h3>Položka v čase</h3><form id="itemForm" class="row"><input id="itemQuery" maxlength="100" placeholder="název, např. texas burger" autocomplete="off"><button>Ukázat</button></form><div id="itemBox"></div>';
+  const t = m.trend;
+  if (t && t.categories.length) {
+    const month = s => Number(s.slice(5)) + '/' + s.slice(2, 4);
+    const pct = p => p === null ? '' : (p > 0 ? '+' : '') + String(p / 10).replace('.', ',') + ' %';
+    h += '<details><summary>Vývoj cen po měsících</summary><div class="scroll"><table><tr><th>Kategorie</th>' + t.months.map(x => '<th class="n">' + esc(month(x)) + '</th>').join('') + '<th class="n">Změna</th></tr>' +
+      t.categories.map(c => '<tr><td>' + esc(c.name) + '</td>' + c.values.map(v => '<td class="n">' + (v === null ? '<span class="muted">–</span>' : kc(v)) + '</td>').join('') + '<td class="n">' + pct(c.changePermille) + '</td></tr>').join('') +
+      '</table></div>' + (t.months.length < 2 ? '<div class="muted">průměrná cena kategorie; další měsíce přibydou s dalšími lístky</div>' : '') + '</details>';
+  }
   for (const p of m.parts) {
     h += '<details><summary>' + esc(p.name) + ' (' + p.items + ')</summary><div class="scroll"><table><tr><th>Kategorie</th><th class="n">Položek</th><th class="n">Cena od – do</th><th class="n">Průměr</th></tr>' +
       p.categories.map(c => '<tr><td>' + esc(c.name) + '</td><td class="n">' + c.items + '</td><td class="n">' + range(c) + '</td><td class="n">' + kc(c.avgCents) + '</td></tr>').join('') + '</table></div></details>';
@@ -408,7 +460,7 @@ function render(data) {
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card" id="todo">' + todoCard(data.todo) + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
-  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast) + weekCard(data.week) + eventsCard(data.eventRanking) + trendsCard(data.trends) + monthCard(data.month) + suppliesCard(data.supplies) + menuCard(data.menu) + sourcesCard(data.sources);
+  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast) + weekCard(data.week) + eventsCard(data.eventRanking) + trendsCard(data.trends) + menuInterestCard(data.menuInterest) + monthCard(data.month) + suppliesCard(data.supplies) + menuCard(data.menu) + sourcesCard(data.sources);
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
   if (r) {
@@ -451,6 +503,42 @@ function webCard(c) {
     esc([r.zdroj, r.datum].filter(Boolean).join(', ')) + '</span><br>' + esc(r.text) + '</li>').join('') + '</ul>';
   return h + '</div>';
 }
+// One item over 26 weeks: price at the end of each week and pieces sold, as bars.
+async function loadItem(query, id) {
+  const box = $('itemBox');
+  if (!box) return;
+  const r = await fetch(base + '/item?q=' + encodeURIComponent(query) + (id ? '&id=' + encodeURIComponent(id) : '')).catch(() => null);
+  if (r && r.status === 401) { $('app').hidden = true; $('login').hidden = false; return; }
+  const t = r && r.ok ? await r.json().catch(() => null) : null;
+  if (!t) { box.innerHTML = '<p class="warn">Položku teď nejde načíst.</p>'; return; }
+  if (!t.item) { box.innerHTML = '<p class="muted">Žádná položka lístku neodpovídá.</p>'; return; }
+  const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.';
+  const most = Math.max(1, ...t.weeks.map(w => w.quantity));
+  let h = (t.matches.length > 1 ? '<div class="muted">' + t.matches.map(x => x.itemId === t.item.itemId ? '<b>' + esc(x.name) + (x.volume ? ' ' + esc(x.volume) : '') + '</b>'
+    : '<a href="#" data-item="' + esc(x.itemId) + '">' + esc(x.name) + (x.volume ? ' ' + esc(x.volume) : '') + '</a>').join(' · ') + '</div>' : '') +
+    '<div><b>' + esc(t.item.name) + '</b> ' + esc(t.item.price) + ' <span class="muted">(' + esc(t.item.category) + ')</span></div>';
+  // Bars = pieces per week, the line = price at the week's end (its own scale); SVG attributes pass the page's style policy.
+  const W = 520, H = 140, bw = W / t.weeks.length, prices = t.weeks.map(w => w.priceCents).filter(p => p !== null);
+  const low = prices.length ? Math.min(...prices) * 0.9 : 0, high = prices.length ? Math.max(...prices) * 1.05 : 1, py = p => H - 20 - (p - low) / Math.max(1, high - low) * (H - 30);
+  let bars = '', line = '', labels = '';
+  t.weeks.forEach((w, i) => {
+    const bh = Math.max(0, w.quantity) / most * (H - 30), x = i * bw;
+    bars += '<rect x="' + (x + 1) + '" y="' + (H - 20 - bh) + '" width="' + (bw - 2) + '" height="' + bh + '" fill="var(--bar)"><title>' + esc(short(w.week) + ': ' + w.quantity + ' ks, ' + kc(w.grossCents) + ', cena ' + kc(w.priceCents)) + '</title></rect>';
+    if (w.priceCents !== null) line += (line ? ' L' : 'M') + (x + 1) + ' ' + py(w.priceCents) + ' L' + (x + bw - 1) + ' ' + py(w.priceCents);
+    if (i % 4 === 0) labels += '<text x="' + x + '" y="' + (H - 6) + '" font-size="10" fill="var(--muted)">' + esc(short(w.week)) + '</text>';
+  });
+  h += '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Cena a prodej po týdnech">' + bars + '<path d="' + line + '" fill="none" stroke="var(--plan)" stroke-width="2"/>' + labels + '</svg>' +
+    '<div class="muted">sloupce = prodané kusy za týden, čára = cena</div>';
+  const changed = t.weeks.filter((w, i) => i && w.priceCents !== t.weeks[i - 1].priceCents);
+  if (changed.length) h += '<div>Změny ceny: ' + changed.map(w => esc(short(w.week)) + ' ' + kc(w.priceCents)).join(', ') + '</div>';
+  h += t.hasSales ? '' : '<div class="muted">prodej se ukáže s účty z pokladny</div>';
+  box.innerHTML = h;
+  box.querySelectorAll('a[data-item]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); loadItem(query, a.dataset.item); }));
+}
+// The search sits in the menu card, which is drawn again with each day; its submit bubbles up to the content.
+$('content').onsubmit = e => {
+  if (e.target && e.target.id === 'itemForm') { e.preventDefault(); const q = $('itemQuery').value.trim(); if (q) loadItem(q, null); }
+};
 async function loadWeb() {
   const box = $('web');
   const r = await fetch(base + '/web').catch(() => null);

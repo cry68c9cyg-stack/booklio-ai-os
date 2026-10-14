@@ -515,6 +515,18 @@ try {
     menuItem('food:dezerty:pie', 'food', 'Dezerty', 'Apple Pie', [14500])]);
   assert.deepEqual(await (await jdIngest('batch-menu-2', [secondMenu])).json(), {batchId: 'batch-menu-2', accepted: 1, stale: 0});
   assert.deepEqual(await (await jdIngest('batch-menu-3', [firstMenu])).json(), {batchId: 'batch-menu-3', accepted: 0, stale: 1}, 'an older menu changes nothing');
+  // The menu for the POS (Pexeso takes it over): only a paired installation, with each item's kind and VAT rate; `since` = nothing new.
+  const posMenu = (query, auth = 'Bearer ' + token) => call('GET', `/v1/t/james-dean/menu?${query}`, undefined, auth);
+  assert.equal((await posMenu('installationId=pos-installation-1', null)).status, 401);
+  assert.equal((await posMenu('installationId=pos-installation-1', 'Bearer ' + 'b'.repeat(64))).status, 401);
+  assert.equal((await posMenu('installationId=pos-installation-2')).status, 401);
+  assert.equal((await call('POST', '/v1/t/james-dean/menu?installationId=pos-installation-1', {}, 'Bearer ' + token)).status, 405);
+  const forPos = (await (await posMenu('installationId=pos-installation-1')).json()).menu;
+  assert.deepEqual([forPos.version, forPos.businessDate, typeof forPos.receivedAt, forPos.notes.length], [2, today, 'string', 1]);
+  assert.deepEqual(forPos.items.map(item => [item.id, item.pricesCents, item.kind, item.vatRate]), [['food:burgery:classic', [22500, 26500], 'food', 12],
+    ['food:burgery:texas', [25900], 'food', 12], ['drinks:kava:espresso', [6200], 'soft', 12], ['food:dezerty:pie', [14500], 'food', 12]]);
+  assert.deepEqual(await (await posMenu('installationId=pos-installation-1&since=2')).json(), {menu: null, unchanged: true, version: 2});
+  assert.equal((await (await posMenu('installationId=pos-installation-1&since=1')).json()).menu.version, 2);
   // Supplier invoices (interim from Dishboard, synthetic): an older purchase, a dearer one now and an unpaid invoice past its due date.
   const invoice = (id, businessDate, items, extra = {}) => ({type: 'supplier_invoice', id, version: 1, businessDate, source: 'dishboard', supplier: 'Velkoobchod <Test>',
     netCents: items.reduce((sum, item) => sum + item.netCents, 0), grossCents: Math.round(items.reduce((sum, item) => sum + item.netCents, 0) * 1.12), kind: 'food', items, ...extra});
@@ -530,6 +542,8 @@ try {
   const menuMonday = await (await call('GET', `/admin/t/james-dean/briefing?date=${menuSunday}`)).json();
   assert.deepEqual([menuMonday.briefing.menuWeek.prices.length, menuMonday.briefing.menuWeek.added, menuMonday.briefing.menuWeek.removed], [2, ['Apple Pie'], ['Vodka X']]);
   assert.match(menuMonday.text, /\nLístek za týden: nová cena 2× \(.+ → .+\) · nově Apple Pie · zrušeno Vodka X(\n|$)/);
+  assert.match(menuMonday.text, /\nNa webu opravit v lístku: chybí popis nebo složení 2× \(Texas Burger, Apple Pie\)(\n|$)/);
+  assert.ok(menuMonday.briefing.menuGaps.total === 2 && !(await (await call('GET', `/admin/t/james-dean/briefing?date=${addDays(menuSunday, -1)}`)).json()).briefing.menuGaps, 'Mondays only');
   const local = (path, init = {}) => mf.dispatchFetch('http://localhost' + path, init);
 
   // The admin check reads only the list of tables and never shows the token.
@@ -634,7 +648,7 @@ try {
     body: rpc(1, 'initialize', {protocolVersion: '2025-06-18', capabilities: {}, clientInfo: {name: 'test', version: '1'}})})).json();
   assert.equal(initialized.result.serverInfo.name, 'oko1');
   const listed = await (await local('/mcp', {method: 'POST', headers: {...mcpHeaders, authorization: 'Bearer ' + tokens.access_token}, body: rpc(2, 'tools/list')})).json();
-  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['akce_zebricek', 'den', 'k_vyrizeni', 'kontrola_lahvi', 'listek', 'naklady_dodavatele', 'odhad_a_vyhled', 'ranni_prehled', 'report_manazeru', 'souhrn_obdobi', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty',
+  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['akce_zebricek', 'den', 'historie_ceny', 'k_vyrizeni', 'kontrola_cen', 'kontrola_lahvi', 'listek', 'menu_engineering', 'naklady_dodavatele', 'odhad_a_vyhled', 'preceneni', 'ranni_prehled', 'report_manazeru', 'souhrn_obdobi', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty', 'vydelek_polozek',
     'web_blokace_a_akce', 'web_darkove_karty', 'web_host', 'web_navstevnost', 'web_platby_lahvi', 'web_prehled', 'web_recenze', 'web_rezervace', 'web_rezervace_detail', 'web_tabulka']);
   assert.ok(listed.result.tools.every(entry => entry.annotations.readOnlyHint === true), 'read only');
 
@@ -686,6 +700,44 @@ try {
   assert.deepEqual(menuTool.changes.map(change => [change.itemId, change.kind, change.oldCents, change.newCents, change.oldText, change.newText]).sort(), [
     ['drinks:vodka:x', 'removed', 9000, null, '90 Kč', null], ['food:burgery:classic', 'price', 22500, 22500, '225 / 255 Kč', '225 / 265 Kč'],
     ['food:burgery:texas', 'price', 24500, 25900, '245 Kč', '259 Kč'], ['food:dezerty:pie', 'added', null, 14500, null, '145 Kč']]);
+  // Pricing of the menu: virtual repricing, the price check and profit by item from POS bills paired to the menu.
+  assert.equal((await mcp('vydelek_polozek', {od: addDays(today, -6), do: today})).data.items.length, 0, 'no bills yet: nothing sold');
+  const soldDay = addDays(today, -3);
+  const posBill = {...bill('jd-pos-1', 1, 106400, soldDay), items: [{name: 'Classic Burger', productId: 'pos-classic', quantity: 4, totalCents: 89600, vatRate: 12},
+    {name: 'Tonic 0,25 l', quantity: 2, totalCents: 16800, vatRate: 21}]};
+  assert.equal((await jdIngest('batch-jd-pos', [{...posBill, items: [{...posBill.items[0], vatRate: 120}]}])).status, 400, 'a VAT rate is a percentage');
+  assert.equal((await jdIngest('batch-jd-pos', [posBill])).status, 200);
+  const sold = (await mcp('vydelek_polozek', {od: addDays(today, -6), do: today})).data;
+  assert.deepEqual(sold.items.map(row => [row.itemId, row.quantity, row.grossCents, row.netCents, row.profitCents]), [['food:burgery:classic', 4, 89600, 80000, null]]);
+  assert.deepEqual([sold.unpaired.map(row => row.name), sold.totals.pairedPermille, sold.missing], [['Burger', 'Tonic 0,25 l'], 481, ['food cost za kus (nákupní ceny a receptury)']]);
+  assert.equal((await mcp('vydelek_polozek', {od: today, do: addDays(today, -1)})).error, true);
+  // A POS line linked to a menu item (`menuItemId`) pairs by it whatever its name; an id no longer on the menu falls back to the name.
+  const linkedDay = addDays(today, 800);
+  assert.equal((await jdIngest('batch-linked-0', [{...bill('jd-linked', 1, 25900, linkedDay), items: [{name: 'X', quantity: 1, totalCents: 25900, menuItemId: 'bad id'}]}])).status, 400);
+  assert.equal((await jdIngest('batch-linked-1', [{...bill('jd-linked', 1, 48400, linkedDay), items: [{name: 'Texaský s hranolky', quantity: 1, totalCents: 25900, vatRate: 12, menuItemId: 'food:burgery:texas'},
+    {name: 'Classic Burger', quantity: 1, totalCents: 22500, vatRate: 12, menuItemId: 'food:burgery:gone'}], payments: [{method: 'card', amountCents: 48400}]}])).status, 200);
+  const linked = (await mcp('vydelek_polozek', {od: linkedDay, do: linkedDay})).data;
+  assert.deepEqual([linked.items.map(row => [row.itemId, row.quantity, row.posNames]), linked.unpaired.length], [[['food:burgery:texas', 1, ['Texaský s hranolky']], ['food:burgery:classic', 1, ['Classic Burger']]], 0]);
+  // A discount on the whole bill falls on its lines in proportion to what was paid.
+  assert.equal((await jdIngest('batch-jd-pos-2', [{...bill('jd-pos-2', 1, 20160, soldDay), discountCents: 2240, items: [{name: 'Classic Burger', productId: 'pos-classic', quantity: 1, totalCents: 22400, vatRate: 12}]}])).status, 200);
+  assert.deepEqual((await mcp('vydelek_polozek', {od: addDays(today, -6), do: today})).data.items.map(row => [row.quantity, row.grossCents, row.netCents]), [[5, 109760, 98000]]);
+  const repriced = (await mcp('preceneni', {kategorie: 'Burgery', procenta: 10})).data;
+  assert.deepEqual(repriced.items.map(item => [item.itemId, item.newText]), [['food:burgery:classic', '250 / 290 Kč'], ['food:burgery:texas', '285 Kč']]);
+  if (soldDay >= repriced.salesFrom) assert.deepEqual(repriced.sales, {items: 1, grossCents: 109760, newGrossCents: 121956, differenceCents: 12196, profitDifferenceCents: 10889,
+    breakEvenDropPermille: 100, ifFewer: [{percent: 5, newGrossCents: 115858}, {percent: 10, newGrossCents: 109760}]});
+  assert.equal((await mcp('preceneni', {kategorie: 'Burgery'})).error, true, 'a change is needed');
+  assert.equal((await mcp('preceneni', {hledat: 'pizza', procenta: 5})).error, true, 'nothing matches');
+  const checked = (await mcp('kontrola_cen')).data;
+  assert.deepEqual([checked.items, checked.findings], [4, []], 'no category has 4 items');
+  // What to fix on the website: the dishes without a description (the burger with one and the espresso, a hot drink, are fine).
+  assert.deepEqual(checked.webGaps.map(gap => [gap.kind, gap.name, gap.text]), [['description', 'Texas Burger', 'chybí popis'], ['description', 'Apple Pie', 'chybí popis']]);
+  // Menu engineering: the burger that sold is a star, the rest of the food weak; the price changes of today wait for sales.
+  const engineering = (await mcp('menu_engineering', {od: addDays(today, -6), do: today})).data;
+  assert.deepEqual(engineering.matrix.map(part => [part.part, part.basis, part.classes.map(row => [row.kind, row.items.map(item => item.itemId)])]),
+    [['food', 'price', [['star', ['food:burgery:classic']], ['plowhorse', []], ['puzzle', []], ['dog', ['food:burgery:texas']]]]]);
+  assert.deepEqual(engineering.matrix[0].newItems, ['Apple Pie'], 'added to the menu within the days: not judged');
+  assert.deepEqual(engineering.experiments.map(row => [row.itemId, row.status, row.before.quantity, row.quantityPermille]).sort(),
+    [['food:burgery:classic', 'no_history', 5, null], ['food:burgery:texas', 'no_history', 0, null]], 'bills only 3 days before the change');
   // Costs and suppliers: purchases without VAT, the rise against the purchase before, the overdue invoice; a cancelled one does not count.
   const supplies = (await mcp('naklady_dodavatele', {od: addDays(today, -6), do: today})).data;
   assert.deepEqual([supplies.summary.invoices, supplies.summary.netCents, supplies.summary.byKind], [1, 51590, [{kind: 'food', name: 'jídlo', netCents: 51590}]]);
@@ -738,12 +790,31 @@ try {
   // An event a month ago: the ranking card shows it with its title escaped.
   assert.equal((await jdIngest('batch-jd-event', [{type: 'event', id: 'jd-akce', version: 1, businessDate: addDays(today, -30), startsAt: `${addDays(today, -30)}T19:00:00Z`,
     section: 'club', title: '<img src=x onerror=alert(1)>Jam', status: 'published'}])).status, 200);
+  // Interest in the menu on the website: a day without `menu` is left out, unknown fields are refused, the card shows the weeks with data.
+  const menuDay = (businessDate, menu) => ({type: 'web_traffic', id: `web-${businessDate}`, version: 1, businessDate, visits: 50, visitsWithAction: 0, origins: [], actions: {}, reviewScans: 0, ...(menu ? {menu} : {})});
+  const interest = {views: {food: 30, drinks: 12}, visits: 20, abroad: 15, reserved: 2, languages: [{key: 'en', visits: 14, reserved: 1}, {key: 'cs', visits: 6, reserved: 1}]};
+  assert.equal((await jdIngest('batch-jd-menu-0', [menuDay(addDays(today, -1), {...interest, ids: []})])).status, 400, 'nothing about single visits');
+  assert.equal((await jdIngest('batch-jd-menu-0', [menuDay(addDays(today, -1), {...interest, languages: [{key: 'en', visits: 1}]})])).status, 400, 'a language needs reservations');
+  assert.equal((await jdIngest('batch-jd-menu-1', [menuDay(addDays(today, -1), interest), menuDay(addDays(today, -2)), menuDay(addDays(today, -8), {...interest, visits: 10, abroad: 2, languages: [{key: 'cs', visits: 10, reserved: 2}]})])).status, 200);
   const boardData = await (await jdBoard('GET', '/data', undefined, jdCookie)).json();
+  assert.deepEqual([boardData.menuInterest.length, boardData.menuInterest[11].to, boardData.menuInterest[11].days, boardData.menuInterest[11].visits, boardData.menuInterest[11].food, boardData.menuInterest[11].languages,
+    boardData.menuInterest[10].days, boardData.menuInterest[10].visits, boardData.menuInterest[9].days],
+  [12, boardData.businessDate, 1, 20, 30, interest.languages, 1, 10, 0]);
   const shown = await renderCard({'/d/james-dean/data': boardData, '/d/james-dean/web': {card}});
   // The menu card: items per part and category, and the changes, escaped.
   assert.deepEqual([boardData.menu.items, boardData.menu.parts.map(part => [part.part, part.items]), boardData.menu.changes.length, boardData.menu.changesTotal], [4, [['food', 3], ['drinks', 1]], 4, 4]);
   assert.deepEqual(boardData.menu.parts[0].categories[0], {name: 'Burgery', items: 2, minCents: 22500, maxCents: 25900, avgCents: 24200});
   const content = await renderCard({'/d/james-dean/data': boardData, '/d/james-dean/web': {card}}, 'content');
+  assert.match(content, /Zájem o lístek na webu \(12 týdnů\)[\s\S]*<td class="n">20<\/td><td class="n">30 \/ 12<\/td><td class="n">75 %<\/td><td class="n">30 %<\/td><td class="n">70 %<\/td><td class="n">0 %<\/td><td class="n">2 <span class="muted">\(10,0 %\)<\/span>/);
+  // The menu card also checks prices and, with POS bills, shows what sold by item and what is not paired to the menu.
+  assert.deepEqual([boardData.menu.priceCheck, boardData.menu.profit.items.map(row => [row.name, row.quantity]), boardData.menu.profit.unpaired.map(row => row.name)],
+    [{findings: [], total: 0}, [['Classic <b>Burger</b>', 5]], ['Tonic 0,25 l']], 'the shown day is yesterday: today\'s bill is not in');
+  assert.match(content, /Prodej po položkách za 30 dní/);
+  assert.deepEqual([boardData.menu.gaps.total, boardData.menu.gaps.items.map(gap => gap.name)], [2, ['Texas Burger', 'Apple Pie']]);
+  assert.match(content, /Co opravit na webu<\/h3><ul><li><b>Texas Burger<\/b> \(Burgery\): chybí popis<\/li>/);
+  assert.deepEqual(boardData.menu.matrix.map(part => part.classes.map(row => row.count)), [[1, 0, 0, 2]]);
+  assert.match(content, /Obliba × výdělek za 30 dní/);
+  assert.match(content, /Classic &lt;b&gt;Burger&lt;\/b&gt;/);
   // The costs card: the rise over 30 days and the invoice past its due date, supplier names escaped.
   assert.deepEqual(boardData.supplies.rises.map(rise => [rise.name, rise.permille]), [['Borůvky 125 g', 268]]);
   assert.equal(boardData.supplies.overdueCount, 1);
@@ -789,6 +860,61 @@ try {
   for (let i = 0; i < 50 && !exported; i++) { exported = await archive.get(`t/james-dean/export/${today}.json`); if (!exported) await new Promise(resolve => setTimeout(resolve, 50)); }
   const exportText = await exported.text();
   assert.ok(exportText.includes('"w1"') && !exportText.includes('Testovaci') && !exportText.includes('777000111') && !exportText.includes('Synteticky'));
+
+  // The menu's trend starts with the month of the menu; a day with changes has its line in the message (not Sunday's, that has the week).
+  const trendBoard = await (await jdBoard('GET', '/data', undefined, jdCookie)).json();
+  assert.deepEqual([trendBoard.menu.trend.months.length, trendBoard.menu.trend.categories.find(row => row.name === 'Burgery').values], [1, [24200]]);
+  const menuDayBrief = await (await call('GET', `/admin/t/james-dean/briefing?date=${today}`)).json();
+  if (new Date(today + 'T12:00:00Z').getUTCDay() !== 0) assert.match(menuDayBrief.text, /\nLístek se změnil: nová cena 2× .+ · nově Apple Pie · zrušeno Vodka X(\n|$)/);
+  // A menu without most of its items is held (a broken website?): the old one stays and the to-do list says so; a refused menu too.
+  assert.deepEqual(await (await jdIngest('batch-menu-held', [menu(5, [secondMenu.items[0]])])).json(), {batchId: 'batch-menu-held', accepted: 1, stale: 0});
+  assert.equal((await mcp('listek')).data.menu.items.length, 4, 'the old menu stays');
+  assert.equal((await jdIngest('batch-menu-bad', [menu(6, [{...secondMenu.items[0], part: 'club'}])])).status, 400);
+  const heldBoard = await (await jdBoard('GET', '/data', undefined, jdCookie)).json();
+  // Five menus refused: the four broken ones the contract tests sent earlier and this one.
+  assert.deepEqual(heldBoard.menu.problems.map(text => text.replace(/\(\w+\)/, '(…)')), ['Web poslal lístek bez 3 z 4 položek; OKO1 drží předchozí lístek a nový převezme ráno po 24 hodinách, jestli ho web mezitím neopraví.',
+    'Lístek z webu OKO1 5× odmítlo (…); platí poslední přijatý lístek.']);
+  assert.ok(heldBoard.todo.some(item => item.text.startsWith('Web poslal lístek bez 3 z 4 položek')));
+  // The same menu again is stale; a newer one still without the items replaces the held one, its 24 hours run from the first.
+  assert.deepEqual(await (await jdIngest('batch-menu-held-again', [menu(5, [secondMenu.items[0]])])).json(), {batchId: 'batch-menu-held-again', accepted: 0, stale: 1});
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(await (await jdIngest('batch-menu-held-7', [menu(7, [secondMenu.items[1]])])).json(), {batchId: 'batch-menu-held-7', accepted: 1, stale: 0});
+  // Nobody fixed it within 24 hours: the morning run takes the newest over, with its changes, from the business day of the release.
+  await call('POST', '/admin/t/james-dean/tick', {at: new Date(Date.now() + 24 * 3600000 - 10).toISOString()});
+  const released = (await mcp('listek')).data;
+  assert.deepEqual(released.menu.items.map(item => item.id), [secondMenu.items[1].id]);
+  const releaseLines = [];
+  for (const day of [today, addDays(today, 1), addDays(today, 2)]) {
+    const text = (await (await call('GET', `/admin/t/james-dean/briefing?date=${day}`)).json()).text;
+    if (/\nLístek (se změnil|za týden): [^\n]*zrušeno Apple Pie, Espresso, Classic/.test(text)) releaseLines.push(day);
+  }
+  assert.equal(releaseLines.length, 1);
+  assert.ok(releaseLines[0] > today, 'the removed items count from the day of the release');
+  // A website that fixes the menu within 24 hours: the full one replaces the held one and nothing is reported.
+  assert.equal((await (await jdIngest('batch-menu-8', [menu(8, secondMenu.items)])).json()).accepted, 1);
+  assert.equal((await (await jdIngest('batch-menu-9', [menu(9, [secondMenu.items[0]])])).json()).accepted, 1);
+  assert.equal((await mcp('listek')).data.menu.items.length, 4);
+  assert.equal((await (await jdIngest('batch-menu-10', [menu(10, secondMenu.items)])).json()).accepted, 1);
+  const fixedBoard = await (await jdBoard('GET', '/data', undefined, jdCookie)).json();
+  assert.ok(!fixedBoard.menu.problems.some(text => text.startsWith('Web poslal')));
+
+  // Claude reads the price history of an item; the message about the month's last day sums up the menu's month.
+  const texasHistory = (await mcp('historie_ceny', {hledat: 'texas'})).data;
+  assert.deepEqual([texasHistory.items.map(item => item.name), texasHistory.changes.map(change => [change.kind, change.oldText, change.newText])],
+    [['Texas Burger'], [['price', '245 Kč', '259 Kč']]]);
+  assert.equal((await mcp('historie_ceny', {hledat: 'pizza'})).error, true);
+  // The dashboard shows one item over 26 weeks: the price of each week (today's change in the last one) and pieces sold.
+  assert.equal((await jdBoard('GET', '/item?q=texas')).status, 401);
+  const itemTrend = await (await jdBoard('GET', '/item?q=texas', undefined, jdCookie)).json();
+  assert.deepEqual([itemTrend.item.name, itemTrend.weeks.length, itemTrend.weeks[0].priceCents, itemTrend.weeks.at(-1).priceCents, itemTrend.hasSales], ['Texas Burger', 26, 24500, 25900, false]);
+  assert.deepEqual((await (await jdBoard('GET', '/item?q=pizza', undefined, jdCookie)).json()).item, null);
+  const burgers = await (await jdBoard('GET', '/item?q=burger&id=' + encodeURIComponent(itemTrend.item.itemId), undefined, jdCookie)).json();
+  assert.ok(burgers.matches.length > 1 && burgers.item.itemId === itemTrend.item.itemId, 'a match picked by its id');
+  assert.ok((await mcp('historie_ceny', {hledat: 'vodka x'})).data.changes.some(change => change.kind === 'removed'), 'a removed item is found by its name');
+  const [menuYear, menuMonthNumber] = today.split('-').map(Number);
+  const menuMonthEnd = addDays(menuMonthNumber === 12 ? `${menuYear + 1}-01-01` : `${menuYear}-${String(menuMonthNumber + 1).padStart(2, '0')}-01`, -1);
+  assert.match((await (await call('GET', `/admin/t/james-dean/briefing?date=${menuMonthEnd}`)).json()).text, /\nLístek v [^\n]+: zdraženo 2, přidáno \d+, zrušeno \d+(\n|$)/);
+  assert.doesNotMatch((await (await call('GET', `/admin/t/james-dean/briefing?date=${menuMonthEnd}`)).json()).text, /Skoro neprodané/, 'not with bills on fewer than 14 days');
 
   // Logging everybody out ends the MCP connection too: the access token and its refresh stop working.
   assert.deepEqual(await (await call('POST', '/admin/t/james-dean/logout', {})).json(), {ended: 2});
@@ -1042,7 +1168,7 @@ try {
   const cancelWeek = await (await call('GET', '/admin/t/outlook-venue/briefing?date=2026-10-11')).json();
   assert.deepEqual([cancelWeek.briefing.week.current.cancelled, cancelWeek.briefing.week.current.lateCancelled, cancelWeek.briefing.week.current.lateCancelledGuests], [4, 1, 8]);
   assert.match(cancelWeek.text, /, zrušeno 4 \(\d+ % rezervací, z toho 1 až v posledních 24 h před začátkem, 8 hostů\)/);
-  const outlookDays = (await (await call('GET', '/admin/t/outlook-venue/briefing?date=2026-10-13')).json()).briefing.guestOutlook;
+  const outlookDays = (await (await call('GET', '/admin/t/outlook-venue/briefing?date=2026-10-12')).json()).briefing.guestOutlook;
   assert.equal(outlookDays, null, 'not for a day looked at later');
 
   // The admin script talks to a real HTTP endpoint: config, rkeeper-style CSV import, preview.

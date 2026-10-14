@@ -3,7 +3,11 @@ import {isDate} from './time.ts';
 /** Thrown for any input that does not match the contract; the message is a stable error code. */
 export class InputError extends Error {}
 
-export type BillItem = {name: string; productId: string | null; category: string | null; quantity: number; totalCents: number};
+/**
+ * `vatRate` = the VAT rate of the product in whole percent (12, 21), from the POS; needed for revenue without VAT and profit by item.
+ * `menuItemId` = the menu item (`MenuItem.id`) the POS product is linked to; OKO1 pairs by it before trying names.
+ */
+export type BillItem = {name: string; productId: string | null; category: string | null; quantity: number; totalCents: number; vatRate: number | null; menuItemId?: string};
 export type Payment = {method: string; amountCents: number};
 export type Void = {name: string; amountCents: number; reason: string; afterPayment: boolean; approvedBy: string | null};
 export type Bill = {
@@ -58,6 +62,12 @@ export function withoutGuest<T extends IngestRecord>(record: T): T {
 export type WebTraffic = {
   type: 'web_traffic'; id: string; version: number; businessDate: string; visits: number; visitsWithAction: number;
   origins: {key: string; name: string; visits: number; withAction: number}[]; actions: Record<string, number>; reviewScans: number;
+  /** Interest in the menu that day: page views by part, visits that opened it, of them from abroad and with a sent reservation, and by language. */
+  menu?: WebMenuInterest;
+};
+export type WebMenuInterest = {
+  views: {food: number; drinks: number}; visits: number; abroad: number; reserved: number;
+  languages: {key: string; visits: number; reserved: number}[];
 };
 /**
  * Reviews that reached the website's admin (Google, TripAdvisor) on one Prague calendar day, and how many wait there:
@@ -183,9 +193,12 @@ function bill(raw: Obj): Bill {
     waiterId: value.waiterId == null ? null : id(value.waiterId), reservationId: value.reservationId == null ? null : id(value.reservationId),
     totalCents: int(value.totalCents), discountCents: int(value.discountCents, 0),
     items: list(value.items, 500, item => {
-      const row = object(item, ['name', 'quantity', 'totalCents'], ['productId', 'category']);
+      const row = object(item, ['name', 'quantity', 'totalCents'], ['productId', 'category', 'vatRate', 'menuItemId']);
       if (typeof row.quantity !== 'number' || !Number.isFinite(row.quantity) || row.quantity <= 0 || row.quantity > 1e6) fail();
-      return {name: text(row.name), productId: row.productId == null ? null : id(row.productId), category: optionalText(row.category, 60), quantity: row.quantity as number, totalCents: int(row.totalCents)};
+      return {name: text(row.name), productId: row.productId == null ? null : id(row.productId), category: optionalText(row.category, 60), quantity: row.quantity as number, totalCents: int(row.totalCents),
+        vatRate: row.vatRate == null ? null : int(row.vatRate, 0, 100),
+        // Only when sent: a batch from before the field resent unchanged keeps its hash (idempotent replay).
+        ...(row.menuItemId == null ? {} : {menuItemId: id(row.menuItemId)})};
     }),
     payments: list(value.payments, 20, item => {
       const row = object(item, ['method', 'amountCents']);
@@ -259,7 +272,7 @@ function venueEvent(raw: Obj): VenueEvent {
 
 const COUNT_MAX = 10_000_000;
 function webTraffic(raw: Obj): WebTraffic {
-  const value = object(raw, ['type', 'id', 'version', 'businessDate', 'visits', 'visitsWithAction', 'origins', 'actions', 'reviewScans']);
+  const value = object(raw, ['type', 'id', 'version', 'businessDate', 'visits', 'visitsWithAction', 'origins', 'actions', 'reviewScans'], ['menu']);
   const actions = object(value.actions, [], Object.keys((value.actions ?? {}) as Obj));
   if (Object.keys(actions).length > 100) fail();
   return {
@@ -271,6 +284,20 @@ function webTraffic(raw: Obj): WebTraffic {
     }),
     actions: Object.fromEntries(Object.entries(actions).map(([key, count]) => [id(key), int(count, 0, COUNT_MAX)])),
     reviewScans: int(value.reviewScans, 0, COUNT_MAX),
+    ...(value.menu == null ? {} : {menu: webMenuInterest(value.menu)}),
+  };
+}
+
+function webMenuInterest(raw: unknown): WebMenuInterest {
+  const value = object(raw, ['views', 'visits', 'abroad', 'reserved', 'languages']);
+  const views = object(value.views, ['food', 'drinks']);
+  return {
+    views: {food: int(views.food, 0, COUNT_MAX), drinks: int(views.drinks, 0, COUNT_MAX)},
+    visits: int(value.visits, 0, COUNT_MAX), abroad: int(value.abroad, 0, COUNT_MAX), reserved: int(value.reserved, 0, COUNT_MAX),
+    languages: list(value.languages, 10, item => {
+      const language = object(item, ['key', 'visits', 'reserved']);
+      return {key: id(language.key), visits: int(language.visits, 0, COUNT_MAX), reserved: int(language.reserved, 0, COUNT_MAX)};
+    }),
   };
 }
 
