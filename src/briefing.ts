@@ -328,8 +328,8 @@ export function renderMenuInterest(interest: Briefing['menuInterest']): string[]
     `, ${percentOf(now.abroad, now.visits)} ze zahraničí` + (languages.length ? `; jazyk webu ${languages.join(', ')}` : '') +
     `; z nich rezervaci ${verb(now.reserved, 'poslal')} ${now.reserved} (${rate} %)`];
 }
-/** Days of menu data the comparison by language needs, and visits a language needs to be shown in it. */
-export const MENU_LANGUAGE_DAYS = 28, MENU_LANGUAGE_MIN_VISITS = 30;
+/** Days with menu data (of the 28) the comparison by language needs, so a day the website missed does not hide it, and visits a language needs to be shown in it. */
+export const MENU_LANGUAGE_DAYS = 21, MENU_LANGUAGE_MIN_VISITS = 30;
 /** The Monday line once 4 weeks of data are in: how often visits that opened the menu sent a reservation, by the website's language. */
 export function renderMenuByLanguage(interest: Briefing['menuByLanguage']): string[] {
   if (!interest || interest.days < MENU_LANGUAGE_DAYS) return [];
@@ -400,7 +400,7 @@ export function webDrop(day: WebTraffic | undefined, usual: {visits: number; sen
 export const webDropText = (drop: NonNullable<Briefing['webDrop']>) =>
   [drop.lowVisits ? `${group(drop.visits)} ${visitsWord(drop.visits)} (obvykle ${group(drop.usualVisits)})` : '', drop.noSent ? `žádný odeslaný rezervační formulář (obvykle ${drop.usualSent})` : '',
     drop.lowMenu ? `lístek si ${verb(drop.lowMenu.visits, 'otevřel')} jen ${group(drop.lowMenu.visits)} ${visitsWord(drop.lowMenu.visits)} (obvykle ${group(drop.lowMenu.usualVisits)})` : '']
-    .filter(Boolean).join(' a ') + (drop.lowVisits || drop.noSent ? ', zkontroluj, že web a rezervace běží' : '') + (drop.lowMenu ? ', zkontroluj, že jde lístek na webu otevřít' : '');
+    .filter(Boolean).join(' a ') + ', zkontroluj, ' + [drop.lowVisits || drop.noSent ? 'že web a rezervace běží' : '', drop.lowMenu ? 'že jde lístek na webu otevřít' : ''].filter(Boolean).join(' a ');
 export type MonthResult = {
   month: string; through: string; rows: {account: string; name: string; amountCents: number}[];
   revenueCents: number; revenueDays: number; error: string | null;

@@ -600,13 +600,15 @@ test('website watch: visits under half of the usual or no booking form sent, aga
   assert.match(renderBriefing('Test', menuBriefing), /\n⚠ Web: lístek si otevřely jen 3 návštěvy \(obvykle 40\), zkontroluj, že jde lístek na webu otevřít\.(\n|$)/);
   assert.ok(todoList(menuBriefing).some(item => item.text === 'Web: lístek si otevřely jen 3 návštěvy (obvykle 40), zkontroluj, že jde lístek na webu otevřít'));
   assert.equal(summarizeWeb(day(10, 0), undefined)?.menuVisits, null);
+  assert.match(renderBriefing('Test', buildBriefing({businessDate: '2026-10-13', config, bills: [], closings: [], planHistory: [], incomplete: false, web: {...withMenu(100, 3), actions: {}}, webUsual: usualMenu})),
+    /\n⚠ Web: žádný odeslaný rezervační formulář \(obvykle 5\) a lístek si otevřely jen 3 návštěvy \(obvykle 40\), zkontroluj, že web a rezervace běží a že jde lístek na webu otevřít\.(\n|$)/);
 });
 
 test('menu by language: after 4 weeks of data, how often visits that opened the menu sent a reservation', () => {
   const four = {from: '2026-09-14', to: '2026-10-11', days: 28, visits: 1000, abroad: 600, reserved: 40, food: 0, drinks: 0,
     languages: [{key: 'en', visits: 600, reserved: 18}, {key: 'cs', visits: 350, reserved: 21}, {key: 'neznamy', visits: 40, reserved: 1}, {key: 'de', visits: 10, reserved: 0}]};
   assert.deepEqual(renderMenuByLanguage(four), ['Rezervace po otevření lístku za 4 týdny podle jazyka webu: anglicky 3,0 % (18 z 600), česky 6,0 % (21 z 350)']);
-  assert.deepEqual(renderMenuByLanguage({...four, days: 27}), [], 'not before 4 weeks of data');
+  assert.deepEqual(renderMenuByLanguage({...four, days: 20}), [], 'not before 3 of the 4 weeks have data');
   assert.deepEqual(renderMenuByLanguage({...four, languages: four.languages.slice(0, 1)}), [], 'nothing to compare');
   assert.deepEqual(renderMenuByLanguage(null), []);
 });
