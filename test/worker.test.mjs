@@ -1166,6 +1166,7 @@ try {
   assert.match(outlookMorning.text, /\n⚠ Slabší výhled: čt 15\. 10\. zatím 2 hosté \(obvykle touhle dobou 12, −83 %\)\n/);
   assert.match(outlookMorning.text, /\n⚠ Web: 20 návštěv \(obvykle 100\) a žádný odeslaný rezervační formulář \(obvykle 4\), zkontroluj, že web a rezervace běží\.(\n|$)/);
   const cancelWeek = await (await call('GET', '/admin/t/outlook-venue/briefing?date=2026-10-11')).json();
+  assert.deepEqual([cancelWeek.briefing.menuByLanguage.from, cancelWeek.briefing.menuByLanguage.to, cancelWeek.briefing.menuByLanguage.days], ['2026-09-14', '2026-10-11', 0], 'four weeks on Monday, no menu sent yet');
   assert.deepEqual([cancelWeek.briefing.week.current.cancelled, cancelWeek.briefing.week.current.lateCancelled, cancelWeek.briefing.week.current.lateCancelledGuests], [4, 1, 8]);
   assert.match(cancelWeek.text, /, zrušeno 4 \(\d+ % rezervací, z toho 1 až v posledních 24 h před začátkem, 8 hostů\)/);
   const outlookDays = (await (await call('GET', '/admin/t/outlook-venue/briefing?date=2026-10-12')).json()).briefing.guestOutlook;
