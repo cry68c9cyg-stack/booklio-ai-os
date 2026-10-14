@@ -1613,7 +1613,7 @@ export class TenantObject extends DurableObject<Env> {
       reservations: this.day<Reservation>('reservation', date), reservationsToday: this.day<Reservation>('reservation', addDays(date, 1)),
       web: this.day<WebTraffic>('web_traffic', date)[0], webLastWeek: this.day<WebTraffic>('web_traffic', addDays(date, -7))[0],
       webUsual: [7, 14, 21, 28].map(back => this.day<WebTraffic>('web_traffic', addDays(date, -back))[0]).filter((web): web is WebTraffic => !!web)
-        .map(web => ({visits: web.visits, sent: web.actions['rezervace-odeslana'] ?? 0})),
+        .map(web => ({visits: web.visits, sent: web.actions['rezervace-odeslana'] ?? 0, ...(web.menu ? {menuVisits: web.menu.visits} : {})})),
       reviews: this.day<ReviewSummary>('review_summary', date)[0],
       week: weekday(date) === 0 ? this.week(date) : null, silent: this.silentSources(config, date, now),
       month: weekday(date) === 0 || addDays(date, 1).endsWith('-01') ? this.month(config, date) : null,
@@ -1627,6 +1627,7 @@ export class TenantObject extends DurableObject<Env> {
       priceCheck: weekday(date) === 0 ? this.priceCheckSummary() : null,
       menuGaps: weekday(date) === 0 ? this.menuGapsSummary() : null,
       menuInterest: weekday(date) === 0 ? this.menuInterestWeek(date) : null,
+      menuByLanguage: weekday(date) === 0 ? sumMenuInterest(this.webDays(addDays(date, -27), date), addDays(date, -27), date) : null,
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
       supplies: this.supplyBriefFor(config, date),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
