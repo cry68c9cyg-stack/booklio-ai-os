@@ -3,7 +3,7 @@
  * menu and every change of it (new item, removed item, new price), so the price of any item on any day is known: the base
  * for prices, food cost, menu engineering, simulated repricing and profit by item (spec, decision of MC 12. 10. 2026).
  */
-import type {Menu, MenuItem} from './validate.ts';
+import type {CompetitorPrices, Menu, MenuItem} from './validate.ts';
 
 export type MenuChange = {itemId: string; name: string; kind: 'added' | 'removed' | 'price'; oldCents: number | null; newCents: number | null; oldText: string | null; newText: string | null};
 
@@ -60,6 +60,38 @@ const kc = (cents: number) => String(Math.round(cents / 100)).replace(/\B(?=(\d{
  * A name reduced for comparing the menu with the POS: lower case, no accents, no punctuation and no volume
  * ("Coca-Cola 0,33 l" → "coca cola"). The volume is matched separately (`volumeOf`).
  */
+/** Differences from the nearby median from which a price is called out, and venues a median needs. */
+export const COMPETITOR_SHARE = 15, COMPETITOR_MIN_VENUES = 3;
+export type CompetitorRow = {
+  item: string; label: string; volumeMl: number | null; ourName: string | null; ourCents: number | null;
+  venues: {name: string; cents: number}[]; medianCents: number | null; minCents: number | null; maxCents: number | null;
+  /** Ours against the median in whole per cent; null without our price or with fewer than 3 venues. */
+  diffPct: number | null;
+};
+/**
+ * Our current price of each basket item against the venues nearby. With a basket volume, prices are recalculated to it
+ * (a venue's price without its volume is left out); our own item is looked up in the current menu by name and category.
+ */
+export function competitorComparison(menu: Menu | null, data: CompetitorPrices): CompetitorRow[] {
+  const at = (cents: number, ml: number | null, target: number | null) => target ? (ml ? Math.round(cents * target / ml) : null) : cents;
+  return data.basket.map(entry => {
+    const own = entry.ours && menu?.items.find(item => nameKey(item.name) === nameKey(entry.ours!.name) &&
+      (!entry.ours!.category || nameKey(item.category) === nameKey(entry.ours!.category)) && (!entry.ours!.group || nameKey(item.group ?? '') === nameKey(entry.ours!.group)));
+    const ownCents = own ? own.pricesCents[Math.min(entry.ours!.priceIndex, own.pricesCents.length - 1)] : undefined;
+    const ourCents = own && ownCents !== undefined ? at(ownCents, own.volumeMl ?? volumeOf(own.volume ?? ''), entry.volumeMl) : null;
+    const venues = data.venues.flatMap(venue => {
+      // The cheapest matching line of a venue (its basic version).
+      const prices = venue.items.filter(item => item.item === entry.item).map(item => at(item.priceCzk * 100, item.volumeMl, entry.volumeMl)).filter((cents): cents is number => cents !== null);
+      return prices.length ? [{name: venue.name, cents: Math.min(...prices)}] : [];
+    }).sort((a, b) => a.cents - b.cents);
+    const sorted = venues.map(row => row.cents), middle = sorted.length >> 1;
+    const medianCents = sorted.length ? (sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2)) : null;
+    return {item: entry.item, label: entry.label, volumeMl: entry.volumeMl, ourName: own ? own.name : null, ourCents, venues, medianCents,
+      minCents: sorted.length ? sorted[0] : null, maxCents: sorted.length ? sorted[sorted.length - 1] : null,
+      diffPct: ourCents !== null && medianCents && venues.length >= COMPETITOR_MIN_VENUES ? Math.round((ourCents / medianCents - 1) * 100) : null};
+  });
+}
+
 export function nameKey(name: string): string {
   return name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
     .replace(/\b\d+\s*\/\s*\d+\s*(?:ml|cl|dl|l)\b/g, ' ').replace(/\b\d+(?:[.,]\d+)?\s*(?:ml|cl|dl|l)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();

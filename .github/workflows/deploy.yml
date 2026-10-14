@@ -114,6 +114,16 @@ jobs:
             echo "$out" | jq -c '(.reportsLink |= (if . then "nastaven" else null end)) | del(.recipients, .dashboardPhones)'
             rm "$RUNNER_TEMP/$tenant.json"
           done
+      - name: Ceny podniků v okolí (veřejné lístky, .github/oko1/*.competitors.json)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AI_OS_URL: https://oko1.rr7whdyyhf.workers.dev
+        run: |
+          export AI_OS_ADMIN_SECRET=$(printf '%s' oko1-admin | openssl dgst -sha256 -hmac "$CLOUDFLARE_API_TOKEN" -r | cut -d' ' -f1)
+          for f in .github/oko1/*.competitors.json; do
+            [ -e "$f" ] || continue
+            node scripts/admin.ts competitors "$(basename "$f" .competitors.json)" "$f" | jq -c . || echo "::warning::Ceny okolí z $f se neuložily."
+          done
       - name: Načtení dnů z OneDrive (jen ručně spuštěné nasazení s rozsahem dnů)
         if: github.event_name == 'workflow_dispatch' && (inputs.fetch_from != '' || inputs.fetch_to != '')
         env:

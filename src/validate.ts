@@ -412,6 +412,42 @@ function website(raw: unknown): {url: string} {
   return {url: url.origin};
 }
 
+/**
+ * Prices of comparable venues nearby, read by Claude from their public menus (decision of MC, 14. 10. 2026): public
+ * market data, nothing about guests. A basket of comparable items, with the menu item of ours each one is compared with;
+ * prices in whole crowns as published, volumes in millilitres.
+ */
+export type CompetitorPrices = {
+  checkedOn: string;
+  basket: {item: string; label: string; volumeMl: number | null; ours: {name: string; category: string | null; group: string | null; priceIndex: number} | null}[];
+  venues: {key: string; name: string; area: string | null; url: string; items: {item: string; name: string; priceCzk: number; volumeMl: number | null; note: string | null}[]}[];
+};
+const VOLUME_MAX_ML = 5000;
+export function validateCompetitorPrices(raw: unknown): CompetitorPrices {
+  const value = object(raw, ['checkedOn', 'basket', 'venues']);
+  const volume = (ml: unknown) => ml == null ? null : int(ml, 1, VOLUME_MAX_ML);
+  const basket = list(value.basket, 30, entry => {
+    const row = object(entry, ['item', 'label'], ['volumeMl', 'ours']);
+    const ours = row.ours == null ? null : object(row.ours, ['name'], ['category', 'group', 'priceIndex']);
+    return {item: id(row.item), label: text(row.label, 60), volumeMl: volume(row.volumeMl),
+      ours: ours && {name: text(ours.name, 200), category: optionalText(ours.category, 100), group: optionalText(ours.group, 100), priceIndex: ours.priceIndex == null ? 0 : int(ours.priceIndex, 0, 4)}};
+  });
+  const items = new Set(basket.map(row => row.item));
+  if (items.size !== basket.length) fail();
+  const venues = list(value.venues, 30, entry => {
+    const row = object(entry, ['key', 'name', 'url', 'items'], ['area']);
+    if (typeof row.url !== 'string' || !/^https:\/\/[^\s]{1,500}$/.test(row.url)) fail();
+    return {key: id(row.key), name: text(row.name, 100), area: optionalText(row.area, 60), url: row.url as string,
+      items: list(row.items, 50, item => {
+        const price = object(item, ['item', 'name', 'priceCzk'], ['volumeMl', 'note']);
+        if (!items.has(price.item as string)) fail();
+        return {item: price.item as string, name: text(price.name, 200), priceCzk: int(price.priceCzk, 1, 100000), volumeMl: volume(price.volumeMl), note: optionalText(price.note, 200)};
+      })};
+  });
+  if (new Set(venues.map(row => row.key)).size !== venues.length) fail();
+  return {checkedOn: date(value.checkedOn), basket, venues};
+}
+
 export function validateConfig(raw: unknown): TenantConfig {
   const value = object(raw, ['name', 'timeZone', 'businessDayCutoffHour', 'sendHours', 'registers', 'sections', 'recipients'], ['bottleCheck', 'reportsLink', 'dashboardPhones', 'web', 'location', 'disabledSources']);
   const timeZone = text(value.timeZone, 60);

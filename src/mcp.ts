@@ -161,7 +161,7 @@ export function createServer(context: ToolContext): McpServer {
   });
 
   tool('kontrola_cen', 'Kontrola cen', 'Ceny lístku k prověření v každé kategorii od 4 položek: položka pod polovinou nebo nad dvojnásobkem běžné ceny kategorie (u nápojů různých objemů za litr) ' +
-    's navrženou cenou na dolním nebo horním kvartilu, mezery v cenové řadě (od 5 položek) s cenou uprostřed a ceny s neobvyklou poslední číslicí (ending: aspoň tři čtvrtiny kategorie končí na pár číslic) s nejbližší obvyklou cenou. Jen k posouzení, cena může být záměr. webGaps = co doplnit v lístku na webu: jídlo nebo koktejl bez popisu či složení (s místem, odkud ho převzít), nápoj bez objemu, stejná položka za dvě ceny. Částky v haléřích.', {},
+    's navrženou cenou na dolním nebo horním kvartilu, mezery v cenové řadě (od 5 položek) s cenou uprostřed a ceny s neobvyklou poslední číslicí (ending: aspoň tři čtvrtiny kategorie končí na pár číslic) s nejbližší obvyklou cenou. Jen k posouzení, cena může být záměr. webGaps = co doplnit v lístku na webu: jídlo nebo koktejl bez popisu či složení (s místem, odkud ho převzít), nápoj bez objemu, stejná položka za dvě ceny. competitors = naše ceny proti srovnatelným podnikům v okolí (z jejich veřejných lístků, datum čtení checkedOn): po položkách medián, rozpětí, ceny podniků a rozdíl v %, nápoje přepočtené na objem. Částky v haléřích.', {},
   async () => {
     const check = await context.venue.posPriceCheck();
     return check ? result(check) : failed('Lístek zatím do OKO1 nedorazil.');

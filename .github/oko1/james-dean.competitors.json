@@ -1,0 +1,357 @@
+{
+  "checkedOn": "2026-10-14",
+  "basket": [
+    {
+      "item": "cheeseburger",
+      "label": "Cheeseburger",
+      "ours": {
+        "name": "Classic Cheeseburger",
+        "category": "Burgery",
+        "priceIndex": 1
+      }
+    },
+    {
+      "item": "fries",
+      "label": "Hranolky (příloha)",
+      "ours": {
+        "name": "Hranolky",
+        "category": "Přílohy"
+      }
+    },
+    {
+      "item": "wings",
+      "label": "Kuřecí křídla",
+      "ours": {
+        "name": "Kuřecí křídla",
+        "category": "Steaky"
+      }
+    },
+    {
+      "item": "milkshake",
+      "label": "Milkshake",
+      "ours": {
+        "name": "Vanilkový",
+        "category": "Mléčné koktejly"
+      }
+    },
+    {
+      "item": "beer",
+      "label": "Točené pivo",
+      "volumeMl": 500,
+      "ours": {
+        "name": "Budvar Original",
+        "category": "Pivo & cider",
+        "group": "Točené"
+      }
+    },
+    {
+      "item": "cola",
+      "label": "Coca-Cola",
+      "volumeMl": 330,
+      "ours": {
+        "name": "Coca-Cola",
+        "category": "Nealkoholické nápoje"
+      }
+    },
+    {
+      "item": "cappuccino",
+      "label": "Cappuccino",
+      "ours": {
+        "name": "Cappuccino",
+        "category": "Káva a horké nápoje"
+      }
+    },
+    {
+      "item": "mojito",
+      "label": "Mojito",
+      "ours": {
+        "name": "Mojito",
+        "category": "Caipirinhy"
+      }
+    },
+    {
+      "item": "aperol",
+      "label": "Aperol Spritz",
+      "ours": {
+        "name": "Aperol Spritz",
+        "category": "Aperitivy"
+      }
+    }
+  ],
+  "venues": [
+    {
+      "key": "hard-rock-cafe-prague",
+      "name": "Hard Rock Cafe Prague",
+      "area": "Praha 1",
+      "url": "https://cafe.hardrock.com/prague/files/5335/Menu_en.pdf",
+      "items": [
+        {
+          "item": "cheeseburger",
+          "name": "The Classic Smashed Burger",
+          "priceCzk": 520,
+          "note": "2 smashed patties, American cheese; weight not stated"
+        },
+        {
+          "item": "fries",
+          "name": "Seasoned Fries (add-on side)",
+          "priceCzk": 110,
+          "note": "seasoned, not plain"
+        },
+        {
+          "item": "wings",
+          "name": "Signature Slow-Roasted Wings",
+          "priceCzk": 350,
+          "note": "piece count not stated"
+        },
+        {
+          "item": "beer",
+          "name": "Staropramen Lager",
+          "priceCzk": 110,
+          "volumeMl": 500,
+          "note": "0,3 l = 90 CZK"
+        },
+        {
+          "item": "cappuccino",
+          "name": "Cappuccino",
+          "priceCzk": 105
+        },
+        {
+          "item": "mojito",
+          "name": "Classic Caribbean Mojito",
+          "priceCzk": 320
+        },
+        {
+          "item": "aperol",
+          "name": "Aperol Spritz",
+          "priceCzk": 265
+        }
+      ]
+    },
+    {
+      "key": "hooters-praha",
+      "name": "Hooters Praha (Havelská)",
+      "area": "Praha 1",
+      "url": "https://hooters.cz/wp-content/uploads/2026/06/100884_Menu_HOOters_CZ_240x220_v5.pdf",
+      "items": [
+        {
+          "item": "cheeseburger",
+          "name": "Baja Burger",
+          "priceCzk": 375,
+          "note": "200 g, ementál; no plain cheeseburger on menu (nearest match)"
+        },
+        {
+          "item": "fries",
+          "name": "Spirálové hranolky",
+          "priceCzk": 98,
+          "note": "curly fries"
+        },
+        {
+          "item": "wings",
+          "name": "Originál Hooters Style kuřecí křidélka",
+          "priceCzk": 229,
+          "note": "10 ks (cheapest sauce row; 235/269 other rows)"
+        },
+        {
+          "item": "milkshake",
+          "name": "Milkshake Vanilkový",
+          "priceCzk": 142
+        },
+        {
+          "item": "beer",
+          "name": "Pilsner Urquell",
+          "priceCzk": 89,
+          "volumeMl": 500,
+          "note": "0,3 l = 59 CZK"
+        },
+        {
+          "item": "cola",
+          "name": "Coca-Cola (postmix)",
+          "priceCzk": 72,
+          "volumeMl": 300,
+          "note": "0,5 l = 98 CZK"
+        },
+        {
+          "item": "cappuccino",
+          "name": "Cappuccino",
+          "priceCzk": 95
+        },
+        {
+          "item": "mojito",
+          "name": "Mojito",
+          "priceCzk": 229
+        },
+        {
+          "item": "aperol",
+          "name": "Aperol Spritz",
+          "priceCzk": 189
+        }
+      ]
+    },
+    {
+      "key": "original-glenns",
+      "name": "Original Glenn's",
+      "area": "Praha 1 (Malá Strana)",
+      "url": "https://originalglenns.cz/wp-content/uploads/2026/07/Food-menu-2026-OG.pdf",
+      "items": [
+        {
+          "item": "cheeseburger",
+          "name": "OG's Bacon Cheeseburger",
+          "priceCzk": 285,
+          "note": "115 g; with bacon, no plain cheeseburger"
+        },
+        {
+          "item": "fries",
+          "name": "French Fries",
+          "priceCzk": 75
+        },
+        {
+          "item": "wings",
+          "name": "Chicken Wings Buffalo Style",
+          "priceCzk": 245,
+          "note": "9 ks (12 ks = 279 CZK)"
+        },
+        {
+          "item": "beer",
+          "name": "Bernard 11° light",
+          "priceCzk": 95,
+          "volumeMl": 500,
+          "note": "0,3 l = 75 CZK"
+        },
+        {
+          "item": "cappuccino",
+          "name": "Cappuccino",
+          "priceCzk": 105
+        },
+        {
+          "item": "mojito",
+          "name": "Mojito",
+          "priceCzk": 199
+        },
+        {
+          "item": "aperol",
+          "name": "Aperol Spritz",
+          "priceCzk": 185
+        }
+      ]
+    },
+    {
+      "key": "meat-and-greet-burgerhouse",
+      "name": "Meat & Greet Burgerhouse (MAG)",
+      "area": "Praha 1 (Senovážné nám.)",
+      "url": "https://www.magburgerhouse.cz/",
+      "items": [
+        {
+          "item": "cheeseburger",
+          "name": "MAG",
+          "priceCzk": 235,
+          "note": "160 g, cheddar + bacon; no plain cheeseburger"
+        },
+        {
+          "item": "fries",
+          "name": "Hranolky",
+          "priceCzk": 65
+        },
+        {
+          "item": "beer",
+          "name": "Pilsner Urquell",
+          "priceCzk": 68,
+          "volumeMl": 500,
+          "note": "draft not explicitly stated; 0,3 l = 45 CZK"
+        },
+        {
+          "item": "cola",
+          "name": "Coca-Cola / Zero",
+          "priceCzk": 75,
+          "volumeMl": 330
+        },
+        {
+          "item": "cappuccino",
+          "name": "Cappuccino",
+          "priceCzk": 70
+        },
+        {
+          "item": "mojito",
+          "name": "Mojito",
+          "priceCzk": 165,
+          "note": "web; PDF 2025/10 says 155"
+        }
+      ]
+    },
+    {
+      "key": "nase-maso-dlouha",
+      "name": "Naše maso (Dlouhá)",
+      "area": "Praha 1",
+      "url": "https://nasemaso.dlouha.ambi.cz/en/menu",
+      "items": [
+        {
+          "item": "cheeseburger",
+          "name": "Hamburger / Cheeseburger (medium rare)",
+          "priceCzk": 375,
+          "note": "180 g"
+        },
+        {
+          "item": "beer",
+          "name": "Vrátnice ležák 11°",
+          "priceCzk": 75,
+          "volumeMl": 400
+        }
+      ]
+    },
+    {
+      "key": "kolkovna-v-kolkovne",
+      "name": "Kolkovna v Kolkovně",
+      "area": "Praha 1",
+      "url": "https://vkolkovne.kolkovna.cz/",
+      "items": [
+        {
+          "item": "wings",
+          "name": "Kolkovna Wings",
+          "priceCzk": 329,
+          "note": "9 ks"
+        },
+        {
+          "item": "beer",
+          "name": "Pilsner Urquell",
+          "priceCzk": 76,
+          "volumeMl": 500
+        },
+        {
+          "item": "cola",
+          "name": "Coca-Cola",
+          "priceCzk": 72,
+          "volumeMl": 330
+        },
+        {
+          "item": "cappuccino",
+          "name": "Cappuccino",
+          "priceCzk": 85
+        },
+        {
+          "item": "mojito",
+          "name": "Mojito",
+          "priceCzk": 179
+        },
+        {
+          "item": "aperol",
+          "name": "Aperol Spritz",
+          "priceCzk": 179
+        }
+      ]
+    },
+    {
+      "key": "lokal-dlouhaaa",
+      "name": "Lokál Dlouhááá",
+      "area": "Praha 1",
+      "url": "https://lokal-dlouha.ambi.cz/menu/napoje",
+      "items": [
+        {
+          "item": "beer",
+          "name": "Plzeň, světlý ležák, hladinka (tank)",
+          "priceCzk": 74,
+          "volumeMl": 500,
+          "note": "0,3 l = 57 CZK"
+        }
+      ]
+    }
+  ]
+}
