@@ -748,6 +748,12 @@ try {
   assert.equal((await call('PUT', '/admin/t/james-dean/config', {...jdConfig, disabledSources: ['dishboard']})).status, 200);
   const off = (await mcp('naklady_dodavatele', {od: addDays(today, -6), do: today})).data;
   assert.deepEqual([off.summary.invoices, off.rises.length, off.overdue.length, off.disabledSources], [0, 0, 0, ['dishboard']]);
+  // Payments and the cost budget: nothing due this week, no history for new suppliers yet, the default food cost limit unless set.
+  assert.deepEqual([supplies.dueSoon, supplies.unusual, supplies.foodCostLimitPermille], [[], [], 300]);
+  assert.ok(supplies.monthCompare.every(row => row.changeCents === row.netCents - row.previousCents));
+  assert.equal((await call('PUT', '/admin/t/james-dean/config', {...jdConfig, foodCostLimitPermille: 10})).status, 400, 'a limit of 1 % is a mistake');
+  assert.equal((await call('PUT', '/admin/t/james-dean/config', {...jdConfig, foodCostLimitPermille: 280})).status, 200);
+  assert.equal((await mcp('naklady_dodavatele', {od: addDays(today, -6), do: today})).data.foodCostLimitPermille, 280);
   assert.equal((await call('PUT', '/admin/t/james-dean/config', jdConfig)).status, 200);
   const both = await mcp('den', {datum: today});
   assert.equal(both.data.pokladna.revenueCents, 80000);
