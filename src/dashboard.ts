@@ -331,6 +331,17 @@ function menuCard(m) {
   const gp = m.gaps;
   if (gp) h += '<h3>Co opravit na webu</h3>' + (gp.items.length ? '<ul>' + gp.items.map(g => '<li><b>' + esc(g.name) + '</b> (' + esc(g.group ? g.category + ' › ' + g.group : g.category) + '): ' + esc(g.text) + '</li>').join('') + '</ul>' +
     (gp.total > gp.items.length ? '<div class="muted">… a další ' + (gp.total - gp.items.length) + '</div>' : '') : '<span class="muted">nic, lístek je úplný</span>');
+  const co = m.competitors;
+  if (co) {
+    const vol = ml => ml ? ' <span class="muted">' + (ml < 100 ? ml + ' ml' : String(ml / 1000).replace('.', ',') + ' l') + '</span>' : '';
+    const diff = p => p === null ? '<span class="muted">–</span>' : '<span class="' + (Math.abs(p) >= 15 ? 'warn' : '') + '">' + (p === 0 ? '±0' : (p > 0 ? '+' : '−') + Math.abs(p)) + ' %</span>';
+    h += '<h3>Ceny proti okolí <span class="muted">(' + co.venues.length + (co.venues.length === 1 ? ' podnik' : co.venues.length <= 4 ? ' podniky' : ' podniků') + ', ceny z jejich webů ' + esc(short(co.checkedOn)) + ')</span></h3><div class="scroll"><table><tr><th>Položka</th><th class="n">Naše</th><th class="n">Okolí (medián)</th><th class="n">Rozpětí</th><th class="n">Rozdíl</th></tr>' +
+      co.rows.map(r => '<tr><td title="' + esc(r.venues.map(v => v.name + ': ' + v.line + ' ' + kc(v.cents) + (v.approx ? ' (jen podobné, mimo medián)' : '') + (v.note ? ', ' + v.note : '')).join('\\n')) + '">' + esc(r.label) + vol(r.volumeMl) +
+        (r.ourName ? '<div class="muted">' + esc(r.ourName) + '</div>' : '') + '</td><td class="n">' + kc(r.ourCents) + '</td><td class="n">' + kc(r.medianCents) +
+        ' <span class="muted">(' + r.venues.filter(v => !v.approx).length + (r.venues.some(v => v.approx) ? ' + ' + r.venues.filter(v => v.approx).length + ' podobné' : '') + ')</span></td><td class="n">' + (r.venues.length ? kc(r.minCents) + '–' + kc(r.maxCents) : '–') + '</td><td class="n">' + diff(r.diffPct) + '</td></tr>').join('') + '</table></div>' +
+      '<details><summary class="muted">Podniky</summary><div class="muted">' + co.venues.map(v => '<a href="' + esc(v.url) + '" target="_blank" rel="noopener">' + esc(v.name) + '</a>' + (v.area ? ' (' + esc(v.area) + ')' : '')).join(' · ') + '</div></details>' +
+      '<div class="muted">nápoje přepočtené na uvedený objem (jen z objemu do ±20 %); medián a rozpětí jen z podniků se stejnou položkou, podobné (např. burger se slaninou) jsou jen pro představu; rozdíl od 3 podniků; ±15 % a víc je zvýrazněné; podrobnosti po najetí na položku</div>';
+  }
   const pr = m.profit;
   if (pr) {
     h += '<h3>Prodej po položkách za 30 dní</h3><div class="scroll"><table><tr><th>Položka</th><th class="n">Kusů</th><th class="n">Tržba</th><th class="n">Zisk</th></tr>' +

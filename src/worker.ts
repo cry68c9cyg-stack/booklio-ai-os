@@ -4,7 +4,7 @@ import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
 import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, type MenuMonth, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, sumMenuInterest, type MenuInterest, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
-import {itemProfit, menuChanges, menuGaps, menuItemTax, menuMatrix, menuOverview, nameKey, PART_NAMES, pairSale, priceText, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
+import {competitorComparison, COMPETITOR_SHARE, itemProfit, menuChanges, menuGaps, menuItemTax, menuMatrix, menuOverview, nameKey, PART_NAMES, pairSale, priceText, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
 import {czechHolidays, holidayName} from './holidays.ts';
@@ -15,7 +15,7 @@ import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
 import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
 import {counted, drinkMargins, duplicateInvoices, overdueInvoices, priceRises, supplyBrief, supplySummary} from './supplies.ts';
 import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
-import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Batch, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
+import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateCompetitorPrices, validateConfig, validateHistory, type Batch, type CompetitorPrices, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
 import {dashboardWeb} from './web-views.ts';
 import {WEATHER_AGENT, WEATHER_URL, weatherDays, type WeatherDay} from './weather.ts';
@@ -141,6 +141,8 @@ export class TenantObject extends DurableObject<Env> {
         PRIMARY KEY(month, part, category));
       -- Batches OKO1 refused as not matching the contract: when, from whom, which record types (no content).
       CREATE TABLE IF NOT EXISTS ingest_rejects(at TEXT NOT NULL, installation_id TEXT NOT NULL, code TEXT NOT NULL, types TEXT NOT NULL);
+      -- Prices of comparable venues nearby from their public menus (one set, replaced by the deploy).
+      CREATE TABLE IF NOT EXISTS competitor_prices(id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL, received_at TEXT NOT NULL);
     `));
     // Wrong codes for unknown venues are counted per venue name in the shared stand-in (see `loginStub`).
     if (!this.sql.exec<{name: string}>('PRAGMA table_info(login_failures)').toArray().some(column => column.name === 'scope')) {
@@ -169,6 +171,12 @@ export class TenantObject extends DurableObject<Env> {
       }
       if (route === 'admin/config' && method === 'PUT') return this.saveConfig(tenant, body);
       if (route === 'admin/config' && method === 'GET') return ok(this.config());
+      if (route === 'admin/competitors' && method === 'PUT') {
+        const data = validateCompetitorPrices(body);
+        this.sql.exec('INSERT OR REPLACE INTO competitor_prices VALUES(1,?,?)', JSON.stringify(data), new Date().toISOString());
+        return ok({checkedOn: data.checkedOn, venues: data.venues.length, prices: data.venues.reduce((sum, venue) => sum + venue.items.length, 0)});
+      }
+      if (route === 'admin/competitors' && method === 'GET') return ok(this.competitors());
       if (route === 'admin/pair' && method === 'POST') return this.pair(body);
       if (route === 'admin/logout' && method === 'POST') { const ended = this.sql.exec('DELETE FROM sessions').rowsWritten; return ok({ended}); }
       if (route === 'admin/history' && method === 'POST') return this.importHistory(body);
@@ -702,7 +710,7 @@ export class TenantObject extends DurableObject<Env> {
     const profit = sales.length ? itemProfit(menu, sales, this.menuItemCosts()) : null;
     return {...menuOverview(menu), received: stamp(new Date(received), config.timeZone), changes: changes.rows, changesTotal: changes.total,
       priceCheck: {findings: [...findings].sort((a, b) => FINDING_RANK[a.kind] - FINDING_RANK[b.kind]).slice(0, 10), total: findings.length},
-      gaps: (gaps => ({items: gaps.slice(0, 20), total: gaps.length}))(menuGaps(menu)), trend: this.menuTrend(), problems: this.menuProblems(new Date()),
+      gaps: (gaps => ({items: gaps.slice(0, 20), total: gaps.length}))(menuGaps(menu)), competitors: this.competitorCard(), trend: this.menuTrend(), problems: this.menuProblems(new Date()),
       matrix: profit ? menuMatrix(menu, profit, this.newMenuItems(addDays(day, -29), day)).map(part => ({...part, classes: part.classes.map(row => ({...row, count: row.items.length, items: row.items.slice(0, 5)}))})) : null,
       experiments: profit ? this.priceExperiments(day, 5) : null,
       profit: profit && {from: addDays(day, -29), to: day, items: profit.items.slice(0, 10), itemsTotal: profit.items.length, unpaired: profit.unpaired.slice(0, 5),
@@ -884,6 +892,27 @@ export class TenantObject extends DurableObject<Env> {
     return priceMismatches(menu, lines.map(row => ({name: row.name, menuItemId: row.menu_item_id, unitCents: row.unit, quantity: Math.round(row.quantity * 1000) / 1000})), earlier);
   }
 
+  private competitors(): CompetitorPrices | null {
+    const row = this.sql.exec<{json: string}>('SELECT json FROM competitor_prices WHERE id=1').toArray()[0];
+    return row ? JSON.parse(row.json) as CompetitorPrices : null;
+  }
+
+  /** Our prices against the venues nearby: the date they were read and one row per basket item; null before the first set. */
+  private competitorCard() {
+    const data = this.competitors();
+    return data ? {checkedOn: data.checkedOn, venues: data.venues.map(venue => ({name: venue.name, area: venue.area, url: venue.url})), rows: competitorComparison(this.menu(), data)} : null;
+  }
+
+  /** Monday message, in the week after the prices nearby were read: what is far above or below their median. */
+  private competitorSummary(date: string) {
+    const card = this.competitorCard();
+    if (!card || card.checkedOn > date || card.checkedOn < addDays(date, -6)) return null;
+    const rows = card.rows.filter(row => row.diffPct !== null);
+    return {checkedOn: card.checkedOn, venues: card.venues.length, compared: rows.length,
+      above: rows.filter(row => row.diffPct! >= COMPETITOR_SHARE).sort((a, b) => b.diffPct! - a.diffPct!),
+      below: rows.filter(row => row.diffPct! <= -COMPETITOR_SHARE).sort((a, b) => a.diffPct! - b.diffPct!)};
+  }
+
   /** Monday message: how many prices to look at and the two weighing most (cheap and expensive items before gaps). */
   private priceCheckSummary() {
     const menu = this.menu();
@@ -1004,7 +1033,7 @@ export class TenantObject extends DurableObject<Env> {
   /** MCP: prices to look at in each category of the menu, each with a suggested price. */
   posPriceCheck() {
     const menu = this.menu();
-    return this.config() && menu ? {items: menu.items.length, findings: priceCheck(menu), webGaps: menuGaps(menu)} : null;
+    return this.config() && menu ? {items: menu.items.length, findings: priceCheck(menu), webGaps: menuGaps(menu), competitors: this.competitorCard()} : null;
   }
 
   /** MCP: the whole current menu with every item and price, and its changes over the last year. */
@@ -1619,6 +1648,7 @@ export class TenantObject extends DurableObject<Env> {
       priceCheck: weekday(date) === 0 ? this.priceCheckSummary() : null,
       menuGaps: weekday(date) === 0 ? this.menuGapsSummary() : null,
       menuInterest: weekday(date) === 0 ? this.menuInterestWeek(date) : null,
+      competitors: weekday(date) === 0 ? this.competitorSummary(date) : null,
       menuByLanguage: weekday(date) === 0 ? sumMenuInterest(this.webDays(addDays(date, -27), date), addDays(date, -27), date) : null,
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
       supplies: this.supplyBriefFor(config, date),
@@ -1734,7 +1764,7 @@ export class Registry extends DurableObject<Env> {
 const routes: Record<string, string[]> = {
   'v1/ingest': ['POST'], 'v1/menu': ['GET'], 'admin/config': ['GET', 'PUT'], 'admin/pair': ['POST'], 'admin/history': ['POST'],
   'admin/briefing': ['GET'], 'admin/briefings': ['GET'], 'admin/tick': ['POST'], 'admin/report': ['GET', 'PUT'], 'admin/fetch': ['POST'], 'admin/logout': ['POST'],
-  'admin/web': ['GET'], 'admin/ingest': ['GET'],
+  'admin/web': ['GET'], 'admin/ingest': ['GET'], 'admin/competitors': ['GET', 'PUT'],
 };
 
 async function readBody(request: Request, limit: number): Promise<unknown | Result> {
