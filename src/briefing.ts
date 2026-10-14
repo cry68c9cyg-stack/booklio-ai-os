@@ -345,7 +345,7 @@ export function renderCompetitors(competitors: Briefing['competitors']): string[
   if (!competitors?.compared) return [];
   const row = (entry: CompetitorRow) => `${entry.label} ${crowns(entry.ourCents!)} (${entry.diffPct! > 0 ? '+' : '−'}${Math.abs(entry.diffPct!)} %, okolí ${crowns(entry.medianCents!)})`;
   const date = `${Number(competitors.checkedOn.slice(8))}. ${Number(competitors.checkedOn.slice(5, 7))}.`;
-  const parts = [competitors.above.length ? `dráž ${competitors.above.map(row).join(', ')}` : '', competitors.below.length ? `levněji ${competitors.below.map(row).join(', ')}` : ''].filter(Boolean);
+  const parts = [competitors.above.length ? `dráže ${competitors.above.map(row).join(', ')}` : '', competitors.below.length ? `levněji ${competitors.below.map(row).join(', ')}` : ''].filter(Boolean);
   const word = (n: number, one: string, few: string, many: string) => `${n} ${n === 1 ? one : n >= 2 && n <= 4 ? few : many}`;
   return [`Ceny proti okolí (${word(competitors.venues, 'podnik', 'podniky', 'podniků')}, ${date}): ` +
     (parts.length ? parts.join('; ') : `${word(competitors.compared, 'položka', 'položky', 'položek')} do ±15 % od mediánu`)];

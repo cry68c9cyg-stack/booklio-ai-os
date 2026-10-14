@@ -37,7 +37,7 @@
     {
       "item": "beer",
       "label": "Točené pivo",
-      "volumeMl": 500,
+      "volumeMl": 300,
       "ours": {
         "name": "Budvar Original",
         "category": "Pivo & cider",
@@ -89,7 +89,8 @@
           "item": "cheeseburger",
           "name": "The Classic Smashed Burger",
           "priceCzk": 520,
-          "note": "2 smashed patties, American cheese; weight not stated"
+          "note": "2 smashed patties, American cheese; weight not stated",
+          "approx": true
         },
         {
           "item": "fries",
@@ -101,7 +102,8 @@
           "item": "wings",
           "name": "Signature Slow-Roasted Wings",
           "priceCzk": 350,
-          "note": "piece count not stated"
+          "note": "piece count not stated",
+          "approx": true
         },
         {
           "item": "beer",
@@ -109,6 +111,12 @@
           "priceCzk": 110,
           "volumeMl": 500,
           "note": "0,3 l = 90 CZK"
+        },
+        {
+          "item": "beer",
+          "name": "Staropramen Lager",
+          "priceCzk": 90,
+          "volumeMl": 300
         },
         {
           "item": "cappuccino",
@@ -137,7 +145,8 @@
           "item": "cheeseburger",
           "name": "Baja Burger",
           "priceCzk": 375,
-          "note": "200 g, ementál; no plain cheeseburger on menu (nearest match)"
+          "note": "200 g, ementál; no plain cheeseburger on menu (nearest match)",
+          "approx": true
         },
         {
           "item": "fries",
@@ -162,6 +171,12 @@
           "priceCzk": 89,
           "volumeMl": 500,
           "note": "0,3 l = 59 CZK"
+        },
+        {
+          "item": "beer",
+          "name": "Pilsner Urquell",
+          "priceCzk": 59,
+          "volumeMl": 300
         },
         {
           "item": "cola",
@@ -197,7 +212,8 @@
           "item": "cheeseburger",
           "name": "OG's Bacon Cheeseburger",
           "priceCzk": 285,
-          "note": "115 g; with bacon, no plain cheeseburger"
+          "note": "115 g; with bacon, no plain cheeseburger",
+          "approx": true
         },
         {
           "item": "fries",
@@ -216,6 +232,12 @@
           "priceCzk": 95,
           "volumeMl": 500,
           "note": "0,3 l = 75 CZK"
+        },
+        {
+          "item": "beer",
+          "name": "Bernard 11° light",
+          "priceCzk": 75,
+          "volumeMl": 300
         },
         {
           "item": "cappuccino",
@@ -244,7 +266,8 @@
           "item": "cheeseburger",
           "name": "MAG",
           "priceCzk": 235,
-          "note": "160 g, cheddar + bacon; no plain cheeseburger"
+          "note": "160 g, cheddar + bacon; no plain cheeseburger",
+          "approx": true
         },
         {
           "item": "fries",
@@ -257,6 +280,12 @@
           "priceCzk": 68,
           "volumeMl": 500,
           "note": "draft not explicitly stated; 0,3 l = 45 CZK"
+        },
+        {
+          "item": "beer",
+          "name": "Pilsner Urquell",
+          "priceCzk": 45,
+          "volumeMl": 300
         },
         {
           "item": "cola",
@@ -350,6 +379,12 @@
           "priceCzk": 74,
           "volumeMl": 500,
           "note": "0,3 l = 57 CZK"
+        },
+        {
+          "item": "beer",
+          "name": "Plzeň, světlý ležák, hladinka (tank)",
+          "priceCzk": 57,
+          "volumeMl": 300
         }
       ]
     }

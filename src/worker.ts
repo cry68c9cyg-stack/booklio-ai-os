@@ -892,7 +892,6 @@ export class TenantObject extends DurableObject<Env> {
     return priceMismatches(menu, lines.map(row => ({name: row.name, menuItemId: row.menu_item_id, unitCents: row.unit, quantity: Math.round(row.quantity * 1000) / 1000})), earlier);
   }
 
-  /** Monday message: how many prices to look at and the two weighing most (cheap and expensive items before gaps). */
   private competitors(): CompetitorPrices | null {
     const row = this.sql.exec<{json: string}>('SELECT json FROM competitor_prices WHERE id=1').toArray()[0];
     return row ? JSON.parse(row.json) as CompetitorPrices : null;
@@ -914,6 +913,7 @@ export class TenantObject extends DurableObject<Env> {
       below: rows.filter(row => row.diffPct! <= -COMPETITOR_SHARE).sort((a, b) => a.diffPct! - b.diffPct!)};
   }
 
+  /** Monday message: how many prices to look at and the two weighing most (cheap and expensive items before gaps). */
   private priceCheckSummary() {
     const menu = this.menu();
     if (!menu) return null;

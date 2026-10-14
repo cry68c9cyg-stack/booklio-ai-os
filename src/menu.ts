@@ -56,42 +56,50 @@ function quantile(sorted: number[], q: number): number {
 }
 const kc = (cents: number) => String(Math.round(cents / 100)).replace(/\B(?=(\d{3})+$)/g, ' ') + ' Kč';
 
-/**
- * A name reduced for comparing the menu with the POS: lower case, no accents, no punctuation and no volume
- * ("Coca-Cola 0,33 l" → "coca cola"). The volume is matched separately (`volumeOf`).
- */
 /** Differences from the nearby median from which a price is called out, and venues a median needs. */
 export const COMPETITOR_SHARE = 15, COMPETITOR_MIN_VENUES = 3;
+/** How far a drink's volume may be from the basket's to be recalculated to it (a 0,5 l beer is not a 0,3 l one by the litre). */
+export const COMPETITOR_VOLUME_SHARE = 0.2;
 export type CompetitorRow = {
   item: string; label: string; volumeMl: number | null; ourName: string | null; ourCents: number | null;
-  venues: {name: string; cents: number}[]; medianCents: number | null; minCents: number | null; maxCents: number | null;
+  /** Every venue's cheapest matching line; `approx` = not quite the same item (shown, left out of the median). */
+  venues: {name: string; cents: number; line: string; note: string | null; approx: boolean}[]; medianCents: number | null; minCents: number | null; maxCents: number | null;
   /** Ours against the median in whole per cent; null without our price or with fewer than 3 venues. */
   diffPct: number | null;
 };
 /**
  * Our current price of each basket item against the venues nearby. With a basket volume, prices are recalculated to it
- * (a venue's price without its volume is left out); our own item is looked up in the current menu by name and category.
+ * only from a volume within 20 % of it (a price without its volume, or of a much bigger or smaller glass, is left out);
+ * our own item is looked up in the current menu by name, category and group. The median is of the exact matches only.
  */
 export function competitorComparison(menu: Menu | null, data: CompetitorPrices): CompetitorRow[] {
-  const at = (cents: number, ml: number | null, target: number | null) => target ? (ml ? Math.round(cents * target / ml) : null) : cents;
+  const at = (cents: number, ml: number | null, target: number | null) =>
+    !target ? cents : ml && Math.abs(ml - target) <= target * COMPETITOR_VOLUME_SHARE ? Math.round(cents * target / ml) : null;
   return data.basket.map(entry => {
     const own = entry.ours && menu?.items.find(item => nameKey(item.name) === nameKey(entry.ours!.name) &&
       (!entry.ours!.category || nameKey(item.category) === nameKey(entry.ours!.category)) && (!entry.ours!.group || nameKey(item.group ?? '') === nameKey(entry.ours!.group)));
     const ownCents = own ? own.pricesCents[Math.min(entry.ours!.priceIndex, own.pricesCents.length - 1)] : undefined;
     const ourCents = own && ownCents !== undefined ? at(ownCents, own.volumeMl ?? volumeOf(own.volume ?? ''), entry.volumeMl) : null;
     const venues = data.venues.flatMap(venue => {
-      // The cheapest matching line of a venue (its basic version).
-      const prices = venue.items.filter(item => item.item === entry.item).map(item => at(item.priceCzk * 100, item.volumeMl, entry.volumeMl)).filter((cents): cents is number => cents !== null);
-      return prices.length ? [{name: venue.name, cents: Math.min(...prices)}] : [];
+      // The cheapest matching line of a venue (its basic version), an exact match before a look-alike.
+      const lines = venue.items.filter(item => item.item === entry.item).flatMap(item => {
+        const cents = at(item.priceCzk * 100, item.volumeMl, entry.volumeMl);
+        return cents === null ? [] : [{name: venue.name, cents, line: item.name, note: item.note, approx: item.approx}];
+      }).sort((a, b) => Number(a.approx) - Number(b.approx) || a.cents - b.cents);
+      return lines.length ? [lines[0]] : [];
     }).sort((a, b) => a.cents - b.cents);
-    const sorted = venues.map(row => row.cents), middle = sorted.length >> 1;
+    const sorted = venues.filter(row => !row.approx).map(row => row.cents), middle = sorted.length >> 1;
     const medianCents = sorted.length ? (sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2)) : null;
     return {item: entry.item, label: entry.label, volumeMl: entry.volumeMl, ourName: own ? own.name : null, ourCents, venues, medianCents,
       minCents: sorted.length ? sorted[0] : null, maxCents: sorted.length ? sorted[sorted.length - 1] : null,
-      diffPct: ourCents !== null && medianCents && venues.length >= COMPETITOR_MIN_VENUES ? Math.round((ourCents / medianCents - 1) * 100) : null};
+      diffPct: ourCents !== null && medianCents && sorted.length >= COMPETITOR_MIN_VENUES ? Math.round((ourCents / medianCents - 1) * 100) : null};
   });
 }
 
+/**
+ * A name reduced for comparing the menu with the POS: lower case, no accents, no punctuation and no volume
+ * ("Coca-Cola 0,33 l" → "coca cola"). The volume is matched separately (`volumeOf`).
+ */
 export function nameKey(name: string): string {
   return name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
     .replace(/\b\d+\s*\/\s*\d+\s*(?:ml|cl|dl|l)\b/g, ' ').replace(/\b\d+(?:[.,]\d+)?\s*(?:ml|cl|dl|l)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();

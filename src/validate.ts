@@ -420,7 +420,7 @@ function website(raw: unknown): {url: string} {
 export type CompetitorPrices = {
   checkedOn: string;
   basket: {item: string; label: string; volumeMl: number | null; ours: {name: string; category: string | null; group: string | null; priceIndex: number} | null}[];
-  venues: {key: string; name: string; area: string | null; url: string; items: {item: string; name: string; priceCzk: number; volumeMl: number | null; note: string | null}[]}[];
+  venues: {key: string; name: string; area: string | null; url: string; items: {item: string; name: string; priceCzk: number; volumeMl: number | null; note: string | null; approx: boolean}[]}[];
 };
 const VOLUME_MAX_ML = 5000;
 export function validateCompetitorPrices(raw: unknown): CompetitorPrices {
@@ -439,9 +439,10 @@ export function validateCompetitorPrices(raw: unknown): CompetitorPrices {
     if (typeof row.url !== 'string' || !/^https:\/\/[^\s]{1,500}$/.test(row.url)) fail();
     return {key: id(row.key), name: text(row.name, 100), area: optionalText(row.area, 60), url: row.url as string,
       items: list(row.items, 50, item => {
-        const price = object(item, ['item', 'name', 'priceCzk'], ['volumeMl', 'note']);
+        const price = object(item, ['item', 'name', 'priceCzk'], ['volumeMl', 'note', 'approx']);
+        if (price.approx !== undefined && typeof price.approx !== 'boolean') fail();
         if (!items.has(price.item as string)) fail();
-        return {item: price.item as string, name: text(price.name, 200), priceCzk: int(price.priceCzk, 1, 100000), volumeMl: volume(price.volumeMl), note: optionalText(price.note, 200)};
+        return {item: price.item as string, name: text(price.name, 200), priceCzk: int(price.priceCzk, 1, 100000), volumeMl: volume(price.volumeMl), note: optionalText(price.note, 200), approx: price.approx === true};
       })};
   });
   if (new Set(venues.map(row => row.key)).size !== venues.length) fail();

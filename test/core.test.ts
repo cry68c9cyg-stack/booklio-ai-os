@@ -808,23 +808,25 @@ test('prices nearby: ours against the median of the venues, drinks per volume, t
     dish('m1', 'Koktejly', 'Mojito', [20000]), dish('m2', 'XXL', 'Mojito', [150000]), dish('f1', 'Přílohy', 'Hranolky', [8000])]);
   const data = validateCompetitorPrices({checkedOn: '2026-10-12', basket: [
     {item: 'burger', label: 'Burger', ours: {name: 'classic burger', category: 'Burgery', priceIndex: 1}},
-    {item: 'beer', label: 'Pivo', volumeMl: 500, ours: {name: 'Pivo X', category: 'Pivo', group: 'Točené'}},
+    {item: 'beer', label: 'Pivo', volumeMl: 330, ours: {name: 'Pivo X', category: 'Pivo', group: 'Točené'}},
     {item: 'mojito', label: 'Mojito', ours: {name: 'Mojito', category: 'Koktejly'}},
     {item: 'fries', label: 'Hranolky', ours: {name: 'Hranolky'}},
     {item: 'shake', label: 'Shake', ours: null}],
   venues: [
-    {key: 'a', name: 'A', url: 'https://a.example/menu', items: [{item: 'burger', name: 'Cheese', priceCzk: 200}, {item: 'burger', name: 'Big', priceCzk: 300}, {item: 'beer', name: 'Ležák', priceCzk: 60, volumeMl: 300}, {item: 'mojito', name: 'Mojito', priceCzk: 150}]},
+    {key: 'a', name: 'A', url: 'https://a.example/menu', items: [{item: 'burger', name: 'Bacon', priceCzk: 150, approx: true}, {item: 'burger', name: 'Cheese', priceCzk: 200}, {item: 'burger', name: 'Big', priceCzk: 300}, {item: 'beer', name: 'Ležák', priceCzk: 60, volumeMl: 300}, {item: 'mojito', name: 'Mojito', priceCzk: 150}]},
     {key: 'b', name: 'B', area: 'Praha 1', url: 'https://b.example', items: [{item: 'burger', name: 'Burger', priceCzk: 220}, {item: 'beer', name: 'Pivo', priceCzk: 80}, {item: 'mojito', name: 'Mojito', priceCzk: 160}, {item: 'fries', name: 'Fries', priceCzk: 80}]},
-    {key: 'c', name: 'C', url: 'https://c.example', items: [{item: 'burger', name: 'Burger', priceCzk: 240}, {item: 'beer', name: 'Pivo', priceCzk: 90, volumeMl: 500}, {item: 'mojito', name: 'Mojito', priceCzk: 170, note: 'web'}]},
+    {key: 'c', name: 'C', url: 'https://c.example', items: [{item: 'burger', name: 'Burger', priceCzk: 240}, {item: 'fries', name: 'Curly', priceCzk: 99, approx: true}, {item: 'beer', name: 'Pivo', priceCzk: 90, volumeMl: 500}, {item: 'mojito', name: 'Mojito', priceCzk: 170, note: 'web'}]},
   ]});
   const rows = competitorComparison(menu, data);
   assert.deepEqual(rows.map(row => [row.item, row.ourName, row.ourCents, row.venues.map(v => v.cents), row.medianCents, row.diffPct]), [
     ['burger', 'Classic Burger', 25000, [20000, 22000, 24000], 22000, 14],
-    ['beer', 'Pivo X', 15000, [9000, 10000], 9500, null],
+    ['beer', 'Pivo X', 9900, [6600], 6600, null],
     ['mojito', 'Mojito', 20000, [15000, 16000, 17000], 16000, 25],
-    ['fries', 'Hranolky', 8000, [8000], 8000, null],
+    ['fries', 'Hranolky', 8000, [8000, 9900], 8000, null],
     ['shake', null, null, [], null, null],
-  ], 'the cheapest line of a venue, a drink without volume left out, the item in its category and group, no median difference from fewer than 3 venues');
+  ], 'the cheapest exact line of a venue, drinks only from a volume within 20 % (none without it), the item in its category and group, a look-alike outside the median, no difference from fewer than 3 venues');
+  assert.deepEqual(rows[3].venues[1], {name: 'C', cents: 9900, line: 'Curly', note: null, approx: true});
+  assert.deepEqual([rows[3].minCents, rows[3].maxCents], [8000, 8000], 'the range of exact matches only');
   assert.equal(competitorComparison(null, data)[0].ourCents, null, 'no menu, no price of ours');
   const bad = (change: (raw: any) => void) => { const raw = JSON.parse(JSON.stringify(data)); change(raw); assert.throws(() => validateCompetitorPrices(raw), InputError); };
   bad(raw => { raw.venues[0].items[0].item = 'pizza'; });
@@ -833,8 +835,9 @@ test('prices nearby: ours against the median of the venues, drinks per volume, t
   bad(raw => { raw.venues[0].items[0].priceCzk = 0; });
   bad(raw => { raw.basket.push(raw.basket[0]); });
   bad(raw => { raw.venues[0].guest = 'x'; });
+  bad(raw => { raw.venues[0].items[0].approx = 'yes'; });
   const summary = {checkedOn: '2026-10-12', venues: 3, compared: 2, above: [rows[2]], below: []};
-  assert.deepEqual(renderCompetitors(summary), ['Ceny proti okolí (3 podniky, 12. 10.): dráž Mojito 200 Kč (+25 %, okolí 160 Kč)']);
+  assert.deepEqual(renderCompetitors(summary), ['Ceny proti okolí (3 podniky, 12. 10.): dráže Mojito 200 Kč (+25 %, okolí 160 Kč)']);
   assert.deepEqual(renderCompetitors({...summary, above: [], below: [{...rows[0], diffPct: -20}]}), ['Ceny proti okolí (3 podniky, 12. 10.): levněji Burger 250 Kč (−20 %, okolí 220 Kč)']);
   assert.deepEqual(renderCompetitors({...summary, above: []}), ['Ceny proti okolí (3 podniky, 12. 10.): 2 položky do ±15 % od mediánu']);
   assert.deepEqual(renderCompetitors(null), []);
