@@ -418,7 +418,8 @@ function sourcesCard(s) {
     .concat(s.types.map(x => '<tr><td class="muted">' + esc(x.name) + '</td><td class="n muted">' + esc(x.lastReceived) + '</td></tr>'));
   if (s.report) rows.push('<tr><td>Report manažerů (OneDrive)</td><td class="n">' + esc(s.report.at) + (s.report.found ? '' : ' · <span class="warn">nenalezen</span>') + '</td></tr>');
   const od = s.onedrive;
-  if (od && od.connected) rows.push('<tr><td class="muted">OneDrive připojený</td><td class="n muted">od ' + esc(od.since) + '</td></tr>');
+  if (od && od.google) rows.push('<tr><td>Google Drive: složku sdílet jako Čtenář na</td><td class="n"><b>' + esc(od.google) + '</b></td></tr>');
+  else if (od && od.connected) rows.push('<tr><td class="muted">OneDrive připojený</td><td class="n muted">od ' + esc(od.since) + '</td></tr>');
   else if (od && od.canConnect) rows.push('<tr><td>' + (od.error ? '<span class="warn">Přístup k OneDrive vypršel</span>' : 'OneDrive zatím není připojený') + '</td><td class="n"><a href="' + esc(location.pathname) + '/onedrive">Připojit OneDrive</a></td></tr>');
   if (s.costs) rows.push('<tr><td>Náklady (iÚčto)</td><td class="n">' + esc(s.costs.at) + (s.costs.ok ? '' : ' · <span class="warn">chyba</span>') + '</td></tr>');
   return '<div class="card"><h2>Zdroje dat</h2>' + (rows.length ? '<table>' + rows.join('') + '</table>' : '<span class="muted">zatím žádný zdroj neposlal data</span>') + '</div>';

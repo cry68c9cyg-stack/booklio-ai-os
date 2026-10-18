@@ -13,10 +13,11 @@ import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-repo
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
 import {authorizeUrl, pkce, redeem, renew} from './microsoft.ts';
+import {googleAccess, serviceAccount} from './google.ts';
 import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
 import {counted, drinkMargins, duplicateInvoices, overdueInvoices, priceRises, supplyBrief, supplySummary} from './supplies.ts';
 import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
-import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateCompetitorPrices, validateConfig, validateHistory, type Batch, type CompetitorPrices, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
+import {DEFAULT_BOTTLE_LOSS_CENTS, googleFolderId, InputError, validateBatch, withoutGuest, validateCompetitorPrices, validateConfig, validateHistory, type Batch, type CompetitorPrices, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
 import {dashboardWeb} from './web-views.ts';
 import {WEATHER_AGENT, WEATHER_URL, weatherDays, type WeatherDay} from './weather.ts';
@@ -34,6 +35,8 @@ export type Env = DeliveryEnv & WebEnv & IuctoEnv & {
   ANTHROPIC_API_KEY?: string;
   /** OKO1's own Microsoft app (public client, read-only OneDrive). Optional: without it OneDrive is read only through the public API. */
   ONEDRIVE_CLIENT_ID?: string;
+  /** OKO1's own Google account (service account JSON key) for a Google Drive folder shared with it. Optional. */
+  GOOGLE_SERVICE_ACCOUNT?: string;
 };
 type Result = {status: number; body: unknown};
 export type VenueSetup = {name: string; timeZone: string; businessDayCutoffHour: number; web: {url: string} | null; today: string; reportDay: string};
@@ -625,9 +628,13 @@ export class TenantObject extends DurableObject<Env> {
     if (!link) return {found: false, warnings: ['OneDrive: odkaz na složku není nastavený.']};
     let found = false, warnings: string[];
     try {
-      const access = await this.onedriveToken();
+      const google = googleFolderId(link);
+      const account = serviceAccount(this.env.GOOGLE_SERVICE_ACCOUNT);
+      const googleToken = google && account ? await googleAccess(account) : null;
+      const access = google ? (googleToken?.ok ? googleToken.token : null) : await this.onedriveToken();
       const fetched = await fetchDayFiles(link, date, access);
-      const lost = this.sql.exec<{error: string | null}>('SELECT error FROM onedrive_access WHERE id=1').toArray()[0]?.error;
+      if (googleToken && !googleToken.ok) fetched.warnings.unshift(`Google Drive: účet OKO1 se nepřihlásil (${googleToken.error}).`);
+      const lost = google ? null : this.sql.exec<{error: string | null}>('SELECT error FROM onedrive_access WHERE id=1').toArray()[0]?.error;
       if (!access && lost) fetched.warnings.unshift(`OneDrive: přístup OKO1 vypršel (${lost}), na přehledu stačí znovu kliknout na „Připojit OneDrive“.`);
       for (const file of fetched.files) this.archive(`t/${tenant}/onedrive/${date}/${file.name}`, file.bytes);
       const report = await reportFromFiles(fetched.files, date, fetched.warnings);
@@ -1665,6 +1672,8 @@ export class TenantObject extends DurableObject<Env> {
   /** The dashboard's "Připojit OneDrive": shown when the folder is set, OKO1 has its Microsoft app and no working access. */
   private onedriveStatus(config: TenantConfig) {
     if (!config.reportsLink) return null;
+    // A Google Drive folder is shared with OKO1's Google account: the dashboard shows its e-mail.
+    if (googleFolderId(config.reportsLink)) return {google: serviceAccount(this.env.GOOGLE_SERVICE_ACCOUNT)?.clientEmail ?? null, canConnect: false, connected: false, since: null, error: null};
     const row = this.sql.exec<{connected_at: string; error: string | null}>('SELECT connected_at, error FROM onedrive_access WHERE id=1').toArray()[0];
     return {canConnect: !!this.env.ONEDRIVE_CLIENT_ID, connected: !!row && !row.error, since: row ? stamp(new Date(row.connected_at), config.timeZone) : null, error: row?.error ?? null};
   }

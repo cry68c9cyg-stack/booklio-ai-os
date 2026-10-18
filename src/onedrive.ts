@@ -5,6 +5,7 @@
  */
 import {extractCashBook, extractDailyReport, isJournalBook, JOURNAL_LABEL, type DailyReport} from './daily-report.ts';
 import {readXlsx} from './xlsx.ts';
+import {googleFolderId} from './validate.ts';
 
 export type FetchedFile = {name: string; bytes: Uint8Array};
 type Item = {name?: string; size?: number; folder?: unknown; file?: unknown; lastModifiedDateTime?: string; '@content.downloadUrl'?: string;
@@ -15,12 +16,13 @@ const downloadUrl = (item: Item) => item['@content.downloadUrl'] ?? item['@micro
 
 const ONEDRIVE_API = 'https://api.onedrive.com/v1.0';
 const GRAPH_API = 'https://graph.microsoft.com/v1.0';
+const GOOGLE_API = 'https://www.googleapis.com/drive/v3';
 const MAX_FILE = 10 * 1024 * 1024;
 const MAX_FOLDERS = 6;
 const MAX_PAGES = 10;
 const TIMEOUT_MS = 15000;
 /** Microsoft hosts that serve shared OneDrive / SharePoint files. Nothing else is ever fetched. */
-const ALLOWED_HOSTS = /(^|\.)(1drv\.ms|1drv\.com|onedrive\.com|onedrive\.live\.com|live\.net|sharepoint\.com|graph\.microsoft\.com|microsoftpersonalcontent\.com)$/;
+const ALLOWED_HOSTS = /(^|\.)(1drv\.ms|1drv\.com|onedrive\.com|onedrive\.live\.com|live\.net|sharepoint\.com|graph\.microsoft\.com|microsoftpersonalcontent\.com|www\.googleapis\.com)$/;
 
 export function allowedUrl(value: string): boolean {
   try { const url = new URL(value); return url.protocol === 'https:' && ALLOWED_HOSTS.test(url.hostname); } catch { return false; }
@@ -52,11 +54,13 @@ async function getJson<T = Item>(url: string, headers: Record<string, string> = 
 }
 
 /** Downloads at most MAX_FILE bytes, following redirects only to Microsoft hosts. */
-async function download(start: string): Promise<Uint8Array | null> {
+async function download(start: string, auth: Record<string, string> = {}): Promise<Uint8Array | null> {
   let url = start;
   for (let hop = 0; hop < 5; hop++) {
     if (!allowedUrl(url)) return null;
-    const response = await fetch(url, {redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS)}).catch(() => null);
+    // The access goes only to the API host it is for, never along a redirect to another host.
+    const headers = hop === 0 || new URL(url).host === new URL(start).host ? auth : {};
+    const response = await fetch(url, {redirect: 'manual', headers, signal: AbortSignal.timeout(TIMEOUT_MS)}).catch(() => null);
     if (!response) return null;
     const location = response.headers.get('location');
     if (response.status >= 300 && response.status < 400 && location) { url = new URL(location, url).toString(); continue; }
@@ -99,9 +103,11 @@ async function children(api: Api, folder: Item): Promise<Item[]> {
 /**
  * Lists the shared folder (and up to a few subfolders, newest first, for a folder per month) and downloads the
  * workbooks of the business day. A link to a single workbook is downloaded as it is. `accessToken` = OKO1's Microsoft
- * access (Graph); without it the public API is tried.
+ * access (Graph), or OKO1's Google account for a Google Drive folder; without it the public API is tried.
  */
 export async function fetchDayFiles(link: string, businessDate: string, accessToken: string | null = null): Promise<{files: FetchedFile[]; warnings: string[]}> {
+  const google = googleFolderId(link);
+  if (google) return googleDayFiles(google, businessDate, accessToken);
   const id = shareId(link);
   if (accessToken) {
     const headers = {authorization: `Bearer ${accessToken}`};
@@ -150,6 +156,60 @@ async function dayFiles(api: Api, root: Item, businessDate: string): Promise<{fi
   }
   if (!picked.report) warnings.push('OneDrive: denní report za tento den ve složce není.');
   if (!books.length) warnings.push('OneDrive: peněžní deník ve složce není.');
+  return {files: result, warnings};
+}
+
+type GoogleFile = {id: string; name: string; mimeType: string; modifiedTime?: string};
+const GOOGLE_FOLDER = 'application/vnd.google-apps.folder', GOOGLE_SHEET = 'application/vnd.google-apps.spreadsheet';
+const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+/** Files of a Google Drive folder that is shared with OKO1's own Google account (read-only), following paging. */
+async function googleList(folderId: string, headers: Record<string, string>): Promise<GoogleFile[] | null> {
+  const result: GoogleFile[] = [];
+  let pageToken = '';
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const params = new URLSearchParams({q: `'${folderId}' in parents and trashed = false`, fields: 'nextPageToken, files(id, name, mimeType, modifiedTime)',
+      pageSize: '200', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', ...(pageToken ? {pageToken} : {})});
+    const body = await getJson<{files?: GoogleFile[]; nextPageToken?: string}>(`${GOOGLE_API}/files?${params}`, headers);
+    if (!body) return page ? result : null;
+    result.push(...(body.files ?? []));
+    if (!body.nextPageToken) break;
+    pageToken = body.nextPageToken;
+  }
+  return result;
+}
+
+/** The day's workbooks from Google Drive; Google Sheets are exported as xlsx. `accessToken` = OKO1's Google account. */
+async function googleDayFiles(folderId: string, businessDate: string, accessToken: string | null): Promise<{files: FetchedFile[]; warnings: string[]}> {
+  if (!accessToken) return {files: [], warnings: ['Google Drive: OKO1 zatím nemá svůj účet u Googlu (tajemství GOOGLE_SERVICE_ACCOUNT).']};
+  const headers = {authorization: `Bearer ${accessToken}`};
+  const files = new Map<string, GoogleFile>();
+  const queue = [folderId];
+  let opened = false;
+  for (let visited = 0; queue.length && visited < MAX_FOLDERS; visited++) {
+    const entries = await googleList(queue.shift()!, headers);
+    if (!entries) continue;
+    opened = true;
+    for (const entry of entries) {
+      const name = entry.mimeType === GOOGLE_SHEET && !/\.xlsx$/i.test(entry.name) ? entry.name + '.xlsx' : entry.name;
+      if (entry.mimeType !== GOOGLE_FOLDER && !files.has(name)) files.set(name, entry);
+    }
+    const picked = pickFiles([...files.keys()], businessDate);
+    if (picked.report && picked.books.length) break;
+    queue.push(...entries.filter(entry => entry.mimeType === GOOGLE_FOLDER).sort((a, b) => (b.modifiedTime ?? '').localeCompare(a.modifiedTime ?? '')).map(entry => entry.id));
+  }
+  if (!opened) return {files: [], warnings: ['Google Drive: složka není nasdílená účtu OKO1 (ve sdílení přidat jeho e-mail jako Čtenář).']};
+  const picked = pickFiles([...files.keys()], businessDate);
+  const books = picked.books.sort((a, b) => (files.get(b)!.modifiedTime ?? '').localeCompare(files.get(a)!.modifiedTime ?? '')).slice(0, 3);
+  const result: FetchedFile[] = [], warnings: string[] = [];
+  for (const name of [picked.report, ...books]) {
+    if (!name) continue;
+    const entry = files.get(name)!, id = encodeURIComponent(entry.id);
+    const bytes = await download(entry.mimeType === GOOGLE_SHEET ? `${GOOGLE_API}/files/${id}/export?mimeType=${encodeURIComponent(XLSX)}` : `${GOOGLE_API}/files/${id}?alt=media&supportsAllDrives=true`, headers);
+    if (bytes) result.push({name, bytes}); else warnings.push(`Google Drive: soubor ${name} nejde stáhnout.`);
+  }
+  if (!picked.report) warnings.push('Google Drive: denní report za tento den ve složce není.');
+  if (!books.length) warnings.push('Google Drive: peněžní deník ve složce není.');
   return {files: result, warnings};
 }
 
