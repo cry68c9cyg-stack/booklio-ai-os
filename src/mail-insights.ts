@@ -45,9 +45,31 @@ export type MailRow = {
   reading: IncomingReading | ReplyReading | null;
   /** A draft answer to an incoming message still without one (the model's, for the staff to check and send). */
   draft?: string | null;
+  /** Who signed a sent message (`signature`), null when nobody did. */
+  signer?: string | null;
 };
 
 const HOUR = 3600000;
+/** A cause of complaints this many times within `REPEATED_DAYS` days is a pattern, not a bad evening. */
+export const REPEATED_COMPLAINTS = 3, REPEATED_DAYS = 14;
+
+const CLOSING = /^(s\s+pozdravem|se\s+srdečným\s+pozdravem|s\s+přáním\s+hezkého\s+dne|hezký\s+den|děkujeme|děkuji|díky|best\s+regards|kind\s+regards|regards|best|cheers|thank\s+you|thanks|mit\s+freundlichen\s+grüßen|viele\s+grüße|liebe\s+grüße)\b[\s,.!]*/i;
+const TEAM = /james\s*dean|tým|team|restaurace|podnik|management|vedení/i;
+/**
+ * Who signed a sent message: the name after its closing ("S pozdravem\nNancy", "Děkuji, Karolína"). Null when the
+ * message is signed by the venue as a whole or not at all.
+ */
+export function signature(text: string): string | null {
+  const lines = ownText(text).split('\n').map(line => line.trim()).filter(Boolean).slice(-8);
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const match = lines[index].match(CLOSING);
+    if (!match) continue;
+    const name = (lines[index].slice(match[0].length).trim() || lines[index + 1] || '').replace(/[,.!]+$/, '').trim();
+    if (!name || TEAM.test(name) || name.length > 40 || !/^\p{Lu}[\p{L}.'-]*(\s+\p{Lu}[\p{L}.'-]*){0,3}$/u.test(name)) return null;
+    return name;
+  }
+  return null;
+}
 
 /** A message's own text: the quoted conversation below it (">", "Dne … napsal:", "On … wrote:", forwarded original) cut off. */
 export function ownText(text: string): string {
@@ -114,7 +136,12 @@ export type MailInsights = {
   qualityTenths: number | null; graded: number; weakest: {at: string; to: string; subject: string; quality: number; issues: string | null; better: string | null}[];
   /** What is not under control: people writing again without an answer, complaints waiting, slow replies. */
   outOfControl: string[];
+  /** Replies by who signed them: how many answered a message, how fast, and their grade (×10). */
+  people: PersonReplies[];
 };
+export type PersonReplies = {name: string; replies: number; medianReplyHours: number | null; qualityTenths: number | null; graded: number};
+/** Without a signature the reply counts for "bez podpisu". */
+export const UNSIGNED = 'bez podpisu';
 
 const round1 = (value: number) => Math.round(value * 10) / 10;
 const median = (values: number[]) => {
@@ -134,6 +161,23 @@ export function complaintCauses(rows: MailRow[]): MailInsights['causes'] {
   return [...counts].map(([cause, count]) => ({cause, count, name: cause ? COMPLAINT_CAUSES[cause].name : 'nezařazené', action: cause ? COMPLAINT_CAUSES[cause].action : null}))
     .sort((a, b) => b.count - a.count);
 }
+
+export type RepeatedCause = {cause: ComplaintCause; name: string; count: number; action: string; last: string};
+/** Causes (other than "ostatní") of at least `REPEATED_COMPLAINTS` complaints within the `REPEATED_DAYS` days before `now`. */
+export function repeatedCauses(rows: MailRow[], now: Date): RepeatedCause[] {
+  const from = new Date(now.getTime() - REPEATED_DAYS * 86400000).toISOString(), to = now.toISOString();
+  const found = new Map<ComplaintCause, {count: number; last: string}>();
+  for (const row of rows.filter(row => isIncoming(row) && !row.automated && row.at >= from && row.at <= to)) {
+    const cause = incomingReading(row)?.complaint ? incomingReading(row)!.cause : null;
+    if (!cause || cause === 'other') continue;
+    const entry = found.get(cause) ?? {count: 0, last: row.at};
+    found.set(cause, {count: entry.count + 1, last: row.at > entry.last ? row.at : entry.last});
+  }
+  return [...found].filter(([, entry]) => entry.count >= REPEATED_COMPLAINTS)
+    .map(([cause, entry]) => ({cause, name: COMPLAINT_CAUSES[cause].name, count: entry.count, action: COMPLAINT_CAUSES[cause].action, last: entry.last}))
+    .sort((a, b) => b.count - a.count || b.last.localeCompare(a.last));
+}
+export const repeatedText = (row: RepeatedCause) => `stížnosti na ${row.name} se opakují (${row.count}× za ${REPEATED_DAYS} dní): ${row.action}`;
 
 /** Incoming messages that want an answer and have none yet, older than `minHours`: those that get a draft answer. */
 export function unanswered(rows: MailRow[], now: Date, minHours: number): MailRow[] {
@@ -203,6 +247,14 @@ export function mailInsights(rows: MailRow[], from: string, to: string, now: Dat
   for (const row of waiting.filter(row => incomingReading(row)?.complaint)) outOfControl.push(`Stížnost bez odpovědi ${ago(Math.floor(ageHours(row)))}: ${who(row)} („${row.subject.slice(0, 60)}“)`);
   const slow = answered.filter(row => hoursTo(row) > SLOW_REPLY_HOURS).length;
   if (slow) outOfControl.push(`${slow} ${slow === 1 ? 'odpověď přišla' : slow <= 4 ? 'odpovědi přišly' : 'odpovědí přišlo'} až po víc než ${SLOW_REPLY_HOURS} hodinách`);
+  const people = new Map<string, {hours: number[]; grades: number[]}>();
+  const person = (row: MailRow) => {
+    const name = row.signer ?? UNSIGNED;
+    if (!people.has(name)) people.set(name, {hours: [], grades: []});
+    return people.get(name)!;
+  };
+  for (const row of answered) person(replies.get(row.key)!).hours.push(hoursTo(row));
+  for (const row of graded) person(row).grades.push(replyReading(row)!.quality);
   const old = waiting.filter(row => ageHours(row) > 72).length;
   if (old) outOfControl.push(`${old} ${old === 1 ? 'zpráva čeká' : old <= 4 ? 'zprávy čekají' : 'zpráv čeká'} na odpověď déle než 3 dny`);
   return {
@@ -211,6 +263,9 @@ export function mailInsights(rows: MailRow[], from: string, to: string, now: Dat
     within24Permille: wanting.length ? Math.round(1000 * answered.filter(row => hoursTo(row) <= 24).length / wanting.length) : null,
     waiting: waiting.map(asWaiting), topics, complaints, causes: complaintCauses(rows.filter(row => isIncoming(row) && inWindow(row))),
     qualityTenths: grades.length ? Math.round(10 * grades.reduce((sum, grade) => sum + grade, 0) / grades.length) : null, graded: grades.length, weakest, outOfControl,
+    people: [...people].map(([name, value]) => ({name, replies: value.hours.length, medianReplyHours: value.hours.length ? round1(median(value.hours)!) : null,
+      qualityTenths: value.grades.length ? Math.round(10 * value.grades.reduce((sum, grade) => sum + grade, 0) / value.grades.length) : null, graded: value.grades.length}))
+      .sort((a, b) => (a.name === UNSIGNED ? 1 : 0) - (b.name === UNSIGNED ? 1 : 0) || b.replies - a.replies || a.name.localeCompare(b.name, 'cs')),
   };
 }
 
@@ -296,11 +351,25 @@ const ago = (hours: number) => {
 export const waitingText = (row: WaitingMail) => `${row.fromName ?? row.from} („${row.subject.slice(0, 60) || 'bez předmětu'}“, ${ago(row.hours)}${row.complaint ? ', stížnost' : ''})`;
 const hoursText = (hours: number) => hours < 1 ? `${Math.round(hours * 60)} min` : `${String(round1(hours)).replace('.', ',')} h`;
 
-/** For the morning message and the to-do list: the last 30 days, and on Monday also the last 7. */
-export type MailBrief = {insights: MailInsights; weekly: MailInsights | null; monthly?: MailInsights | null};
+/**
+ * For the morning message and the to-do list: the last 30 days, on Monday also the last 7 and the 7 before them
+ * (the trend of each person's replies), complaint causes that keep coming back.
+ */
+export type MailBrief = {insights: MailInsights; weekly: MailInsights | null; monthly?: MailInsights | null; previousWeek?: MailInsights | null; repeated?: RepeatedCause[]};
+
+/** "Nancy 12× za 2 h, 4,5/5 (předtím 3 h, 4,1/5)" for each person who answered in the week. */
+export function peopleText(week: MailInsights, before: MailInsights | null): string {
+  const grade = (tenths: number | null) => tenths === null ? null : `${String(tenths / 10).replace('.', ',')}/5`;
+  return week.people.filter(row => row.replies || row.graded).map(row => {
+    const earlier = before?.people.find(other => other.name === row.name);
+    const now = [row.medianReplyHours !== null ? `za ${hoursText(row.medianReplyHours)}` : null, grade(row.qualityTenths)].filter(Boolean).join(', ');
+    const then = earlier ? [earlier.medianReplyHours !== null ? hoursText(earlier.medianReplyHours) : null, grade(earlier.qualityTenths)].filter(Boolean).join(', ') : '';
+    return `${row.name} ${row.replies}×${now ? ' ' + now : ''}${then ? ` (předtím ${then})` : ''}`;
+  }).join(' · ');
+}
 
 /** Lines of the morning message: waiting messages every day; on Monday the week in numbers and its topics. */
-export function renderMail(insights: MailInsights | null, weekly: MailInsights | null = null, monthly: MailInsights | null = null): string[] {
+export function renderMail(insights: MailInsights | null, weekly: MailInsights | null = null, monthly: MailInsights | null = null, previousWeek: MailInsights | null = null, repeated: RepeatedCause[] = []): string[] {
   if (!insights) return [];
   const lines: string[] = [];
   if (insights.waiting.length) lines.push(`⚠ Pošta info@: ${insights.waiting.length} bez odpovědi přes ${UNANSWERED_HOURS} h: ${insights.waiting.slice(0, 3).map(waitingText).join(' · ')}${insights.waiting.length > 3 ? ` · … a další ${insights.waiting.length - 3}` : ''}`);
@@ -310,7 +379,10 @@ export function renderMail(insights: MailInsights | null, weekly: MailInsights |
     lines.push(`Pošta info@ za týden: ${weekly.received} zpráv k odpovědi, odpovězeno ${weekly.answered}` +
       (weekly.medianReplyHours !== null ? `, obvykle za ${hoursText(weekly.medianReplyHours)}` : '') +
       (weekly.qualityTenths !== null ? `, odpovědi ${String(weekly.qualityTenths / 10).replace('.', ',')}/5` : '') + (topics ? ` · ${topics}` : ''));
+    const people = peopleText(weekly, previousWeek);
+    if (people) lines.push(`Odpovědi podle lidí za týden: ${people}`);
   }
+  for (const row of repeated.slice(0, 2)) lines.push(`⚠ Pošta info@: ${repeatedText(row)}`);
   const causes = monthly?.causes.filter(row => row.count) ?? [];
   if (causes.length) {
     const top = causes.find(row => row.action);

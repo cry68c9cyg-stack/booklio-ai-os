@@ -20,7 +20,7 @@ import {fetchDayFiles, googleDayFiles, googleFolderByName, reportFromFiles} from
 import {authorizeUrl, pkce, redeem, renew} from './microsoft.ts';
 import {googleAccess, serviceAccount} from './google.ts';
 import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
-import {amountConflicts, COST_KIND_NAMES, costOutlook, counted, drinkMargins, dueSoon, newSuppliersFromMail, nextPaymentBatch, FOOD_COST_LIMIT_PERMILLE, duplicateInvoices, foodCostAlert, monthOverMonth, overdueInvoices, priceRises, supplyBrief, supplySummary, unusualPurchases} from './supplies.ts';
+import {amountConflicts, COST_KIND_NAMES, missingInvoices, paymentBatch, paymentMail, PAYMENT_UNKNOWN_SOURCES, costOutlook, counted, drinkMargins, dueSoon, newSuppliersFromMail, nextPaymentBatch, FOOD_COST_LIMIT_PERMILLE, duplicateInvoices, foodCostAlert, monthOverMonth, overdueInvoices, priceRises, supplyBrief, supplySummary, unusualPurchases} from './supplies.ts';
 import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
 import {DEFAULT_BOTTLE_LOSS_CENTS, googleFolderId, InputError, validateBatch, withoutGuest, validateCompetitorPrices, validateConfig, validateHistory, type Batch, type CompetitorPrices, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
@@ -28,9 +28,10 @@ import {dashboardWeb} from './web-views.ts';
 import {WEATHER_AGENT, WEATHER_URL, weatherDays, type WeatherDay} from './weather.ts';
 import {MCP_PATH, oauthOptions, type Venues} from './oauth.ts';
 import {folderLabel, sentFolder, withMailbox, type ImapAccount, type ImapSession} from './imap.ts';
+import {sendMail, validAddress, type SmtpAccount} from './smtp.ts';
 import {parseMail, type Mail} from './mime.ts';
 import {zip} from './zip.ts';
-import {baseSubject, DRAFT_SCHEMA, draftPrompt, INCOMING_SCHEMA, incomingPrompt, parseDraft, unanswered, MAIL_TEXT_CHARS, mailInsights, ownText, parseIncomingReading, parseReplyReading, REPLY_SCHEMA, replyPrompt, type MailBrief, type MailRow} from './mail-insights.ts';
+import {baseSubject, REPEATED_DAYS, repeatedCauses, signature, DRAFT_SCHEMA, draftPrompt, INCOMING_SCHEMA, incomingPrompt, parseDraft, unanswered, MAIL_TEXT_CHARS, mailInsights, ownText, parseIncomingReading, parseReplyReading, REPLY_SCHEMA, replyPrompt, type MailBrief, type MailRow} from './mail-insights.ts';
 import {asSupplierInvoice, EXTRACTION_SCHEMA, extractionPrompt, invoiceAttachments, isdocSummary, isdocXml, issuedByVenue, looksLikeInvoice, MAIL_HISTORY_FROM,
   MAIL_SOURCE, mailInvoiceId, MAX_DOCUMENT_CHARS, parseExtraction, parseIsdoc, withKinds, type ExtractedInvoice} from './mail-invoices.ts';
 
@@ -50,7 +51,7 @@ export type Env = DeliveryEnv & WebEnv & IuctoEnv & {
   GOOGLE_SERVICE_ACCOUNT?: string;
   /** Workers AI (production): reading PDF invoices from the venue's mailbox. Optional: without it only ISDOC is read. */
   AI?: MailAi;
-} & {[name: `MAIL_ACCOUNT_${string}`]: string | undefined};
+} & {[name: `MAIL_ACCOUNT_${string}`]: string | undefined} & {[name: `PAYMENTS_MAIL_TO_${string}`]: string | undefined};
 /** The two Workers AI calls OKO1 makes, typed narrowly so no model list is needed. */
 type MailAi = {
   run(model: string, input: unknown): Promise<unknown>;
@@ -74,6 +75,19 @@ export function mailAccount(env: Env, tenant: string): ImapAccount | null {
     if (typeof value.host !== 'string' || !/^[a-z0-9.-]+$/i.test(value.host) || typeof value.user !== 'string' || typeof value.password !== 'string' || !value.password) return null;
     return {host: value.host, port: typeof value.port === 'number' ? value.port : 993, user: value.user, password: value.password};
   } catch { return null; }
+}
+/** Sending from the same mailbox (smtpHost/smtpPort in the secret, else the IMAP host as smtp.*, port 465). */
+export function smtpAccount(env: Env, tenant: string): SmtpAccount | null {
+  const account = mailAccount(env, tenant);
+  if (!account) return null;
+  const value = JSON.parse(env[`MAIL_ACCOUNT_${tenant.toUpperCase().replace(/-/g, '_')}` as `MAIL_ACCOUNT_${string}`]!) as {smtpHost?: unknown; smtpPort?: unknown};
+  const host = typeof value.smtpHost === 'string' && /^[a-z0-9.-]+$/i.test(value.smtpHost) ? value.smtpHost : account.host.replace(/^imap\./i, 'smtp.');
+  return {host, port: typeof value.smtpPort === 'number' ? value.smtpPort : 465, user: account.user, password: account.password};
+}
+/** Who gets the list of invoices for the batch payment: Worker secret PAYMENTS_MAIL_TO_<TENANT>, addresses separated by commas. */
+export function paymentRecipients(env: Env, tenant: string): string[] {
+  const raw = env[`PAYMENTS_MAIL_TO_${tenant.toUpperCase().replace(/-/g, '_')}` as `PAYMENTS_MAIL_TO_${string}`] ?? '';
+  return [...new Set(raw.split(/[,;\s]+/).map(address => address.trim().toLowerCase()).filter(validAddress))].slice(0, 5);
 }
 type Result = {status: number; body: unknown};
 export type VenueSetup = {name: string; timeZone: string; businessDayCutoffHour: number; web: {url: string} | null; today: string; reportDay: string};
@@ -193,6 +207,8 @@ export class TenantObject extends DurableObject<Env> {
       -- The venue's mailbox (read-only): how far each folder has been read, the last visit and its error; what was
       -- done with each message that had a document (an invoice stored, not an invoice, unreadable); which venue this is.
       CREATE TABLE IF NOT EXISTS mail_folders(folder TEXT PRIMARY KEY, uid_validity INTEGER NOT NULL, last_uid INTEGER NOT NULL);
+      -- The list of invoices e-mailed for each batch payment day (MC, 18. 10. 2026): sent or why not, no addresses.
+      CREATE TABLE IF NOT EXISTS payment_mails(pay_day TEXT PRIMARY KEY, at TEXT NOT NULL, status TEXT NOT NULL, error TEXT, tries INTEGER NOT NULL, invoices INTEGER NOT NULL, total_cents INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS mail_visits(id INTEGER PRIMARY KEY CHECK(id=1), tenant TEXT NOT NULL, at TEXT NOT NULL, error TEXT, backlog INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS mail_documents(folder TEXT NOT NULL, uid_validity INTEGER NOT NULL, uid INTEGER NOT NULL, at TEXT NOT NULL, mail_date TEXT,
         status TEXT NOT NULL, sender TEXT NOT NULL, subject TEXT NOT NULL, invoice_id TEXT, PRIMARY KEY(folder, uid_validity, uid));
@@ -254,7 +270,10 @@ export class TenantObject extends DurableObject<Env> {
       if (route === 'admin/mail' && method === 'POST') {
         const visit = await this.mailVisit(tenant);
         const error = this.sql.exec<{error: string | null}>('SELECT error FROM mail_visits WHERE id=1').toArray()[0]?.error ?? null;
-        return ok({...visit, error});
+        // Sending (the payment list): only a login and logout, no message; null while nobody is to get the list.
+        const smtp = paymentRecipients(this.env, tenant).length ? smtpAccount(this.env, tenant) : null;
+        const sending = smtp ? await sendMail(smtp, null) : null;
+        return ok({...visit, error, sending: sending ? (sending.ok ? 'ok' : sending.error) : null});
       }
       if (route === 'admin/tick' && method === 'POST') {
         const at = (body as {at?: unknown})?.at;
@@ -394,7 +413,7 @@ export class TenantObject extends DurableObject<Env> {
     const stored = this.sql.exec<{text: string}>('SELECT text FROM briefings WHERE business_date=?', day).toArray()[0];
     const todo = this.todoFor(day, briefing);
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
-      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day, briefing.forecast?.month.month === day.slice(0, 7) ? briefing.forecast.month.restCents : null), mail: this.mailInsightsBetween(new Date(Date.now() - 30 * 86400000).toISOString(), new Date().toISOString(), new Date()),
+      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day, briefing.forecast?.month.month === day.slice(0, 7) ? briefing.forecast.month.restCents : null), mail: this.mailCardData(),
       themes: briefing.themes ?? this.themeSummary(day), djRanking: briefing.djRanking ?? this.djRanking(day), nights: this.nightsFor(addDays(day, -27), day),
       incidents: this.incidentsBetween(addDays(day, -89), day).reverse(), foreignWeek: briefing.foreignWeek ?? foreignWeek(day, Array.from({length: 15}, (_, i) => this.foreignCash(addDays(day, i - 14))))});
   }
@@ -1242,7 +1261,7 @@ export class TenantObject extends DurableObject<Env> {
       mail: this.mailStatus(config), unreadable: this.unreadableMail(addDays(day, -29), day).slice(0, 10),
       payments: nextPaymentBatch([...year, ...unpaid.filter(invoice => !year.some(other => other.id === invoice.id))], day),
       outlook: costOutlook(unpaid, month, day, restRevenueCents),
-      conflicts: amountConflicts(this.invoices(config, addDays(day, -89), day, false, true)).slice(0, 10),
+      conflicts: amountConflicts(this.invoices(config, addDays(day, -89), day, false, true)).slice(0, 10), missing: missingInvoices(year, day).slice(0, 10),
       newFromMail: newSuppliersFromMail(year, addDays(day, -29), day, new Map(this.sql.exec<{invoice_id: string; sender: string}>(
         'SELECT invoice_id, sender FROM mail_documents WHERE invoice_id IS NOT NULL AND mail_date >= ?', addDays(day, -45)).toArray().map(row => [row.invoice_id, row.sender]))).slice(0, 10)};
   }
@@ -1293,7 +1312,7 @@ export class TenantObject extends DurableObject<Env> {
     return {summary: supplySummary(invoices, from, to, this.revenueBetween(from, to)), rises: priceRises(history, from, to),
       duplicates: duplicateInvoices(invoices), drinkMargins: menu ? drinkMargins(menu, history, to) : null,
       overdue: overdueInvoices(unpaid, today), dueSoon: dueSoon(unpaid, today), unusual: unusualPurchases(history, from, to),
-      monthCompare: monthOverMonth(history, to), nextPayment: nextPaymentBatch(unpaid, today),
+      monthCompare: monthOverMonth(history, to), nextPayment: nextPaymentBatch(unpaid, today), missingInvoices: missingInvoices(history, to),
       amountConflicts: amountConflicts(this.invoices(config, from, to, false, true)), foodCostLimitPermille: config.foodCostLimitPermille ?? FOOD_COST_LIMIT_PERMILLE, disabledSources: config.disabledSources,
       invoices: invoices.sort((a, b) => b.businessDate.localeCompare(a.businessDate)).slice(0, 1000), truncated: invoices.length > 1000};
   }
@@ -1966,7 +1985,7 @@ export class TenantObject extends DurableObject<Env> {
       report: report ? {at: at(report.at), found: report.found === 1} : null,
       costs: cost ? {at: at(cost.at), ok: !cost.error} : null,
       onedrive: this.onedriveStatus(config),
-      mail: this.mailStatus(config),
+      mail: this.mailStatus(config), paymentMail: this.paymentMailStatus(config),
     };
   }
 
@@ -2229,10 +2248,12 @@ export class TenantObject extends DurableObject<Env> {
 
   private mailRows(where: string, ...params: (string | number)[]): MailRow[] {
     return this.sql.exec<{key: string; direction: 'in' | 'out'; at: string; sender: string; sender_name: string | null; recipients: string; subject: string;
-      message_id: string | null; in_reply_to: string | null; refs: string; automated: number; reading: string | null; draft: string | null}>(
-      `SELECT key, direction, at, sender, sender_name, recipients, subject, message_id, in_reply_to, refs, automated, reading, draft FROM mail_messages WHERE ${where}`, ...params).toArray()
+      message_id: string | null; in_reply_to: string | null; refs: string; automated: number; reading: string | null; draft: string | null; signed: string | null}>(
+      `SELECT key, direction, at, sender, sender_name, recipients, subject, message_id, in_reply_to, refs, automated, reading, draft,
+        CASE WHEN direction='out' THEN substr(body, -1500) END AS signed FROM mail_messages WHERE ${where}`, ...params).toArray()
       .map(row => ({key: row.key, direction: row.direction, at: row.at, from: row.sender, fromName: row.sender_name, to: JSON.parse(row.recipients), subject: row.subject,
-        messageId: row.message_id, inReplyTo: row.in_reply_to, references: JSON.parse(row.refs), automated: row.automated === 1, reading: row.reading ? JSON.parse(row.reading) : null, draft: row.draft}));
+        messageId: row.message_id, inReplyTo: row.in_reply_to, references: JSON.parse(row.refs), automated: row.automated === 1, reading: row.reading ? JSON.parse(row.reading) : null, draft: row.draft,
+        signer: row.signed ? signature(row.signed) : null}));
   }
 
   /** The mailbox over `from`–`to` (ISO times); null while nothing of it has been read. */
@@ -2242,6 +2263,12 @@ export class TenantObject extends DurableObject<Env> {
     return rows.length ? mailInsights(rows, from, to, now) : null;
   }
 
+  /** Dashboard: the last 30 days of the mailbox and the complaint causes that keep coming back. */
+  private mailCardData() {
+    const now = new Date(), insights = this.mailInsightsBetween(new Date(now.getTime() - 30 * 86400000).toISOString(), now.toISOString(), now);
+    return insights ? {...insights, repeated: repeatedCauses(this.mailRows('at >= ? ORDER BY at', new Date(now.getTime() - REPEATED_DAYS * 86400000).toISOString()), now)} : null;
+  }
+
   /** Morning message: the last 30 days (what waits), on Monday also the week. */
   private mailBriefFor(config: TenantConfig, date: string, now: Date): MailBrief | null {
     const days = (count: number) => new Date(now.getTime() - count * 86400000).toISOString();
@@ -2249,7 +2276,10 @@ export class TenantObject extends DurableObject<Env> {
     if (!insights) return null;
     // On the last day of the month: its complaints by cause.
     const monthly = addDays(date, 1).endsWith('-01') ? this.mailInsightsBetween(zonedMidnight(date.slice(0, 8) + '01', config.timeZone), now.toISOString(), now) : null;
-    return {insights, weekly: weekday(date) === 0 ? this.mailInsightsBetween(days(7), now.toISOString(), now) : null, monthly};
+    const monday = weekday(date) === 0;
+    return {insights, weekly: monday ? this.mailInsightsBetween(days(7), now.toISOString(), now) : null, monthly,
+      previousWeek: monday ? this.mailInsightsBetween(days(14), days(7), now) : null,
+      repeated: repeatedCauses(this.mailRows('at >= ? ORDER BY at', days(REPEATED_DAYS)), now)};
   }
 
   /** MCP: the mailbox over any days (at most 400) and its messages with the model's reading (newest first, at most 300). */
@@ -2277,6 +2307,35 @@ export class TenantObject extends DurableObject<Env> {
     return {at: stamp(new Date(visit.at), config.timeZone), error: visit.error, readingHistory: visit.backlog > 0, invoices: count('invoice'), unreadable: count('unreadable')};
   }
 
+  /**
+   * On a batch payment morning (Tuesday, Thursday) at the first send hour: the invoices to pay e-mailed to the office,
+   * from the venue's own mailbox. Once per payment day; a failed send is tried again at the next send hours (3 tries).
+   */
+  private async paymentMailFor(config: TenantConfig, tenant: string, date: string, at: Date) {
+    const to = paymentRecipients(this.env, tenant), account = to.length ? smtpAccount(this.env, tenant) : null;
+    const payDay = addDays(date, 1);
+    if (!account || payDay !== businessDate(at, config.timeZone, 0)) return;
+    const done = this.sql.exec<{status: string; tries: number}>('SELECT status, tries FROM payment_mails WHERE pay_day=?', payDay).toArray()[0];
+    if (done && (done.status === 'sent' || done.tries >= 3)) return;
+    const year = this.invoices(config, addDays(date, -365), date);
+    const unpaid = this.invoices(config, '', '', true).filter(invoice => !year.some(other => other.id === invoice.id));
+    const batch = paymentBatch([...year, ...unpaid], date);
+    if (!batch) return;
+    const mail = paymentMail(batch, config.name, [...PAYMENT_UNKNOWN_SOURCES]);
+    const result = await sendMail(account, {from: {name: `OKO1 – ${config.name}`, address: account.user}, to, subject: mail.subject, text: mail.text,
+      attachments: [{filename: `platby-${batch.payDay}.csv`, contentType: 'text/csv; charset=utf-8', data: mail.csv}]}, at);
+    this.sql.exec(`INSERT INTO payment_mails VALUES(?,?,?,?,1,?,?) ON CONFLICT(pay_day) DO UPDATE SET at=excluded.at, status=excluded.status, error=excluded.error,
+      tries=payment_mails.tries + 1, invoices=excluded.invoices, total_cents=excluded.total_cents`,
+    payDay, at.toISOString(), result.ok ? 'sent' : 'failed', result.ok ? null : result.error, batch.rows.length, batch.totalCents);
+  }
+
+  /** The last payment list e-mailed (dashboard, sources). */
+  private paymentMailStatus(config: TenantConfig) {
+    const row = this.sql.exec<{pay_day: string; at: string; status: string; error: string | null; invoices: number; total_cents: number}>(
+      'SELECT pay_day, at, status, error, invoices, total_cents FROM payment_mails ORDER BY pay_day DESC LIMIT 1').toArray()[0];
+    return row ? {payDay: row.pay_day, at: stamp(new Date(row.at), config.timeZone), sent: row.status === 'sent', error: row.error, invoices: row.invoices, totalCents: row.total_cents} : null;
+  }
+
   /** Called by the morning cron trigger. Decides whether this morning's briefing goes out now. */
   async tick(at: Date, tenant: string) {
     const config = this.config();
@@ -2296,6 +2355,7 @@ export class TenantObject extends DurableObject<Env> {
         await this.refreshWeather(config, at);
       })(), PREPARE_BUDGET_MS);
     }
+    if (config.sendHours.includes(hour)) await this.paymentMailFor(config, tenant, date, at);
     const decision = briefingDecision({localHour: hour, sendHours: config.sendHours, alreadySent: sent, ready: this.ready(config, date)});
     if (decision !== 'send' && decision !== 'send-incomplete') return {decision, businessDate: date};
     const {briefing, text} = this.briefingFor(config, date, decision === 'send-incomplete', at);

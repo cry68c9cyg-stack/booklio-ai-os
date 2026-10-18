@@ -55,6 +55,8 @@ export type SupplyBrief = {month: SupplySummary; rises: PriceRise[]; overdue: Ov
   conflicts?: AmountConflict[];
   /** Invoices from the mailbox of the 7 days up to the day from a supplier never invoiced before (check before paying). */
   newFromMail?: NewMailSupplier[];
+  /** Regular suppliers whose invoice of this month has not come by their usual day. */
+  missing?: MissingInvoice[];
   /** Only in the Monday message (about Sunday): the week's rises per supplier, the drinks with the lowest margin and the categories growing most against the month before. */
   weekly?: {suppliers: SupplierRises[]; lowMargins: DrinkMargin[]; growing?: CategoryChange[]} | null};
 /** An unpaid invoice due soon: `days` until the due date (0 = today). */
@@ -171,7 +173,7 @@ export function supplyBrief(invoices: SupplierInvoice[], date: string, revenue: 
     dueSoon: dueSoon(invoices, addDays(date, 1)), foodCostAlert: foodCostAlert(month, extra.foodCostLimitPermille),
     unusual: unusualPurchases(invoices, addDays(date, -6), date),
     outlook: Number(date.slice(8)) >= 7 && !addDays(date, 1).endsWith('-01') ? costOutlook(invoices, month, date, extra.restRevenueCents ?? null) : null,
-    closing: monthClosing(invoices, date, revenue), payments: paymentBatch(invoices, date),
+    closing: monthClosing(invoices, date, revenue), payments: paymentBatch(invoices, date), missing: missingInvoices(invoices, date),
     conflicts: amountConflicts((extra.withCancelled ?? invoices).filter(invoice => invoice.businessDate >= addDays(date, -34) && invoice.businessDate <= date)),
     duplicates: duplicateInvoices(invoices.filter(invoice => invoice.businessDate >= addDays(date, -34) && invoice.businessDate <= date)),
     result: revenue.revenueDays ? {revenueCents: revenue.revenueCents, purchasesCents: month.netCents, payoutsCents,
@@ -240,6 +242,59 @@ export function newSuppliersFromMail(invoices: SupplierInvoice[], from: string, 
     .map(invoice => ({supplier: invoice.supplier, supplierId: invoice.supplierId, number: invoice.number, date: invoice.businessDate, grossCents: invoice.grossCents,
       sender: senders.get(invoice.id) ?? null, id: invoice.id}))
     .sort((a, b) => b.date.localeCompare(a.date));
+}
+
+/** A supplier who invoiced every one of the last `MISSING_MONTHS` months, by their usual day of the month. */
+export type MissingInvoice = {supplier: string; supplierId: string | null; usualDay: number; lastDate: string; lastGrossCents: number; since: string};
+export const MISSING_MONTHS = 3, MISSING_GRACE_DAYS = 5;
+
+/**
+ * Regular suppliers whose invoice of this month has not come (Nancy's suppliers e-mail theirs; OKO1 learns who is
+ * regular from the invoices themselves, from any source): each of the 3 months before had one, and `date` is more than
+ * 5 days past the latest day on which the first invoice of the month came in those months.
+ */
+export function missingInvoices(invoices: SupplierInvoice[], date: string): MissingInvoice[] {
+  const months: string[] = [];
+  for (let month = date.slice(0, 7), n = 0; n < MISSING_MONTHS; n++) {
+    month = addDays(month + '-01', -1).slice(0, 7);
+    months.push(month);
+  }
+  const groups = new Map<string, SupplierInvoice[]>();
+  for (const invoice of invoices.filter(row => row.status === 'active' && row.grossCents > 0 && row.businessDate <= date && row.businessDate >= months[MISSING_MONTHS - 1] + '-01')) {
+    const key = invoice.supplierId ?? supplierName(invoice);
+    if (!key) continue;
+    groups.set(key, [...(groups.get(key) ?? []), invoice]);
+  }
+  const today = Number(date.slice(8)), out: MissingInvoice[] = [];
+  for (const group of groups.values()) {
+    if (group.some(invoice => invoice.businessDate.startsWith(date.slice(0, 7)))) continue;
+    const firstDays = months.map(month => group.filter(invoice => invoice.businessDate.startsWith(month)).map(invoice => Number(invoice.businessDate.slice(8))).sort((a, b) => a - b)[0]);
+    if (firstDays.some(day => day === undefined)) continue;
+    const usualDay = Math.max(...firstDays);
+    if (today <= usualDay + MISSING_GRACE_DAYS) continue;
+    const last = [...group].sort((a, b) => b.businessDate.localeCompare(a.businessDate))[0];
+    out.push({supplier: last.supplier, supplierId: last.supplierId, usualDay, lastDate: last.businessDate, lastGrossCents: last.grossCents,
+      since: date.slice(0, 8) + String(usualDay + MISSING_GRACE_DAYS + 1).padStart(2, '0')});
+  }
+  return out.sort((a, b) => b.lastGrossCents - a.lastGrossCents);
+}
+export const missingText = (row: MissingInvoice) => `${row.supplier}${row.supplierId ? ` (IČO ${row.supplierId})` : ''}: faktura za tento měsíc nepřišla, obvykle chodí do ${row.usualDay}. dne, naposledy ${shortDate(row.lastDate)} ${crownsTotal(row.lastGrossCents)}`;
+
+/** The payment list for the office (MC, 18. 10. 2026: e-mailed to the accountant on Tuesday and Thursday morning). */
+export function paymentMail(batch: PaymentBatch, venue: string, mailSources: string[]): {subject: string; text: string; csv: Uint8Array} {
+  const exact = (cents: number) => unitPrice(cents);
+  const lines = batch.rows.map(row => `${shortDate(row.dueDate)}  ${row.supplier}${row.number ? `, č. ${row.number}` : ''}  ${exact(row.grossCents)}${mailSources.includes(row.source) ? '  (z pošty)' : ''}`);
+  const text = [`Dobrý den,`, ``,
+    `faktury ${venue} k hromadné platbě na ${dayName(batch.payDay)} ${shortDate(batch.payDay)} (splatné do ${shortDate(addDays(batch.nextPayDay, -1))}): ${batch.rows.length}, celkem ${exact(batch.totalCents)}.`, ``,
+    ...lines, ``,
+    ...(batch.rows.some(row => mailSources.includes(row.source)) ? [`U faktur z pošty OKO1 nevidí, jestli už jsou zaplacené; zaplacené prosím přeskočte.`, ``] : []),
+    `Seznam je i v příloze (CSV pro Excel). Co se nakonec platí, schvaluje provozovna jako dosud.`, ``,
+    `OKO1, ${venue}`, `(automatická zpráva, odpovědi chodí na info@)`].join('\n');
+  const quote = (value: string) => /[";\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+  const csv = ['Splatnost;Dodavatel;Číslo;Částka s DPH;Zdroj', ...batch.rows.map(row => [row.dueDate, quote(row.supplier), quote(row.number ?? ''),
+    (row.grossCents / 100).toFixed(2).replace('.', ','), mailSources.includes(row.source) ? 'pošta' : row.source].join(';'))].join('\r\n') + '\r\n';
+  return {subject: `Faktury k platbě ${dayName(batch.payDay)} ${shortDate(batch.payDay)}: ${batch.rows.length}× ${crownsTotal(batch.totalCents)}`, text,
+    csv: new TextEncoder().encode('\ufeff' + csv)};
 }
 
 export const newSupplierText = (row: NewMailSupplier) => `${row.supplier}${row.supplierId ? ` (IČO ${row.supplierId})` : ''}${row.number ? ` č. ${row.number}` : ''}, ${crownsTotal(row.grossCents)}${row.sender ? `, poslal ${row.sender}` : ''}`;
@@ -449,6 +504,9 @@ export function renderSupplies(brief: SupplyBrief | null): string[] {
   if (brief.unreadable?.length) lines.push(`Z pošty nešlo přečíst ${brief.unreadable.length === 1 ? '1 doklad' : `${brief.unreadable.length} ${brief.unreadable.length <= 4 ? 'doklady' : 'dokladů'}`}: ${brief.unreadable.slice(0, 3).map(unreadableText).join(' · ')}`);
   if (brief.duplicates?.length) lines.push(`⚠ Možná duplicitní faktury: ${brief.duplicates.slice(0, 3).map(duplicateText).join(' · ')}`);
   if (brief.conflicts?.length) lines.push(`⚠ Stejná faktura s jinou částkou: ${brief.conflicts.slice(0, 3).map(conflictText).join(' · ')}`);
+  // Missing invoices: on the day one is first missed and in the Monday message, not every morning (the to-do list keeps them).
+  const missing = (brief.missing ?? []).filter(row => row.since === brief.month.to || weekday(brief.month.to) === 0);
+  if (missing.length) lines.push(`⚠ Nepřišla obvyklá faktura: ${missing.slice(0, 3).map(missingText).join(' · ')}${missing.length > 3 ? ` · … a další ${missing.length - 3}` : ''}`);
   if (brief.newFromMail?.length) lines.push(`⚠ Faktura z pošty od dodavatele, kterého ještě neznáme (ověřit, než se zaplatí): ${brief.newFromMail.slice(0, 3).map(newSupplierText).join(' · ')}`);
   if (brief.payments) lines.push(`Hromadná platba ${paymentText(brief.payments)} (splatné do ${shortDate(addDays(brief.payments.nextPayDay, -1))}): ` +
     brief.payments.rows.slice(0, 5).map(row => `${row.supplier} ${crownsTotal(row.grossCents)}`).join(' · ') + (brief.payments.rows.length > 5 ? ` · … a další ${brief.payments.rows.length - 5}` : ''));

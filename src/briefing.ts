@@ -896,7 +896,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderReviews(briefing.reviews));
   lines.push(...renderCosts(briefing.costs, briefing.costsPrevious));
   lines.push(...renderSupplies(briefing.supplies));
-  lines.push(...renderMail(briefing.mail?.insights ?? null, briefing.mail?.weekly ?? null, briefing.mail?.monthly ?? null));
+  lines.push(...renderMail(briefing.mail?.insights ?? null, briefing.mail?.weekly ?? null, briefing.mail?.monthly ?? null, briefing.mail?.previousWeek ?? null, briefing.mail?.repeated ?? []));
   lines.push(...renderPriceMismatches(briefing.priceMismatches));
   lines.push(...renderMenuWeek(briefing.menuDay, 'Lístek se změnil'), ...(briefing.menuProblems ?? []).map(text => `⚠ ${text}`));
   lines.push(...renderNotes(briefing));
