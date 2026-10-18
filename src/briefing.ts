@@ -6,6 +6,7 @@ import {weatherText, type WeatherDay} from './weather.ts';
 import type {TableCheck} from './checks.ts';
 import {renderThemes, THEMES, type DjRank, type ThemeSummary} from './themes.ts';
 import {cashNeedText, payoutAlarmText, renderNights, renderTill, type CashNeed, type NightSummary, type PayoutAlarm, type Till} from './cash.ts';
+import {nightShareText, renderNightShares, renderStaffGaps, renderWageDay, staffGapToday, wageSumText, type NightShare, type StaffGaps, type WageDay, type WageSum} from './wages.ts';
 import {renderForeignWeek, renderIncidents, staffMealsText, type ForeignWeek, type Incident, type StaffMeals} from './incidents.ts';
 import {gapsText, hasGaps, shiftSignals, shiftText, type DataGaps, type MonthTarget} from './goals.ts';
 import {renderSupplies, type SupplyBrief} from './supplies.ts';
@@ -120,6 +121,10 @@ export type Briefing = {
   /** On a month's last day the incidents of the month, on Monday the foreign cash of the week (src/incidents.ts). */
   incidents?: Incident[] | null;
   foreignWeek?: ForeignWeek | null;
+  /** The day's cash payouts by kind, a night whose staff took an unusual share of the club, missing staff by weekday (src/wages.ts). */
+  wageDay?: WageDay | null;
+  nightShare?: NightShare | null;
+  staffGaps?: StaffGaps | null;
   /** The target of the month the starting day is in (src/goals.ts). */
   target?: MonthTarget | null;
   /** Days of the 14 before without revenue or with the cash book only; only for this morning's message. */
@@ -163,6 +168,7 @@ export type Month = {
   discounts: {label: string; amountCents: number}[]; discountsCents: number;
   /** "Personál" discounts of the month; a month stored before has none. */
   staffMeals?: StaffMeals;
+  wages?: WageSum;
   reviews?: ReviewStats;
 };
 /** Discounts by type summed over the same weekday of the previous weeks that have a managers' report (`days` of them). */
@@ -737,6 +743,7 @@ export function buildBriefing(input: {
   lastYearRevenueCents?: number | null; target?: MonthTarget | null; dataGaps?: DataGaps | null;
   cashNeed?: CashNeed | null; payoutAlarm?: PayoutAlarm | null; nights?: NightSummary | null; till?: Till | null;
   incidents?: Incident[] | null; foreignWeek?: ForeignWeek | null;
+  wageDay?: WageDay | null; nightShare?: NightShare | null; staffGaps?: StaffGaps | null;
 }): Briefing {
   const closed = input.bills.filter(bill => bill.status === 'closed');
   const add = <K>(map: Map<K, number>, key: K, value: number) => map.set(key, (map.get(key) ?? 0) + value);
@@ -826,6 +833,7 @@ export function buildBriefing(input: {
     unusualDiscounts: report ? unusualDiscounts(report, input.discountHistory ?? {days: 0, totals: {}}) : [],
     silent: input.silent ?? [],
     cashNeed: input.cashNeed ?? null, payoutAlarm: input.payoutAlarm ?? null, nights: input.nights ?? null, till: input.till ?? null, incidents: input.incidents ?? null, foreignWeek: input.foreignWeek ?? null,
+    wageDay: input.wageDay ?? null, nightShare: input.nightShare ?? null, staffGaps: input.staffGaps ?? null,
     lastYearRevenueCents: input.lastYearRevenueCents ?? null, target: input.target ?? null, dataGaps: input.dataGaps ?? null,
     tableChecks: input.tableChecks ?? [], noteThemes: input.noteThemes ?? [], themes: input.themes ?? null, djRanking: input.djRanking ?? null,
     incomplete: input.incomplete,
@@ -878,6 +886,8 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderTableChecks(briefing.tableChecks));
   if (briefing.payoutAlarm) lines.push(`⚠ Výplaty v hotovosti: ${payoutAlarmText(briefing.payoutAlarm)}`);
   lines.push(...renderTill(briefing.till));
+  lines.push(...renderWageDay(briefing.wageDay));
+  if (briefing.nightShare) lines.push(`⚠ Výplaty noci nad obvyklým podílem: ${nightShareText(briefing.nightShare)}`);
   if (briefing.cashNeed) lines.push(`⚠ Hotovost na dnešek: ${cashNeedText(briefing.cashNeed)}; doplň hotovost nebo rozlož výplaty.`);
   lines.push(...renderBottles(briefing));
   lines.push(...renderReservations(briefing.reservations, briefing.outlook));
@@ -887,6 +897,8 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   if (weak.length) lines.push(`⚠ Slabší výhled: ${weakDaysText(weak, briefing.eventRanking)}`);
   const shifts = shiftSignals(briefing.guestOutlook?.days);
   if (shifts.length) lines.push(`Směny na 7 dní: ${shifts.slice(0, SHIFT_LINES).map(shiftText).join(' · ')}${shifts.length > SHIFT_LINES ? ` a další ${shifts.length - SHIFT_LINES}` : ''}`);
+  const staffGap = staffGapToday(addDays(briefing.businessDate, 1), briefing.staffGaps);
+  if (staffGap) lines.push(`Personál: ${staffGap}`);
   if (briefing.pendingAhead) lines.push(`Na příštích 7 dní ${pendingAheadText(briefing.pendingAhead)}`);
   if (noShowAlarm(briefing.noShows)) lines.push(`⚠ No-show: ${noShowText(briefing.noShows!)}`);
   lines.push(...renderForecast(briefing.forecast));
@@ -901,7 +913,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderMenuWeek(briefing.menuDay, 'Lístek se změnil'), ...(briefing.menuProblems ?? []).map(text => `⚠ ${text}`));
   lines.push(...renderNotes(briefing));
   // The week in a few numbers once a week, in the message about Sunday (Monday morning).
-  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceResults(briefing.priceResults), ...renderPriceCheck(briefing.priceCheck), ...renderMenuGaps(briefing.menuGaps), ...renderMenuInterest(briefing.menuInterest), ...renderMenuByLanguage(briefing.menuByLanguage), ...renderCompetitors(briefing.competitors), ...renderThemes(briefing.themes), ...renderDjs(briefing.djRanking), ...renderNights(briefing.nights), ...renderForeignWeek(briefing.foreignWeek));
+  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceResults(briefing.priceResults), ...renderPriceCheck(briefing.priceCheck), ...renderMenuGaps(briefing.menuGaps), ...renderMenuInterest(briefing.menuInterest), ...renderMenuByLanguage(briefing.menuByLanguage), ...renderCompetitors(briefing.competitors), ...renderThemes(briefing.themes), ...renderDjs(briefing.djRanking), ...renderNights(briefing.nights), ...renderNightShares(briefing.nights?.nights), ...renderStaffGaps(briefing.staffGaps), ...renderForeignWeek(briefing.foreignWeek));
   // The month so far once a week, and the whole month in the message about its last day (the 1st in the morning).
   lines.push(...renderMonth(briefing.month));
   // Which events draw guests, once a month in the message about its last day.
@@ -1166,7 +1178,11 @@ export function renderMonth(month: Briefing['month']): string[] {
     now.revenueDays < Number(month.through.slice(8)) ? `${daysWord(now.revenueDays)} s daty` : ''].filter(Boolean);
   const parts = [`tržba ${crowns(now.revenueCents)}${notes.length ? ` (${notes.join(', ')})` : ''}`];
   if (now.bySection && now.bySection.length > 1) parts.push(now.bySection.map(row => `${row.label} ${crowns(row.revenueCents)}`).join(' · '));
-  if (month.payoutsCents) parts.push(`výplaty v hotovosti ${crowns(month.payoutsCents)}${share(month.payoutsCents, now.revenueCents)}`);
+  if (month.payoutsCents) {
+    // The payouts by kind (src/wages.ts) inside the same brackets as their share of the revenue.
+    const payoutShare = share(month.payoutsCents, now.revenueCents), kinds = month.wages ? wageSumText(month.wages) : '';
+    parts.push(`výplaty v hotovosti ${crowns(month.payoutsCents)}${kinds ? (payoutShare ? `${payoutShare.slice(0, -1)}; ${kinds})` : ` (${kinds})`) : payoutShare}`);
+  }
   if (month.expensesCents) parts.push(`výdaje z kasy ${crowns(month.expensesCents)}`);
   if (month.discountsCents) parts.push(`slevy ${crowns(month.discountsCents)}`);
   if (month.staffMeals?.cents) parts.push(staffMealsText(month.staffMeals));

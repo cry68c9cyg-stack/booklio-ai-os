@@ -3,6 +3,7 @@ import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provid
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
 import {cashDay, cashNeed, nightSummary, payoutAlarm, tillDay, type NightSummary, type Till} from './cash.ts';
 import {tableChecks} from './checks.ts';
+import {nightShare, staffGaps, sumWages, wageDay, type WageDay} from './wages.ts';
 import {foreignWeek, incidents, type ForeignCash, type Incident} from './incidents.ts';
 import {GAP_DAYS, monthBase, monthTarget, shiftSignals, type DataGaps, type MonthTarget, type TargetBase} from './goals.ts';
 import {noteThemes, rankDjs, djOf, summarizeThemes, type DjRank, type ThemeSummary} from './themes.ts';
@@ -396,7 +397,7 @@ export class TenantObject extends DurableObject<Env> {
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
       week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day, briefing.forecast?.month.month === day.slice(0, 7) ? briefing.forecast.month.restCents : null), mail: this.mailInsightsBetween(new Date(Date.now() - 30 * 86400000).toISOString(), new Date().toISOString(), new Date()),
       themes: briefing.themes ?? this.themeSummary(day), djRanking: briefing.djRanking ?? this.djRanking(day), nights: this.nightsFor(addDays(day, -27), day),
-      incidents: this.incidentsBetween(addDays(day, -89), day).reverse(), foreignWeek: briefing.foreignWeek ?? foreignWeek(day, Array.from({length: 15}, (_, i) => this.foreignCash(addDays(day, i - 14))))});
+      incidents: this.incidentsBetween(addDays(day, -89), day).reverse(), wages: this.posWages(addDays(day, -29), day), foreignWeek: briefing.foreignWeek ?? foreignWeek(day, Array.from({length: 15}, (_, i) => this.foreignCash(addDays(day, i - 14))))});
   }
 
   /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
@@ -1513,7 +1514,7 @@ export class TenantObject extends DurableObject<Env> {
       current: this.monthPart(config, from, date), previous: {...this.monthPart(config, previousMonth + '-01', previousThrough), month: previousMonth, through: previousThrough},
       lastYear: {...this.monthPart(config, yearBack(from), yearBack(date)), month: yearBack(from).slice(0, 7), through: yearBack(date)},
       payouts, payoutsCents: sum(payouts), expenses, expensesCents: sum(expenses), discounts: discounts.rows, discountsCents: discounts.totalCents,
-      staffMeals: this.staffMeals(from, date), reviews: this.reviewStats(from, date)};
+      staffMeals: this.staffMeals(from, date), wages: sumWages(this.wageDays(from, date)), reviews: this.reviewStats(from, date)};
   }
 
   /** Discounts by type on the same weekday of the 4 weeks before, counting only days whose managers' report has the discount block. */
@@ -1910,6 +1911,35 @@ export class TenantObject extends DurableObject<Env> {
     return {day, debtsWeekAgoCents: tillDay(this.report(addDays(date, -7)))?.debtsCents ?? null, month: date.slice(0, 7), monthDepositsCents, monthTipsCents};
   }
 
+  /** The cash payouts of each day of a stretch by kind (night, other wages, trial shifts; src/wages.ts). */
+  private wageDays(from: string, to: string): WageDay[] {
+    const days: WageDay[] = [];
+    for (let entry = from; entry <= to; entry = addDays(entry, 1)) { const day = wageDay(this.report(entry)); if (day) days.push(day); }
+    return days;
+  }
+
+  /** The reported night's staff against the club's revenue, and the same weekday of the 4 weeks before. */
+  private nightShareFor(date: string) {
+    const nights = this.nightsFor(addDays(date, -28), date).nights;
+    return nightShare(nights.find(night => night.date === date), nights.filter(night => night.date !== date));
+  }
+
+  /** Days of the 8 weeks up to a day whose "Report dne" says staff was missing, by weekday. */
+  private staffGapsFor(date: string) {
+    const from = addDays(date, -55);
+    return staffGaps(from, date, this.noteDays(from, date).filter(day => day.text));
+  }
+
+  /** MCP: cash payouts by kind over a stretch, the nights' staff against the club, and the weekdays with missing staff. */
+  posWages(from: string, to: string) {
+    if (!this.config()) return null;
+    const days = this.wageDays(from, to), nights = this.nightsFor(from, to).nights;
+    return {from, to, total: sumWages(days), days,
+      nights: nights.filter(night => night.clubCents !== null && night.staffCents > 0).map(night => ({date: night.date, staffCents: night.staffCents, clubCents: night.clubCents,
+        sharePermille: Math.round(night.staffCents / night.clubCents! * 1000)})),
+      staffGaps: staffGaps(from, to, this.noteDays(from, to).filter(day => day.text))};
+  }
+
   /** Each night with the club's revenue and the cash book: what is left after the night's staff is paid, by weekday and DJ. */
   private nightsFor(from: string, to: string): NightSummary {
     const nights = this.noteDays(from, to).map(day => {
@@ -1998,7 +2028,7 @@ export class TenantObject extends DurableObject<Env> {
       lastYearRevenueCents: this.dayRevenue(addDays(date, -364)), target: this.monthTargetFor(date), dataGaps: this.dataGaps(config, date, now),
       incidents: addDays(date, 1).endsWith('-01') ? this.incidentsBetween(date.slice(0, 8) + '01', date) : null,
       foreignWeek: weekday(date) === 0 ? foreignWeek(date, Array.from({length: 15}, (_, i) => this.foreignCash(addDays(date, i - 14)))) : null,
-      cashNeed: this.cashNeedFor(date), payoutAlarm: this.payoutAlarmFor(date), till: this.tillFor(date), nights: weekday(date) === 0 ? this.nightsFor(addDays(date, -27), date) : null,
+      cashNeed: this.cashNeedFor(date), payoutAlarm: this.payoutAlarmFor(date), till: this.tillFor(date), wageDay: wageDay(this.report(date)), nightShare: this.nightShareFor(date), staffGaps: this.staffGapsFor(date), nights: weekday(date) === 0 ? this.nightsFor(addDays(date, -27), date) : null,
       tableChecks: tableChecks(this.report(date), this.report(addDays(date, -1))), noteThemes: noteThemes(this.report(date)?.notes),
       themes: weekday(date) === 0 ? this.themeSummary(date) : null, djRanking: weekday(date) === 0 ? this.djRanking(date) : null,
       supplies: this.supplyBriefFor(config, date, forecast?.month.month === date.slice(0, 7) ? forecast.month.restCents : null), mail: this.mailBriefFor(config, date, now),
