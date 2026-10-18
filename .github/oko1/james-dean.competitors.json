@@ -8,7 +8,8 @@
         "name": "Classic Cheeseburger",
         "category": "Burgery",
         "priceIndex": 1
-      }
+      },
+      "section": "food"
     },
     {
       "item": "fries",
@@ -16,7 +17,8 @@
       "ours": {
         "name": "Hranolky",
         "category": "Přílohy"
-      }
+      },
+      "section": "food"
     },
     {
       "item": "wings",
@@ -24,7 +26,8 @@
       "ours": {
         "name": "Kuřecí křídla",
         "category": "Steaky"
-      }
+      },
+      "section": "food"
     },
     {
       "item": "milkshake",
@@ -32,7 +35,8 @@
       "ours": {
         "name": "Vanilkový",
         "category": "Mléčné koktejly"
-      }
+      },
+      "section": "soft"
     },
     {
       "item": "beer",
@@ -42,7 +46,8 @@
         "name": "Budvar Original",
         "category": "Pivo & cider",
         "group": "Točené"
-      }
+      },
+      "section": "alcohol"
     },
     {
       "item": "cola",
@@ -51,7 +56,8 @@
       "ours": {
         "name": "Coca-Cola",
         "category": "Nealkoholické nápoje"
-      }
+      },
+      "section": "soft"
     },
     {
       "item": "cappuccino",
@@ -59,7 +65,8 @@
       "ours": {
         "name": "Cappuccino",
         "category": "Káva a horké nápoje"
-      }
+      },
+      "section": "soft"
     },
     {
       "item": "mojito",
@@ -67,7 +74,8 @@
       "ours": {
         "name": "Mojito",
         "category": "Caipirinhy"
-      }
+      },
+      "section": "alcohol"
     },
     {
       "item": "aperol",
@@ -75,7 +83,8 @@
       "ours": {
         "name": "Aperol Spritz",
         "category": "Aperitivy"
-      }
+      },
+      "section": "alcohol"
     }
   ],
   "venues": [

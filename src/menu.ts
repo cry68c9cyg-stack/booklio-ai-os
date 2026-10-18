@@ -60,40 +60,65 @@ const kc = (cents: number) => String(Math.round(cents / 100)).replace(/\B(?=(\d{
 export const COMPETITOR_SHARE = 15, COMPETITOR_MIN_VENUES = 3;
 /** How far a drink's volume may be from the basket's to be recalculated to it (a 0,5 l beer is not a 0,3 l one by the litre). */
 export const COMPETITOR_VOLUME_SHARE = 0.2;
+/** Volumes recalculated by the millilitre (spirits, wine by the glass) only from a glass, not from a bottle: 0,4× to 2,5× the basket's. */
+const PER_VOLUME_RANGE = [0.4, 2.5];
+export const COMPETITOR_SECTION_NAMES: Record<CompetitorPrices['basket'][number]['section'], string> = {food: 'Jídlo', alcohol: 'Alkoholické nápoje', soft: 'Nealkoholické nápoje'};
 export type CompetitorRow = {
-  item: string; label: string; volumeMl: number | null; ourName: string | null; ourCents: number | null;
+  item: string; label: string; section: CompetitorPrices['basket'][number]['section']; volumeMl: number | null; ourName: string | null; ourCents: number | null;
   /** Every venue's cheapest matching line; `approx` = not quite the same item (shown, left out of the median). */
   venues: {name: string; cents: number; line: string; note: string | null; approx: boolean}[]; medianCents: number | null; minCents: number | null; maxCents: number | null;
   /** Ours against the median in whole per cent; null without our price or with fewer than 3 venues. */
   diffPct: number | null;
 };
+const median = (sorted: number[]) => !sorted.length ? null : sorted.length % 2 ? sorted[sorted.length >> 1]
+  : Math.round((sorted[(sorted.length >> 1) - 1] + sorted[sorted.length >> 1]) / 2);
 /**
- * Our current price of each basket item against the venues nearby. With a basket volume, prices are recalculated to it
- * only from a volume within 20 % of it (a price without its volume, or of a much bigger or smaller glass, is left out);
- * our own item is looked up in the current menu by name, category and group. The median is of the exact matches only.
+ * Our current price of each compared item against the venues nearby. With a basket volume, prices are recalculated to it:
+ * by the millilitre for `perVolume` items (from a glass of 0,4× to 2,5× the volume), otherwise only from a volume within
+ * 20 % of it; a price without its volume is left out. Our own item is looked up in the current menu by name, category,
+ * group and volume. The median is of the exact matches only.
  */
 export function competitorComparison(menu: Menu | null, data: CompetitorPrices): CompetitorRow[] {
-  const at = (cents: number, ml: number | null, target: number | null) =>
-    !target ? cents : ml && Math.abs(ml - target) <= target * COMPETITOR_VOLUME_SHARE ? Math.round(cents * target / ml) : null;
+  const at = (cents: number, ml: number | null, entry: CompetitorPrices['basket'][number]) => {
+    const target = entry.volumeMl;
+    if (!target) return cents;
+    if (!ml) return null;
+    const ratio = ml / target;
+    const fits = entry.perVolume ? ratio >= PER_VOLUME_RANGE[0] && ratio <= PER_VOLUME_RANGE[1] : Math.abs(ratio - 1) <= COMPETITOR_VOLUME_SHARE;
+    return fits ? Math.round(cents / ratio) : null;
+  };
   return data.basket.map(entry => {
-    const own = entry.ours && menu?.items.find(item => nameKey(item.name) === nameKey(entry.ours!.name) &&
-      (!entry.ours!.category || nameKey(item.category) === nameKey(entry.ours!.category)) && (!entry.ours!.group || nameKey(item.group ?? '') === nameKey(entry.ours!.group)));
-    const ownCents = own ? own.pricesCents[Math.min(entry.ours!.priceIndex, own.pricesCents.length - 1)] : undefined;
-    const ourCents = own && ownCents !== undefined ? at(ownCents, own.volumeMl ?? volumeOf(own.volume ?? ''), entry.volumeMl) : null;
+    const ours = entry.ours;
+    const own = ours && menu?.items.find(item => nameKey(item.name) === nameKey(ours.name) &&
+      (!ours.category || nameKey(item.category) === nameKey(ours.category)) && (!ours.group || nameKey(item.group ?? '') === nameKey(ours.group)) &&
+      (!ours.volumeMl || (item.volumeMl ?? volumeOf(item.volume ?? '')) === ours.volumeMl));
+    const ownCents = own ? own.pricesCents[Math.min(ours!.priceIndex, own.pricesCents.length - 1)] : undefined;
+    const ourCents = own && ownCents !== undefined ? at(ownCents, own.volumeMl ?? volumeOf(own.volume ?? ''), entry) : null;
     const venues = data.venues.flatMap(venue => {
       // The cheapest matching line of a venue (its basic version), an exact match before a look-alike.
       const lines = venue.items.filter(item => item.item === entry.item).flatMap(item => {
-        const cents = at(item.priceCzk * 100, item.volumeMl, entry.volumeMl);
+        const cents = at(item.priceCzk * 100, item.volumeMl, entry);
         return cents === null ? [] : [{name: venue.name, cents, line: item.name, note: item.note, approx: item.approx}];
       }).sort((a, b) => Number(a.approx) - Number(b.approx) || a.cents - b.cents);
       return lines.length ? [lines[0]] : [];
     }).sort((a, b) => a.cents - b.cents);
-    const sorted = venues.filter(row => !row.approx).map(row => row.cents), middle = sorted.length >> 1;
-    const medianCents = sorted.length ? (sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2)) : null;
-    return {item: entry.item, label: entry.label, volumeMl: entry.volumeMl, ourName: own ? own.name : null, ourCents, venues, medianCents,
+    const sorted = venues.filter(row => !row.approx).map(row => row.cents), medianCents = median(sorted);
+    return {item: entry.item, label: entry.label, section: entry.section, volumeMl: entry.volumeMl, ourName: own ? own.name : null, ourCents, venues, medianCents,
       minCents: sorted.length ? sorted[0] : null, maxCents: sorted.length ? sorted[sorted.length - 1] : null,
       diffPct: ourCents !== null && medianCents && sorted.length >= COMPETITOR_MIN_VENUES ? Math.round((ourCents / medianCents - 1) * 100) : null};
   });
+}
+
+export type CompetitorSection = {section: CompetitorRow['section']; name: string; compared: number;
+  /** The median of our differences over the compared items, in whole per cent: how the whole part of the menu stands. */
+  medianDiffPct: number | null; above: number; below: number};
+/** The whole menu by part (food, alcohol, soft drinks): how many items are compared and where the part stands. */
+export function competitorSections(rows: CompetitorRow[]): CompetitorSection[] {
+  return (Object.keys(COMPETITOR_SECTION_NAMES) as CompetitorRow['section'][]).map(section => {
+    const diffs = rows.filter(row => row.section === section && row.diffPct !== null).map(row => row.diffPct!).sort((a, b) => a - b);
+    return {section, name: COMPETITOR_SECTION_NAMES[section], compared: diffs.length, medianDiffPct: median(diffs),
+      above: diffs.filter(diff => diff >= COMPETITOR_SHARE).length, below: diffs.filter(diff => diff <= -COMPETITOR_SHARE).length};
+  }).filter(section => rows.some(row => row.section === section.section));
 }
 
 /**

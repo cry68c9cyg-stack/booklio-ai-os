@@ -4,7 +4,7 @@ import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
 import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, type MenuMonth, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, sumMenuInterest, type MenuInterest, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
-import {competitorComparison, COMPETITOR_SHARE, itemProfit, menuChanges, menuGaps, menuItemTax, menuMatrix, menuOverview, nameKey, PART_NAMES, pairSale, priceText, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
+import {competitorComparison, competitorSections, COMPETITOR_SHARE, itemProfit, menuChanges, menuGaps, menuItemTax, menuMatrix, menuOverview, nameKey, PART_NAMES, pairSale, priceText, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
 import {czechHolidays, holidayName} from './holidays.ts';
@@ -897,18 +897,21 @@ export class TenantObject extends DurableObject<Env> {
     return row ? JSON.parse(row.json) as CompetitorPrices : null;
   }
 
-  /** Our prices against the venues nearby: the date they were read and one row per basket item; null before the first set. */
+  /** Our prices against the venues nearby: the date they were read, the parts of the menu and one row per compared item; null before the first set. */
   private competitorCard() {
     const data = this.competitors();
-    return data ? {checkedOn: data.checkedOn, venues: data.venues.map(venue => ({name: venue.name, area: venue.area, url: venue.url})), rows: competitorComparison(this.menu(), data)} : null;
+    if (!data) return null;
+    const rows = competitorComparison(this.menu(), data);
+    return {checkedOn: data.checkedOn, venues: data.venues.map(venue => ({name: venue.name, area: venue.area, kind: venue.kind, url: venue.url, note: venue.note, items: venue.items.length})),
+      sections: competitorSections(rows), rows};
   }
 
-  /** Monday message, in the week after the prices nearby were read: what is far above or below their median. */
+  /** Monday message, in the week after the prices nearby were read: the parts of the menu and the items furthest from their median. */
   private competitorSummary(date: string) {
     const card = this.competitorCard();
     if (!card || card.checkedOn > date || card.checkedOn < addDays(date, -6)) return null;
     const rows = card.rows.filter(row => row.diffPct !== null);
-    return {checkedOn: card.checkedOn, venues: card.venues.length, compared: rows.length,
+    return {checkedOn: card.checkedOn, venues: card.venues.filter(venue => venue.items).length, compared: rows.length, sections: card.sections.filter(section => section.compared),
       above: rows.filter(row => row.diffPct! >= COMPETITOR_SHARE).sort((a, b) => b.diffPct! - a.diffPct!),
       below: rows.filter(row => row.diffPct! <= -COMPETITOR_SHARE).sort((a, b) => a.diffPct! - b.diffPct!)};
   }
@@ -1908,7 +1911,8 @@ async function app(request: Request, env: Env): Promise<Response> {
   if (match[1] === 'v1' && !token) return json(failure('UNAUTHORIZED', 401));
   let body: unknown = null;
   if (request.method !== 'GET') {
-    body = await readBody(request, route === 'v1/ingest' ? 1048576 : 262144);
+    // Prices of every venue nearby are bigger than other admin bodies (stored as one row, which SQLite caps at 2 MB).
+    body = await readBody(request, route === 'v1/ingest' || route === 'admin/competitors' ? 1048576 : 262144);
     if (isResult(body)) return json(body);
   }
   const tenant = match[2];

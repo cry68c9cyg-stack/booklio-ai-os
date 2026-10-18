@@ -334,13 +334,22 @@ function menuCard(m) {
   const co = m.competitors;
   if (co) {
     const vol = ml => ml ? ' <span class="muted">' + (ml < 100 ? ml + ' ml' : String(ml / 1000).replace('.', ',') + ' l') + '</span>' : '';
-    const diff = p => p === null ? '<span class="muted">–</span>' : '<span class="' + (Math.abs(p) >= 15 ? 'warn' : '') + '">' + (p === 0 ? '±0' : (p > 0 ? '+' : '−') + Math.abs(p)) + ' %</span>';
-    h += '<h3>Ceny proti okolí <span class="muted">(' + co.venues.length + (co.venues.length === 1 ? ' podnik' : co.venues.length <= 4 ? ' podniky' : ' podniků') + ', ceny z jejich webů ' + esc(short(co.checkedOn)) + ')</span></h3><div class="scroll"><table><tr><th>Položka</th><th class="n">Naše</th><th class="n">Okolí (medián)</th><th class="n">Rozpětí</th><th class="n">Rozdíl</th></tr>' +
-      co.rows.map(r => '<tr><td title="' + esc(r.venues.map(v => v.name + ': ' + v.line + ' ' + kc(v.cents) + (v.approx ? ' (jen podobné, mimo medián)' : '') + (v.note ? ', ' + v.note : '')).join('\\n')) + '">' + esc(r.label) + vol(r.volumeMl) +
-        (r.ourName ? '<div class="muted">' + esc(r.ourName) + '</div>' : '') + '</td><td class="n">' + kc(r.ourCents) + '</td><td class="n">' + kc(r.medianCents) +
-        ' <span class="muted">(' + r.venues.filter(v => !v.approx).length + (r.venues.some(v => v.approx) ? ' + ' + r.venues.filter(v => v.approx).length + ' podobné' : '') + ')</span></td><td class="n">' + (r.venues.length ? kc(r.minCents) + '–' + kc(r.maxCents) : '–') + '</td><td class="n">' + diff(r.diffPct) + '</td></tr>').join('') + '</table></div>' +
-      '<details><summary class="muted">Podniky</summary><div class="muted">' + co.venues.map(v => '<a href="' + esc(v.url) + '" target="_blank" rel="noopener">' + esc(v.name) + '</a>' + (v.area ? ' (' + esc(v.area) + ')' : '')).join(' · ') + '</div></details>' +
-      '<div class="muted">nápoje přepočtené na uvedený objem (jen z objemu do ±20 %); medián a rozpětí jen z podniků se stejnou položkou, podobné (např. burger se slaninou) jsou jen pro představu; rozdíl od 3 podniků; ±15 % a víc je zvýrazněné; podrobnosti po najetí na položku</div>';
+    const signed = p => p === 0 ? '±0 %' : (p > 0 ? '+' : '−') + Math.abs(p) + ' %';
+    const diff = p => p === null ? '<span class="muted">–</span>' : '<span class="' + (Math.abs(p) >= 15 ? 'warn' : '') + '">' + signed(p) + '</span>';
+    const count = (n, one, few, many) => n + ' ' + (n === 1 ? one : n >= 2 && n <= 4 ? few : many);
+    const online = co.venues.filter(v => v.items).length;
+    h += '<h3>Ceny proti okolí <span class="muted">(' + count(co.venues.length, 'podnik', 'podniky', 'podniků') + ' v Dlouhé a V Kolkovně' + (online < co.venues.length ? ', s cenami online ' + online : '') + ', ceny z jejich lístků ' + esc(short(co.checkedOn)) + ')</span></h3>' +
+      co.sections.map(sec => {
+        const rows = co.rows.filter(r => r.section === sec.section && r.venues.length);
+        return '<details><summary><b>' + esc(sec.name) + '</b> ' + (sec.medianDiffPct === null ? '<span class="muted">málo srovnatelných cen</span>' : 'celkově ' + diff(sec.medianDiffPct)) +
+          ' <span class="muted">· srovnáno ' + count(sec.compared, 'položka', 'položky', 'položek') + (sec.above ? ', dráže o 15 % a víc ' + sec.above : '') + (sec.below ? ', levněji o 15 % a víc ' + sec.below : '') + '</span></summary>' +
+          (rows.length ? '<div class="scroll"><table><tr><th>Položka</th><th class="n">Naše</th><th class="n">Okolí (medián)</th><th class="n">Rozpětí</th><th class="n">Rozdíl</th></tr>' +
+          rows.map(r => '<tr><td title="' + esc(r.venues.map(v => v.name + ': ' + v.line + ' ' + kc(v.cents) + (v.approx ? ' (jen podobné, mimo medián)' : '') + (v.note ? ', ' + v.note : '')).join('\\n')) + '">' + esc(r.label) + vol(r.volumeMl) +
+            (r.ourName ? '<div class="muted">' + esc(r.ourName) + '</div>' : '<div class="muted">u nás není</div>') + '</td><td class="n">' + (r.ourCents === null ? '<span class="muted">–</span>' : kc(r.ourCents)) + '</td><td class="n">' + (r.medianCents === null ? '<span class="muted">–</span>' : kc(r.medianCents)) +
+            ' <span class="muted">(' + r.venues.filter(v => !v.approx).length + (r.venues.some(v => v.approx) ? ' + ' + r.venues.filter(v => v.approx).length + ' podobné' : '') + ')</span></td><td class="n">' + (r.minCents === null ? '–' : kc(r.minCents) + '–' + kc(r.maxCents)) + '</td><td class="n">' + diff(r.diffPct) + '</td></tr>').join('') + '</table></div>' : '<span class="muted">žádný podnik nemá srovnatelnou položku</span>') + '</details>';
+      }).join('') +
+      '<details><summary class="muted">Podniky</summary><div class="muted">' + co.venues.map(v => '<a href="' + esc(v.url) + '" target="_blank" rel="noopener">' + esc(v.name) + '</a>' + (v.area || v.kind ? ' (' + esc([v.area, v.kind].filter(Boolean).join(', ')) + ')' : '') + (v.items ? '' : ' – ' + esc(v.note || 'bez cen online'))).join(' · ') + '</div></details>' +
+      '<div class="muted">celkově = medián našich rozdílů v dané části lístku; destiláty a víno rozlévané přepočtené na uvedený objem, ostatní nápoje jen z objemu do ±20 %; medián a rozpětí jen ze stejných položek, podobné jsou jen pro představu; rozdíl od 3 podniků; ±15 % a víc je zvýrazněné; ceny podniků po najetí na položku</div>';
   }
   const pr = m.profit;
   if (pr) {

@@ -797,12 +797,17 @@ try {
   assert.equal((await jdIngest('batch-jd-menu-0', [menuDay(addDays(today, -1), {...interest, languages: [{key: 'en', visits: 1}]})])).status, 400, 'a language needs reservations');
   assert.equal((await jdIngest('batch-jd-menu-1', [menuDay(addDays(today, -1), interest), menuDay(addDays(today, -2)), menuDay(addDays(today, -8), {...interest, visits: 10, abroad: 2, languages: [{key: 'cs', visits: 10, reserved: 2}]})])).status, 200);
   // Prices nearby (public menus, stored by the deploy): a wrong set is refused, the card compares with our current menu.
-  const nearby = {checkedOn: addDays(today, -3), basket: [{item: 'burger', label: 'Burger', ours: {name: 'Classic <b>Burger</b>', category: 'Burgery', priceIndex: 1}}],
-    venues: ['a', 'b', 'c'].map((key, i) => ({key, name: `Podnik <${key}>`, url: `https://${key}.example/menu`, items: [{item: 'burger', name: 'Burger', priceCzk: 200 + 10 * i}]}))};
+  const nearby = {checkedOn: addDays(today, -3), basket: [{item: 'burger', label: 'Burger', section: 'food', ours: {name: 'Classic <b>Burger</b>', category: 'Burgery', priceIndex: 1}}],
+    venues: [...['a', 'b', 'c'].map((key, i) => ({key, name: `Podnik <${key}>`, url: `https://${key}.example/menu`, items: [{item: 'burger', name: 'Burger', priceCzk: 200 + 10 * i}]})),
+      {key: 'd', name: 'Podnik d', kind: 'bar', url: 'https://d.example', note: 'lístek <i>není</i> online', items: []}]};
   assert.equal((await call('PUT', '/admin/t/james-dean/competitors', {...nearby, checkedOn: 'x'})).status, 400);
   assert.equal((await call('PUT', '/admin/t/james-dean/competitors', nearby, null)).status, 401, 'admin only');
-  assert.deepEqual((await (await call('PUT', '/admin/t/james-dean/competitors', nearby)).json()), {checkedOn: nearby.checkedOn, venues: 3, prices: 3});
-  assert.equal((await (await call('GET', '/admin/t/james-dean/competitors')).json()).venues.length, 3);
+  assert.deepEqual((await (await call('PUT', '/admin/t/james-dean/competitors', nearby)).json()), {checkedOn: nearby.checkedOn, venues: 4, prices: 3});
+  assert.equal((await (await call('GET', '/admin/t/james-dean/competitors')).json()).venues.length, 4);
+  const big = {...nearby, venues: [...nearby.venues, ...['e', 'f', 'g', 'h', 'i'].map(key => ({key, name: key, url: `https://${key}.example`, items: Array.from({length: 300}, () => ({item: 'burger', name: 'x'.repeat(200), priceCzk: 250}))}))]};
+  assert.ok(JSON.stringify(big).length > 262144);
+  assert.equal((await call('PUT', '/admin/t/james-dean/competitors', big)).status, 200, 'every venue nearby: a bigger body than other admin calls');
+  assert.equal((await call('PUT', '/admin/t/james-dean/competitors', nearby)).status, 200);
   const boardData = await (await jdBoard('GET', '/data', undefined, jdCookie)).json();
   assert.deepEqual([boardData.menuInterest.length, boardData.menuInterest[11].to, boardData.menuInterest[11].days, boardData.menuInterest[11].visits, boardData.menuInterest[11].food, boardData.menuInterest[11].languages,
     boardData.menuInterest[10].days, boardData.menuInterest[10].visits, boardData.menuInterest[9].days],
@@ -815,7 +820,8 @@ try {
   const nearbyRow = boardData.menu.competitors.rows[0];
   assert.deepEqual([nearbyRow.ourName, nearbyRow.medianCents, nearbyRow.diffPct], ['Classic <b>Burger</b>', 21000, Math.round((nearbyRow.ourCents / 21000 - 1) * 100)]);
   assert.ok(nearbyRow.ourCents > 0, 'our price from the current menu');
-  assert.match(content, /Ceny proti okolí <span class="muted">\(3 podniky,[\s\S]*Podnik &lt;a&gt;/, 'names escaped');
+  assert.deepEqual(boardData.menu.competitors.sections, [{section: 'food', name: 'Jídlo', compared: 1, medianDiffPct: nearbyRow.diffPct, above: nearbyRow.diffPct >= 15 ? 1 : 0, below: nearbyRow.diffPct <= -15 ? 1 : 0}]);
+  assert.match(content, /Ceny proti okolí <span class="muted">\(4 podniky v Dlouhé a V Kolkovně, s cenami online 3,[\s\S]*<b>Jídlo<\/b> celkově[\s\S]*Podnik &lt;a&gt;[\s\S]*Podnik d<\/a> \(bar\) – lístek &lt;i&gt;není&lt;\/i&gt; online/, 'names escaped, a venue without prices online');
   // The Monday message in the week after the prices were read, not later.
   const nearbySunday = [0, 1, 2, 3, 4, 5, 6].map(day => addDays(nearby.checkedOn, day)).find(day => new Date(day + 'T12:00:00Z').getUTCDay() === 0);
   const nearbyBriefing = async day => (await (await call('GET', `/admin/t/james-dean/briefing?date=${day}`)).json()).briefing.competitors;

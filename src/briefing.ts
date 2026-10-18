@@ -4,7 +4,7 @@ import {line, total, type DailyReport} from './daily-report.ts';
 import type {NotePoint, NotesAnalysis} from './notes.ts';
 import {weatherText, type WeatherDay} from './weather.ts';
 import {renderSupplies, type SupplyBrief} from './supplies.ts';
-import {pricesOfText, type CompetitorRow, type MenuGap, type PriceExperiment, type PriceFinding, type PriceMismatch} from './menu.ts';
+import {pricesOfText, type CompetitorRow, type CompetitorSection, type MenuGap, type PriceExperiment, type PriceFinding, type PriceMismatch} from './menu.ts';
 
 export type Briefing = {
   businessDate: string;
@@ -82,7 +82,7 @@ export type Briefing = {
   /** Monday: the 4 weeks up to the reported day, for how often visits that opened the menu sent a reservation, by the website's language. */
   menuByLanguage?: MenuInterest | null;
   /** Monday after the prices nearby were read: ours far above or below their median (src/menu.ts competitorComparison). */
-  competitors?: {checkedOn: string; venues: number; compared: number; above: CompetitorRow[]; below: CompetitorRow[]} | null;
+  competitors?: {checkedOn: string; venues: number; compared: number; sections?: CompetitorSection[]; above: CompetitorRow[]; below: CompetitorRow[]} | null;
   /** Reviews that reached the website's admin on the reported calendar day, and how many wait there. `null` = nothing sent. */
   reviews: {newCount: number; averageTenths: number | null; low: number; bySource: {name: string; newCount: number}[]; waiting: number; forManagement: number; failed: number} | null;
   /** The 7 days up to the reported day against the 7 before: sums only. `null` = not asked for. */
@@ -340,15 +340,26 @@ export function renderMenuByLanguage(interest: Briefing['menuByLanguage']): stri
   const rate = (row: {visits: number; reserved: number}) => (Math.round(row.reserved / row.visits * 1000) / 10).toFixed(1).replace('.', ',');
   return [`Rezervace po otevření lístku za 4 týdny podle jazyka webu: ${rows.map(row => `${LANGUAGE_NAMES[row.key] ?? row.key} ${rate(row)} % (${group(row.reserved)} z ${group(row.visits)})`).join(', ')}`];
 }
-/** The Monday line after the prices nearby were read: ours from 15 % above or below the median of at least 3 venues. */
+/** Short names of the parts of the menu in the Monday line. */
+const SECTION_SHORT: Record<CompetitorSection['section'], string> = {food: 'jídlo', alcohol: 'alkohol', soft: 'nealko'};
+/** How many items far from the median the Monday line names on each side; the dashboard has all of them. */
+const COMPETITOR_NAMED = 3;
+/**
+ * The Monday line after the prices nearby were read: each part of the menu against the venues (the median of our
+ * differences) and the items furthest above or below the median of at least 3 venues (from 15 %).
+ */
 export function renderCompetitors(competitors: Briefing['competitors']): string[] {
   if (!competitors?.compared) return [];
-  const row = (entry: CompetitorRow) => `${entry.label} ${crowns(entry.ourCents!)} (${entry.diffPct! > 0 ? '+' : '−'}${Math.abs(entry.diffPct!)} %, okolí ${crowns(entry.medianCents!)})`;
+  const signed = (pct: number) => pct === 0 ? '±0 %' : `${pct > 0 ? '+' : '−'}${Math.abs(pct)} %`;
+  const row = (entry: CompetitorRow) => `${entry.label} ${crowns(entry.ourCents!)} (${signed(entry.diffPct!)}, okolí ${crowns(entry.medianCents!)})`;
   const date = `${Number(competitors.checkedOn.slice(8))}. ${Number(competitors.checkedOn.slice(5, 7))}.`;
-  const parts = [competitors.above.length ? `dráže ${competitors.above.map(row).join(', ')}` : '', competitors.below.length ? `levněji ${competitors.below.map(row).join(', ')}` : ''].filter(Boolean);
   const word = (n: number, one: string, few: string, many: string) => `${n} ${n === 1 ? one : n >= 2 && n <= 4 ? few : many}`;
-  return [`Ceny proti okolí (${word(competitors.venues, 'podnik', 'podniky', 'podniků')}, ${date}): ` +
-    (parts.length ? parts.join('; ') : `${word(competitors.compared, 'položka', 'položky', 'položek')} do ±15 % od mediánu`)];
+  const named = (rows: CompetitorRow[]) => rows.slice(0, COMPETITOR_NAMED).map(row).join(', ') + (rows.length > COMPETITOR_NAMED ? ` a další ${rows.length - COMPETITOR_NAMED}` : '');
+  const sections = (competitors.sections ?? []).filter(section => section.medianDiffPct !== null).map(section => `${SECTION_SHORT[section.section]} ${signed(section.medianDiffPct!)}`);
+  const parts = [competitors.above.length ? `dráže ${named(competitors.above)}` : '', competitors.below.length ? `levněji ${named(competitors.below)}` : ''].filter(Boolean);
+  return [`Ceny proti okolí (${word(competitors.venues, 'podnik', 'podniky', 'podniků')}, ${date}, ${word(competitors.compared, 'položka', 'položky', 'položek')}): ` +
+    (sections.length ? `celkově ${sections.join(', ')}; ` : '') +
+    (parts.length ? parts.join('; ') : 'všechno do ±15 % od mediánu')];
 }
 export function renderMenuWeek(week: MenuWeek | null | undefined, title = 'Lístek za týden'): string[] {
   if (!week || !(week.prices.length + week.added.length + week.removed.length)) return [];
