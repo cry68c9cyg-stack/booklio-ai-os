@@ -179,8 +179,16 @@ async function googleList(folderId: string, headers: Record<string, string>): Pr
   return result;
 }
 
+/** The reports folder that someone shared with OKO1's Google account, found by its name; null when there is none. */
+export async function googleFolderByName(accessToken: string, name: string): Promise<string | null> {
+  const params = new URLSearchParams({q: `name = '${name.replace(/['\\]/g, '\\$&')}' and mimeType = '${GOOGLE_FOLDER}' and trashed = false`,
+    fields: 'files(id, modifiedTime)', orderBy: 'modifiedTime desc', pageSize: '5', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true'});
+  const body = await getJson<{files?: {id: string}[]}>(`${GOOGLE_API}/files?${params}`, {authorization: `Bearer ${accessToken}`});
+  return body?.files?.[0]?.id ?? null;
+}
+
 /** The day's workbooks from Google Drive; Google Sheets are exported as xlsx. `accessToken` = OKO1's Google account. */
-async function googleDayFiles(folderId: string, businessDate: string, accessToken: string | null): Promise<{files: FetchedFile[]; warnings: string[]}> {
+export async function googleDayFiles(folderId: string, businessDate: string, accessToken: string | null): Promise<{files: FetchedFile[]; warnings: string[]}> {
   if (!accessToken) return {files: [], warnings: ['Google Drive: OKO1 zatím nemá svůj účet u Googlu (tajemství GOOGLE_SERVICE_ACCOUNT).']};
   const headers = {authorization: `Bearer ${accessToken}`};
   const files = new Map<string, GoogleFile>();

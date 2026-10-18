@@ -227,7 +227,7 @@ try {
   // Managers' Excel on OneDrive: fetched only at 7, 8 and 9, archived, stored as the day's report; "Report dne" goes to Claude without names.
   await mf.dispose();
   const outbound = [];
-  let microsoftRenewal = 'renew-1';
+  let microsoftRenewal = 'renew-1', googleShared = false;
   // A synthetic key of OKO1's Google account, made for the test only.
   const googleKey = generateKeyPairSync('rsa', {modulusLength: 2048});
   const files = {'https://test.files.1drv.com/report.xlsx': await xlsx(reportSheets()), 'https://test.files.1drv.com/book.xlsx': await xlsx(journalSheets())};
@@ -272,6 +272,7 @@ try {
           {id: '1GoogleReport', name: 'Denní report 9.10.2026.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},
           {id: '1GoogleBook', name: 'Peněžní deník', mimeType: 'application/vnd.google-apps.spreadsheet'},
         ]});
+        if (url.pathname === '/drive/v3/files' && q.startsWith("name = 'OKO1 reporty'")) return Response.json({files: googleShared ? [{id: '1GoogleRootFolder'}] : []});
         if (url.pathname === '/drive/v3/files' ) return Response.json({error: {code: 404}}, {status: 404});
         if (url.pathname === '/drive/v3/files/1GoogleReport' && url.searchParams.get('alt') === 'media') return new Response(files['https://test.files.1drv.com/report.xlsx']);
         if (url.pathname === '/drive/v3/files/1GoogleBook/export') return new Response(files['https://test.files.1drv.com/book.xlsx']);
@@ -329,7 +330,8 @@ try {
   assert.deepEqual(await (await call('PUT', '/admin/t/excel-venue/report', manual)).json(), {businessDate: '2026-10-11', lines: 1, notes: false, warnings: []});
   assert.equal((await (await call('GET', '/admin/t/excel-venue/briefing?date=2026-10-11')).json()).briefing.revenueCents, 100000);
   assert.equal((await call('GET', '/admin/t/excel-venue/report?date=11.10.2026')).status, 400);
-  assert.deepEqual(await (await call('POST', '/admin/t/test-venue/fetch', {date: '2026-10-09'})).json(), {found: false, warnings: ['OneDrive: odkaz na složku není nastavený.']});
+  // Without a link OKO1 looks for "OKO1 reporty" shared with its Google account (none is shared here).
+  assert.deepEqual(await (await call('POST', '/admin/t/test-venue/fetch', {date: '2026-10-09'})).json(), {found: false, warnings: ['Google Drive: složka „OKO1 reporty“ není nasdílená účtu OKO1 (oko1@test.iam.gserviceaccount.com).']});
   const fetchesBefore = outbound.length;
   assert.deepEqual(await (await call('POST', '/admin/t/excel-venue/fetch', {date: '2026-10-09', keep: true})).json(), {found: true, kept: true, warnings: []}, 'history loading keeps a day with the daily report');
   assert.equal(outbound.length, fetchesBefore);
@@ -369,6 +371,14 @@ try {
   assert.equal((await (await call('POST', '/admin/t/excel-google/fetch', {date: '2026-10-08'})).json()).warnings[0], 'Google Drive: denní report za tento den ve složce není.');
   assert.equal((await call('PUT', '/admin/t/excel-google/config', {...excelConfig, reportsLink: 'https://drive.google.com/drive/folders/1NotSharedFolder'})).status, 200);
   assert.match((await (await call('POST', '/admin/t/excel-google/fetch', {date: '2026-10-09'})).json()).warnings[0], /není nasdílená účtu OKO1/);
+  // No link at all: OKO1 finds the folder "OKO1 reporty" that someone shared with its Google account.
+  assert.equal((await call('PUT', '/admin/t/excel-auto/config', {...excelConfig, reportsLink: ''})).status, 200);
+  assert.match((await (await call('POST', '/admin/t/excel-auto/fetch', {date: '2026-10-09'})).json()).warnings[0], /„OKO1 reporty“ není nasdílená účtu OKO1 \(oko1@test\.iam\.gserviceaccount\.com\)/);
+  googleShared = true;
+  const fetchedAuto = await (await call('POST', '/admin/t/excel-auto/fetch', {date: '2026-10-09'})).json();
+  assert.equal(fetchedAuto.found, true, JSON.stringify(fetchedAuto.warnings));
+  assert.deepEqual((await (await call('GET', '/admin/t/excel-auto/report?date=2026-10-09')).json()).report.files, ['Denní report 9.10.2026.xlsx', 'Peněžní deník.xlsx']);
+  googleShared = false;
   // Microsoft refuses the renewal: no access, the warning says to connect again.
   microsoftRenewal = 'revoked';
   const lost = await (await call('POST', '/admin/t/excel-graph/fetch', {date: '2026-10-10'})).json();

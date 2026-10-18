@@ -11,7 +11,7 @@ import {czechHolidays, holidayName} from './holidays.ts';
 import {addDays, businessDate, isDate, localTime, sameClockDaysBefore, weekday} from './time.ts';
 import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-report.ts';
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
-import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
+import {fetchDayFiles, googleDayFiles, googleFolderByName, reportFromFiles} from './onedrive.ts';
 import {authorizeUrl, pkce, redeem, renew} from './microsoft.ts';
 import {googleAccess, serviceAccount} from './google.ts';
 import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
@@ -611,6 +611,10 @@ export class TenantObject extends DurableObject<Env> {
     return ok({connected: true});
   }
 
+  private onedriveConnected(): boolean {
+    return !!this.sql.exec<{refresh_token: string | null}>('SELECT refresh_token FROM onedrive_access WHERE id=1 AND error IS NULL').toArray()[0]?.refresh_token;
+  }
+
   /** A fresh Microsoft access for this fetch, or null (not connected, not configured, or Microsoft refused: kept as the error). */
   private async onedriveToken(): Promise<string | null> {
     const clientId = this.env.ONEDRIVE_CLIENT_ID;
@@ -622,19 +626,29 @@ export class TenantObject extends DurableObject<Env> {
     return result.tokens.accessToken;
   }
 
-  /** Reads the day's Excel files from the shared OneDrive folder, archives them and stores the report. */
+  /**
+   * Reads the day's Excel files, archives them and stores the report. With OKO1's Google account the folder
+   * "OKO1 reporty" shared with it wins (no link needed); otherwise the configured OneDrive or Google Drive link.
+   */
   private async fetchReport(tenant: string, date: string) {
-    const link = this.config()?.reportsLink;
-    if (!link) return {found: false, warnings: ['OneDrive: odkaz na složku není nastavený.']};
+    const link = this.config()?.reportsLink ?? null;
+    const account = serviceAccount(this.env.GOOGLE_SERVICE_ACCOUNT);
+    if (!link && !account) return {found: false, warnings: ['OneDrive: odkaz na složku není nastavený.']};
     let found = false, warnings: string[];
     try {
-      const google = googleFolderId(link);
-      const account = serviceAccount(this.env.GOOGLE_SERVICE_ACCOUNT);
-      const googleToken = google && account ? await googleAccess(account) : null;
-      const access = google ? (googleToken?.ok ? googleToken.token : null) : await this.onedriveToken();
-      const fetched = await fetchDayFiles(link, date, access);
+      const google = link ? googleFolderId(link) : null;
+      const googleToken = account && (google || !link || !this.onedriveConnected()) ? await googleAccess(account) : null;
+      const sharedFolder = googleToken?.ok ? await googleFolderByName(googleToken.token, GOOGLE_REPORTS_FOLDER) : null;
+      let fetched: {files: {name: string; bytes: Uint8Array}[]; warnings: string[]};
+      let access: string | null = null;
+      if (sharedFolder) fetched = await googleDayFiles(sharedFolder, date, googleToken!.ok ? googleToken!.token : null);
+      else if (!link) fetched = {files: [], warnings: [`Google Drive: složka „${GOOGLE_REPORTS_FOLDER}“ není nasdílená účtu OKO1 (${account!.clientEmail}).`]};
+      else {
+        access = google ? (googleToken?.ok ? googleToken.token : null) : await this.onedriveToken();
+        fetched = await fetchDayFiles(link, date, access);
+      }
       if (googleToken && !googleToken.ok) fetched.warnings.unshift(`Google Drive: účet OKO1 se nepřihlásil (${googleToken.error}).`);
-      const lost = google ? null : this.sql.exec<{error: string | null}>('SELECT error FROM onedrive_access WHERE id=1').toArray()[0]?.error;
+      const lost = google || sharedFolder || !link ? null : this.sql.exec<{error: string | null}>('SELECT error FROM onedrive_access WHERE id=1').toArray()[0]?.error;
       if (!access && lost) fetched.warnings.unshift(`OneDrive: přístup OKO1 vypršel (${lost}), na přehledu stačí znovu kliknout na „Připojit OneDrive“.`);
       for (const file of fetched.files) this.archive(`t/${tenant}/onedrive/${date}/${file.name}`, file.bytes);
       const report = await reportFromFiles(fetched.files, date, fetched.warnings);
@@ -1671,9 +1685,9 @@ export class TenantObject extends DurableObject<Env> {
   /** Dashboard: every kind of sender and type of data with the time it last arrived, plus the last report and cost fetches. No content. */
   /** The dashboard's "Připojit OneDrive": shown when the folder is set, OKO1 has its Microsoft app and no working access. */
   private onedriveStatus(config: TenantConfig) {
-    if (!config.reportsLink) return null;
     // A Google Drive folder is shared with OKO1's Google account: the dashboard shows its e-mail.
-    if (googleFolderId(config.reportsLink)) return {google: serviceAccount(this.env.GOOGLE_SERVICE_ACCOUNT)?.clientEmail ?? null, canConnect: false, connected: false, since: null, error: null};
+    if (this.env.GOOGLE_SERVICE_ACCOUNT || (config.reportsLink && googleFolderId(config.reportsLink))) return {google: serviceAccount(this.env.GOOGLE_SERVICE_ACCOUNT)?.clientEmail ?? null, canConnect: false, connected: false, since: null, error: null};
+    if (!config.reportsLink) return null;
     const row = this.sql.exec<{connected_at: string; error: string | null}>('SELECT connected_at, error FROM onedrive_access WHERE id=1').toArray()[0];
     return {canConnect: !!this.env.ONEDRIVE_CLIENT_ID, connected: !!row && !row.error, since: row ? stamp(new Date(row.connected_at), config.timeZone) : null, error: row?.error ?? null};
   }
@@ -1742,7 +1756,7 @@ export class TenantObject extends DurableObject<Env> {
     // Fetching and analysis get a time budget, so a slow OneDrive or API can never stop the 9:00 send.
     if (!sent && config.sendHours.includes(hour)) {
       await withinBudget((async () => {
-        if (config.reportsLink && !this.hasReport(date)) await this.fetchReport(tenant, date);
+        if ((config.reportsLink || this.env.GOOGLE_SERVICE_ACCOUNT) && !this.hasReport(date)) await this.fetchReport(tenant, date);
         await this.analyse(config, date);
         // Costs once a day (a failed read is tried again at the next send hour); the quota is the venue's (5 000 requests a day on the Firma plan).
         await this.fetchCosts(tenant, date, businessDate(at, config.timeZone, 0));
@@ -1966,6 +1980,8 @@ export default {
 };
 
 const ONEDRIVE_CALLBACK = '/onedrive/callback';
+/** The folder on Google Drive that OKO1 looks for among the folders shared with its Google account. */
+const GOOGLE_REPORTS_FOLDER = 'OKO1 reporty';
 
 /** The short page after the Microsoft sign-in, with the way back to the dashboard. */
 function onedrivePage(tenant: string | null, message: string, status = 200): Response {
