@@ -36,7 +36,7 @@ Podle popisků v řádcích. **Ověřeno na skutečných souborech za 9. 10. 202
 | `payout` | deník | Security, Tanečnice, DJ, Popelář, Hosteska, Barback, Uklízečka a řádky s „výplata“, „zkouška“, „brigáda“, „výpomoc“ (role a částka); „DJ oprava …“ je výdaj |
 | `cash_count` | deník | večerní přepočet vedle bloku: měny, kov, dluhy, obálky, kasáč, hotovost, celkem |
 
-Text řádku „Report dne“ (také „Poznámky“, „Události“) a jméno DJ tvoří volný text `notes`.
+Text řádku „Report dne“ (také „Poznámky“, „Události“) a jméno DJ tvoří volný text `notes`. „Report dne“ může přijít i jako samostatný dokument Wordu s datem v názvu (např. `Textový report 17.10.2026.docx`): jeho text (odstavce po řádcích) se přidá do `notes` a soubor do `files`.
 
 ## Uložení
 

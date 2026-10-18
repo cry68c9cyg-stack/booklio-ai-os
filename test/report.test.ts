@@ -178,6 +178,16 @@ test('OneDrive: share id, picking the day\'s files, report from the downloaded w
   const names = ['Denní report 8.10.2026.xlsx', 'Denní report 9.10.2026.xlsx', 'Denní report 19.10.2026.xlsx', 'Peněžní deník 2026.xlsx', '~$Denní report 9.10.2026.xlsx'];
   assert.deepEqual(pickFiles(names, '2026-10-09'), {report: 'Denní report 9.10.2026.xlsx', books: ['Peněžní deník 2026.xlsx']});
   assert.deepEqual(pickFiles(['Denni report 09_10_26.xlsx'], '2026-10-09'), {report: 'Denni report 09_10_26.xlsx', books: []});
+  // "Report dne" as its own Word file with the date: its text becomes the day's notes.
+  assert.deepEqual(pickFiles(['Textový report 9.10.2026.docx', 'Textový report 8.10.2026.docx', 'Denní report 9.10.2026.xlsx'], '2026-10-09'),
+    {report: 'Denní report 9.10.2026.xlsx', books: [], text: 'Textový report 9.10.2026.docx'});
+  const docx = await zip({'word/document.xml': '<w:document><w:body><w:p><w:r><w:t>Večer plno, </w:t></w:r><w:r><w:t xml:space="preserve">chyběl led &amp; citrony.</w:t></w:r></w:p><w:p/>' +
+    '<w:p><w:r><w:t>Objednat</w:t><w:tab/><w:t>led</w:t></w:r></w:p></w:body></w:document>'});
+  const withText = (await reportFromFiles([{name: 'Denní report 9.10.2026.xlsx', bytes: await xlsx(reportSheets())}, {name: 'Textový report 9.10.2026.docx', bytes: docx}], '2026-10-09'))!;
+  assert.ok(withText.notes!.endsWith('Večer plno, chyběl led & citrony.\n\nObjednat\tled'), withText.notes!);
+  assert.ok(withText.files.includes('Textový report 9.10.2026.docx'));
+  const broken = (await reportFromFiles([{name: 'Denní report 9.10.2026.xlsx', bytes: await xlsx(reportSheets())}, {name: 'Textový report 9.10.2026.docx', bytes: await zip({'x.xml': 'x'})}], '2026-10-09'))!;
+  assert.ok(broken.warnings.includes('Soubor Textový report 9.10.2026.docx není čitelný dokument Wordu.'));
   const report = (await reportFromFiles([
     {name: 'Denní report 9.10.2026.xlsx', bytes: await xlsx(reportSheets())},
     {name: 'Peněžní deník 2026.xlsx', bytes: await xlsx(bookSheets())},
