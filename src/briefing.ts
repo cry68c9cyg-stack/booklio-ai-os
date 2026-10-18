@@ -8,6 +8,7 @@ import {renderThemes, THEMES, type DjRank, type ThemeSummary} from './themes.ts'
 import {cashNeedText, payoutAlarmText, renderNights, type CashNeed, type NightSummary, type PayoutAlarm} from './cash.ts';
 import {gapsText, hasGaps, shiftSignals, shiftText, type DataGaps, type MonthTarget} from './goals.ts';
 import {renderSupplies, type SupplyBrief} from './supplies.ts';
+import {renderMail, type MailBrief} from './mail-insights.ts';
 import {pricesOfText, type CompetitorRow, type CompetitorSection, type MenuGap, type PriceExperiment, type PriceFinding, type PriceMismatch} from './menu.ts';
 
 export type Briefing = {
@@ -127,6 +128,8 @@ export type Briefing = {
   costsPrevious: MonthResult | null;
   /** Supplier invoices (Dishboard, later Pexeso): the month so far with food cost, price rises of the week, overdue invoices. `null` = none. */
   supplies: SupplyBrief | null;
+  /** The venue's mailbox (info@): messages waiting for an answer, what is not under control; on Monday the week. */
+  mail?: MailBrief | null;
   incomplete: boolean;
 };
 export type WeekPart = {revenueCents: number; revenueDays: number; reservations: number; guests: number; noShows: number; noShowGuests: number;
@@ -708,7 +711,7 @@ export function buildBriefing(input: {
   /** Visits and sent booking forms of the same weekday over the 4 weeks before (days the website sent). */
   webUsual?: {visits: number; sent: number}[];
   eventRanking?: EventRank[] | null; menuWeek?: MenuWeek | null; menuDay?: MenuWeek | null; menuMonth?: MenuMonth | null; slowSellers?: SlowSellers | null; priceResults?: PriceExperiment[]; menuProblems?: string[]; priceMismatches?: PriceMismatch[]; priceCheck?: Briefing['priceCheck']; menuGaps?: Briefing['menuGaps']; menuInterest?: Briefing['menuInterest']; menuByLanguage?: Briefing['menuByLanguage']; competitors?: Briefing['competitors'];
-  costs?: MonthResult | null; costsPrevious?: MonthResult | null; supplies?: SupplyBrief | null;
+  costs?: MonthResult | null; costsPrevious?: MonthResult | null; supplies?: SupplyBrief | null; mail?: MailBrief | null;
   reviews?: ReviewSummary;
   week?: Week | null; silent?: {name: string; since: string}[];
   month?: Month | null; lastWeekRevenueCents?: number | null; forecast?: Forecast | null;
@@ -801,7 +804,7 @@ export function buildBriefing(input: {
     eventRanking: input.eventRanking ?? null,
     menuWeek: input.menuWeek ?? null, menuDay: input.menuDay ?? null, menuMonth: input.menuMonth ?? null, slowSellers: input.slowSellers ?? null, priceResults: input.priceResults ?? [], menuProblems: input.menuProblems ?? [], priceMismatches: input.priceMismatches ?? [], priceCheck: input.priceCheck ?? null, menuGaps: input.menuGaps ?? null, menuInterest: input.menuInterest ?? null, menuByLanguage: input.menuByLanguage ?? null, competitors: input.competitors ?? null,
     reviews: summarizeReviews(input.reviews),
-    costs: input.costs ?? null, costsPrevious: input.costsPrevious ?? null, supplies: input.supplies ?? null,
+    costs: input.costs ?? null, costsPrevious: input.costsPrevious ?? null, supplies: input.supplies ?? null, mail: input.mail ?? null,
     week: input.week ?? null,
     month: input.month ?? null,
     lastWeekRevenueCents: input.lastWeekRevenueCents ?? null,
@@ -883,6 +886,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderReviews(briefing.reviews));
   lines.push(...renderCosts(briefing.costs, briefing.costsPrevious));
   lines.push(...renderSupplies(briefing.supplies));
+  lines.push(...renderMail(briefing.mail?.insights ?? null, briefing.mail?.weekly ?? null));
   lines.push(...renderPriceMismatches(briefing.priceMismatches));
   lines.push(...renderMenuWeek(briefing.menuDay, 'Lístek se změnil'), ...(briefing.menuProblems ?? []).map(text => `⚠ ${text}`));
   lines.push(...renderNotes(briefing));

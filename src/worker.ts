@@ -12,7 +12,7 @@ import {competitorComparison, competitorSections, COMPETITOR_SHARE, itemProfit, 
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
 import {czechHolidays, holidayName} from './holidays.ts';
-import {addDays, businessDate, isDate, localTime, sameClockDaysBefore, weekday} from './time.ts';
+import {addDays, businessDate, isDate, localTime, sameClockDaysBefore, weekday, zonedMidnight} from './time.ts';
 import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-report.ts';
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, googleDayFiles, googleFolderByName, reportFromFiles} from './onedrive.ts';
@@ -26,6 +26,11 @@ import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-cli
 import {dashboardWeb} from './web-views.ts';
 import {WEATHER_AGENT, WEATHER_URL, weatherDays, type WeatherDay} from './weather.ts';
 import {MCP_PATH, oauthOptions, type Venues} from './oauth.ts';
+import {folderLabel, sentFolder, withMailbox, type ImapAccount, type ImapSession} from './imap.ts';
+import {parseMail, type Mail} from './mime.ts';
+import {baseSubject, INCOMING_SCHEMA, incomingPrompt, MAIL_TEXT_CHARS, mailInsights, ownText, parseIncomingReading, parseReplyReading, REPLY_SCHEMA, replyPrompt, type MailBrief, type MailRow} from './mail-insights.ts';
+import {asSupplierInvoice, EXTRACTION_SCHEMA, extractionPrompt, invoiceAttachments, isdocSummary, isdocXml, issuedByVenue, looksLikeInvoice, MAIL_HISTORY_FROM,
+  MAIL_SOURCE, mailInvoiceId, MAX_DOCUMENT_CHARS, parseExtraction, parseIsdoc, withKinds, type ExtractedInvoice} from './mail-invoices.ts';
 
 export type Env = DeliveryEnv & WebEnv & IuctoEnv & {
   TENANTS: DurableObjectNamespace<TenantObject>; REGISTRY: DurableObjectNamespace<Registry>; ADMIN_SECRET: string; DATA_JURISDICTION?: string;
@@ -41,7 +46,33 @@ export type Env = DeliveryEnv & WebEnv & IuctoEnv & {
   ONEDRIVE_CLIENT_ID?: string;
   /** OKO1's own Google account (service account JSON key) for a Google Drive folder shared with it. Optional. */
   GOOGLE_SERVICE_ACCOUNT?: string;
+  /** Workers AI (production): reading PDF invoices from the venue's mailbox. Optional: without it only ISDOC is read. */
+  AI?: MailAi;
+} & {[name: `MAIL_ACCOUNT_${string}`]: string | undefined};
+/** The two Workers AI calls OKO1 makes, typed narrowly so no model list is needed. */
+type MailAi = {
+  run(model: string, input: unknown): Promise<unknown>;
+  toMarkdown(file: {name: string; blob: Blob}): Promise<{format: string; data?: string; error?: string}>;
 };
+/** The language model that turns an invoice's text into fields (structured JSON output). */
+/** The hourly visit to the mailbox (wrangler.jsonc). */
+const MAIL_CRON = '30 * * * *';
+const INVOICE_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+/** How long one visit to the mailbox may take, and how many documents it reads; the rest waits for the next visit a minute later. */
+const MAIL_BUDGET_MS = 120000, MAIL_DOCUMENTS_PER_VISIT = 12;
+// The mailbox read for the analysis of info@: messages fetched (only their start, no attachments) and read by the model per visit.
+const MAIL_MESSAGES_PER_VISIT = 150, MAIL_READINGS_PER_VISIT = 15, MAIL_HEAD_BYTES = 65536;
+
+/** The venue's mailbox: Worker secret MAIL_ACCOUNT_<TENANT> = {"host", "port", "user", "password"} (set by the deploy). */
+export function mailAccount(env: Env, tenant: string): ImapAccount | null {
+  const raw = env[`MAIL_ACCOUNT_${tenant.toUpperCase().replace(/-/g, '_')}` as `MAIL_ACCOUNT_${string}`];
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as Partial<ImapAccount>;
+    if (typeof value.host !== 'string' || !/^[a-z0-9.-]+$/i.test(value.host) || typeof value.user !== 'string' || typeof value.password !== 'string' || !value.password) return null;
+    return {host: value.host, port: typeof value.port === 'number' ? value.port : 993, user: value.user, password: value.password};
+  } catch { return null; }
+}
 type Result = {status: number; body: unknown};
 export type VenueSetup = {name: string; timeZone: string; businessDayCutoffHour: number; web: {url: string} | null; today: string; reportDay: string};
 
@@ -157,6 +188,22 @@ export class TenantObject extends DurableObject<Env> {
       -- sign-ins in progress (PKCE verifier, at most 10 minutes).
       CREATE TABLE IF NOT EXISTS onedrive_access(id INTEGER PRIMARY KEY CHECK(id=1), refresh_token TEXT, connected_at TEXT NOT NULL, error TEXT);
       CREATE TABLE IF NOT EXISTS onedrive_signins(state TEXT PRIMARY KEY, verifier TEXT NOT NULL, created_at INTEGER NOT NULL);
+      -- The venue's mailbox (read-only): how far each folder has been read, the last visit and its error; what was
+      -- done with each message that had a document (an invoice stored, not an invoice, unreadable); which venue this is.
+      CREATE TABLE IF NOT EXISTS mail_folders(folder TEXT PRIMARY KEY, uid_validity INTEGER NOT NULL, last_uid INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS mail_visits(id INTEGER PRIMARY KEY CHECK(id=1), tenant TEXT NOT NULL, at TEXT NOT NULL, error TEXT, backlog INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS mail_documents(folder TEXT NOT NULL, uid_validity INTEGER NOT NULL, uid INTEGER NOT NULL, at TEXT NOT NULL, mail_date TEXT,
+        status TEXT NOT NULL, sender TEXT NOT NULL, subject TEXT NOT NULL, invoice_id TEXT, PRIMARY KEY(folder, uid_validity, uid));
+      -- Every message of the inbox and the sent folder since April 2026 for the analysis of info@ (MC, 18. 10. 2026): who wrote,
+      -- when, the subject, the message's own text and the model's reading (topic, wants an answer, complaint; a reply's grade).
+      -- State 0 = waiting for the model, 1 = read, 2 = nothing to read (machine mail, a sent message that answers nothing, or
+      -- three failed tries).
+      CREATE TABLE IF NOT EXISTS mail_scan(folder TEXT PRIMARY KEY, uid_validity INTEGER NOT NULL, last_uid INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS mail_messages(key TEXT PRIMARY KEY, direction TEXT NOT NULL CHECK(direction IN ('in','out')), at TEXT NOT NULL,
+        sender TEXT NOT NULL, sender_name TEXT, recipients TEXT NOT NULL, subject TEXT NOT NULL, message_id TEXT, in_reply_to TEXT, refs TEXT NOT NULL,
+        automated INTEGER NOT NULL, body TEXT NOT NULL, state INTEGER NOT NULL, reading TEXT, tries INTEGER NOT NULL DEFAULT 0);
+      CREATE INDEX IF NOT EXISTS mail_messages_at ON mail_messages(at);
+      CREATE INDEX IF NOT EXISTS mail_messages_id ON mail_messages(message_id);
     `));
     // Wrong codes for unknown venues are counted per venue name in the shared stand-in (see `loginStub`).
     if (!this.sql.exec<{name: string}>('PRAGMA table_info(login_failures)').toArray().some(column => column.name === 'scope')) {
@@ -197,6 +244,12 @@ export class TenantObject extends DurableObject<Env> {
       if (route === 'admin/briefing' && method === 'GET') return this.preview(query.date);
       if (route === 'admin/ingest' && method === 'GET') return ok(this.ingestStatus());
       if (route === 'admin/briefings' && method === 'GET') return ok(this.sql.exec('SELECT business_date AS businessDate, status, incomplete, text, created_at AS createdAt FROM briefings ORDER BY business_date DESC LIMIT 60').toArray());
+      // A visit to the mailbox now (the deploy runs one right after storing the mailbox): whether it connected, no contents.
+      if (route === 'admin/mail' && method === 'POST') {
+        const visit = await this.mailVisit(tenant);
+        const error = this.sql.exec<{error: string | null}>('SELECT error FROM mail_visits WHERE id=1').toArray()[0]?.error ?? null;
+        return ok({...visit, error});
+      }
       if (route === 'admin/tick' && method === 'POST') {
         const at = (body as {at?: unknown})?.at;
         if (typeof at !== 'string' || Number.isNaN(Date.parse(at))) return failure('INVALID_REQUEST', 400);
@@ -335,7 +388,7 @@ export class TenantObject extends DurableObject<Env> {
     const stored = this.sql.exec<{text: string}>('SELECT text FROM briefings WHERE business_date=?', day).toArray()[0];
     const todo = this.todoFor(day, briefing);
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
-      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day),
+      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day), mail: this.mailInsightsBetween(new Date(Date.now() - 30 * 86400000).toISOString(), new Date().toISOString(), new Date()),
       themes: briefing.themes ?? this.themeSummary(day), djRanking: briefing.djRanking ?? this.djRanking(day), nights: this.nightsFor(addDays(day, -27), day)});
   }
 
@@ -1152,7 +1205,9 @@ export class TenantObject extends DurableObject<Env> {
     const year = this.invoices(config, addDays(date, -365), date);
     const unpaid = this.invoices(config, '', '', true).filter(invoice => !year.some(other => other.id === invoice.id));
     const payoutsCents = this.reportSums('payout', date.slice(0, 8) + '01', date).reduce((sum, row) => sum + row.amountCents, 0);
-    return supplyBrief([...year, ...unpaid], date, this.revenueBetween(date.slice(0, 8) + '01', date), {payoutsCents, menu: this.menu(), foodCostLimitPermille: config.foodCostLimitPermille});
+    const brief = supplyBrief([...year, ...unpaid], date, this.revenueBetween(date.slice(0, 8) + '01', date), {payoutsCents, menu: this.menu(), foodCostLimitPermille: config.foodCostLimitPermille});
+    const unreadable = this.unreadableMail(addDays(date, -6), date);
+    return brief && unreadable.length ? {...brief, unreadable} : brief;
   }
 
   /** Dashboard: the month up to the shown day, rises over its 30 days, invoices overdue the day after, and which senders are off. */
@@ -1170,7 +1225,8 @@ export class TenantObject extends DurableObject<Env> {
       margins: margins ? {rows: margins.margins.slice(0, 30), paired: margins.margins.length, unpaired: margins.unpaired} : null,
       dueSoon: due.slice(0, 15), dueSoonCount: due.length, dueSoonCents: due.reduce((sum, row) => sum + row.grossCents, 0),
       foodCostAlert: foodCostAlert(month, config.foodCostLimitPermille), foodCostLimitPermille: config.foodCostLimitPermille ?? FOOD_COST_LIMIT_PERMILLE,
-      monthCompare: monthOverMonth(year, day).slice(0, 15), unusual: unusualPurchases(year, addDays(day, -29), day).slice(0, 10)};
+      monthCompare: monthOverMonth(year, day).slice(0, 15), unusual: unusualPurchases(year, addDays(day, -29), day).slice(0, 10),
+      mail: this.mailStatus(config), unreadable: this.unreadableMail(addDays(day, -29), day).slice(0, 10)};
   }
 
   /** MCP: purchases over any stretch of days (at most 400) with price rises in it, invoices overdue today and the invoices themselves. */
@@ -1814,6 +1870,7 @@ export class TenantObject extends DurableObject<Env> {
       report: report ? {at: at(report.at), found: report.found === 1} : null,
       costs: cost ? {at: at(cost.at), ok: !cost.error} : null,
       onedrive: this.onedriveStatus(config),
+      mail: this.mailStatus(config),
     };
   }
 
@@ -1846,7 +1903,7 @@ export class TenantObject extends DurableObject<Env> {
       cashNeed: this.cashNeedFor(date), payoutAlarm: this.payoutAlarmFor(date), nights: weekday(date) === 0 ? this.nightsFor(addDays(date, -27), date) : null,
       tableChecks: tableChecks(this.report(date), this.report(addDays(date, -1))), noteThemes: noteThemes(this.report(date)?.notes),
       themes: weekday(date) === 0 ? this.themeSummary(date) : null, djRanking: weekday(date) === 0 ? this.djRanking(date) : null,
-      supplies: this.supplyBriefFor(config, date),
+      supplies: this.supplyBriefFor(config, date), mail: this.mailBriefFor(date, now),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};
   }
@@ -1856,6 +1913,251 @@ export class TenantObject extends DurableObject<Env> {
     if (!config) return failure('NOT_CONFIGURED', 409);
     if (!isDate(date)) return failure('INVALID_REQUEST', 400);
     return ok(this.briefingFor(config, date, !this.ready(config, date)));
+  }
+
+  /**
+   * One visit to the venue's mailbox (every hour, and every minute while the history is still being read): messages
+   * from MAIL_HISTORY_FROM on with a PDF or ISDOC attachment, in every folder but sent, drafts, spam and trash.
+   * Read-only; each folder is read on from the last message seen, so every message is looked at once.
+   */
+  async mailVisit(tenant: string, now = new Date()) {
+    const config = this.config(), account = mailAccount(this.env, tenant);
+    if (!config || !account) return {visited: false};
+    const started = Date.now(), late = () => Date.now() - started > MAIL_BUDGET_MS * 0.5;
+    let documents = 0, backlog = 0;
+    const result = await withMailbox(account, async session => {
+      const all = await session.folders(), sent = sentFolder(all);
+      const skipped = ['\\noselect', '\\nonexistent', '\\sent', '\\drafts', '\\junk', '\\trash', '\\all'];
+      const folders = all.filter(folder => folder.name !== sent && !folder.flags.some(flag => skipped.includes(flag))
+        && !/(^|[./])(sent|drafts?|spam|junk|trash|deleted|ko[sš]|odeslan|koncept|nevy[zž][aá]dan)/i.test(folderLabel(folder.name)));
+      invoices: for (const folder of folders) {
+        const box = await session.examine(folder.name);
+        const state = this.sql.exec<{uid_validity: number; last_uid: number}>('SELECT uid_validity, last_uid FROM mail_folders WHERE folder=?', folder.name).toArray()[0];
+        let last = state && state.uid_validity === box.uidValidity ? state.last_uid : 0;
+        const uids = (await session.since(MAIL_HISTORY_FROM)).filter(uid => uid > last);
+        for (let index = 0; index < uids.length; index += 50) {
+          const chunk = uids.slice(index, index + 50), structures = await session.structures(chunk);
+          for (const uid of chunk) {
+            if (documents >= MAIL_DOCUMENTS_PER_VISIT || late()) { backlog += uids.filter(other => other > last).length; break; }
+            if (/pdf|isdoc/i.test(structures.get(uid) ?? '')) {
+              documents++;
+              await this.readMailDocument(config, tenant, session, folder.name, box.uidValidity, uid);
+            }
+            last = uid;
+            this.sql.exec('INSERT INTO mail_folders VALUES(?,?,?) ON CONFLICT(folder) DO UPDATE SET uid_validity=excluded.uid_validity, last_uid=excluded.last_uid',
+              folder.name, box.uidValidity, last);
+          }
+          if (backlog) break invoices;
+        }
+      }
+      backlog += await this.scanMail(config, account.user, session, all, sent, started);
+    }, MAIL_BUDGET_MS + 30000);
+    this.sql.exec(`INSERT INTO mail_visits VALUES(1,?,?,?,?) ON CONFLICT(id) DO UPDATE SET tenant=excluded.tenant, at=excluded.at, error=excluded.error, backlog=excluded.backlog`,
+      tenant, now.toISOString(), result.ok ? null : result.error, backlog);
+    // The history since April is read in short visits a minute apart; afterwards only the hourly visit.
+    if (backlog) await this.ctx.storage.setAlarm(Date.now() + 60000);
+    return {visited: true, ok: result.ok, documents, backlog};
+  }
+
+  async alarm() {
+    const visit = this.sql.exec<{tenant: string}>('SELECT tenant FROM mail_visits WHERE id=1').toArray()[0];
+    if (visit) await this.mailVisit(visit.tenant);
+  }
+
+  /** One message with a document: its invoices are stored; what happened is kept so the message is not read again. */
+  private async readMailDocument(config: TenantConfig, tenant: string, session: ImapSession, folder: string, uidValidity: number, uid: number) {
+    const message = await session.message(uid);
+    const mail = message?.bytes.length ? parseMail(message.bytes) : null;
+    const note = (status: string, invoiceId: string | null = null) => this.sql.exec('INSERT OR REPLACE INTO mail_documents VALUES(?,?,?,?,?,?,?,?,?)',
+      folder, uidValidity, uid, new Date().toISOString(), mail?.date ? businessDate(new Date(mail.date), config.timeZone, 0) : null, status,
+      (mail?.from?.name ?? mail?.from?.address ?? '').slice(0, 120), (mail?.subject ?? '').slice(0, 200), invoiceId);
+    if (!mail) return note(message ? 'too_big' : 'gone');
+    const {isdoc, pdf} = invoiceAttachments(mail);
+    const stored: string[] = [];
+    let unreadable = false;
+    for (const attachment of isdoc) {
+      const xml = await isdocXml(attachment), exact = xml ? parseIsdoc(xml) : null;
+      if (!exact || issuedByVenue(exact, config.name)) continue;
+      const model = await this.readInvoice(config, isdocSummary(exact));
+      stored.push(this.storeMailInvoice(tenant, withKinds(exact, model ?? null), attachment));
+    }
+    // A PDF next to an ISDOC is the same invoice printed.
+    for (const attachment of stored.length ? [] : pdf.filter(attachment => looksLikeInvoice(mail, attachment))) {
+      const text = await this.pdfText(attachment.filename, attachment.data);
+      const invoice = text === null ? undefined : await this.readInvoice(config, text);
+      if (invoice === undefined) unreadable = true;
+      else if (invoice && !issuedByVenue(invoice, config.name)) stored.push(this.storeMailInvoice(tenant, invoice, attachment));
+    }
+    note(stored.length ? 'invoice' : unreadable ? 'unreadable' : 'other', stored[0] ?? null);
+  }
+
+  /** Text of a PDF (Workers AI document reader); null when there is none (a scan without text, no AI). */
+  private async pdfText(name: string, data: Uint8Array): Promise<string | null> {
+    if (!this.env.AI) return null;
+    try {
+      const result = await this.env.AI.toMarkdown({name: name.replace(/[^\w.-]+/g, '_').slice(-80) || 'doklad.pdf', blob: new Blob([data], {type: 'application/pdf'})});
+      const text = result.format !== 'error' ? (result.data ?? '').trim() : '';
+      return text.replace(/\s+/g, '').length >= 40 ? text.slice(0, MAX_DOCUMENT_CHARS) : null;
+    } catch { return null; }
+  }
+
+  /**
+   * The model's reading of a document: the invoice, null when it is not a supplier invoice, undefined when it could
+   * not be read (no AI, the model failed or answered nonsense).
+   */
+  private async readInvoice(config: TenantConfig, text: string): Promise<ExtractedInvoice | null | undefined> {
+    if (!this.env.AI) return undefined;
+    try {
+      const output = await this.env.AI.run(INVOICE_MODEL, {
+        messages: [{role: 'system', content: extractionPrompt(config.name)}, {role: 'user', content: `Doklad:\n<doklad>\n${text.slice(0, MAX_DOCUMENT_CHARS)}\n</doklad>`}],
+        response_format: {type: 'json_schema', json_schema: EXTRACTION_SCHEMA}, max_tokens: 4096, temperature: 0,
+      }) as {response?: unknown};
+      const answer = typeof output?.response === 'string' ? JSON.parse(output.response.match(/\{[\s\S]*\}/)?.[0] ?? 'null') : output?.response;
+      if (!answer || typeof answer !== 'object') return undefined;
+      if ((answer as {isSupplierInvoice?: unknown}).isSupplierInvoice !== true) return null;
+      return parseExtraction(answer) ?? undefined;
+    } catch { return undefined; }
+  }
+
+  /** Stores an invoice from the mailbox once (the same invoice e-mailed again is kept as it was) and archives its document in the EU. */
+  private storeMailInvoice(tenant: string, invoice: ExtractedInvoice, attachment: {filename: string; data: Uint8Array}): string {
+    const id = mailInvoiceId(invoice), record = asSupplierInvoice(invoice, id), now = new Date().toISOString();
+    const added = this.sql.exec(`INSERT INTO records(type, id, version, business_date, register_id, json, installation_id, received_at) VALUES(?,?,?,?,?,?,?,?)
+      ON CONFLICT(type, id) DO NOTHING`, record.type, record.id, record.version, record.businessDate, '', JSON.stringify(record), MAIL_SOURCE, now).rowsWritten;
+    if (added) this.archive(`t/${tenant}/posta/${id}/${attachment.filename.replace(/[^\w.-]+/g, '_').slice(-80)}`, attachment.data);
+    return id;
+  }
+
+  /**
+   * The analysis part of a visit: new messages of the inbox and the sent folder are stored (their start only), then the
+   * model reads the newest waiting ones. Returns how much is left for the next visit.
+   */
+  private async scanMail(config: TenantConfig, user: string, session: ImapSession, all: {name: string; flags: string[]}[], sent: string | null, started: number): Promise<number> {
+    const late = () => Date.now() - started > MAIL_BUDGET_MS * 0.8;
+    const domain = user.split('@')[1]?.toLowerCase() ?? '';
+    const inbox = all.find(folder => folder.name.toUpperCase() === 'INBOX')?.name;
+    let fetched = 0, left = 0;
+    for (const folder of [inbox, sent].filter((name): name is string => !!name)) {
+      const box = await session.examine(folder);
+      const state = this.sql.exec<{uid_validity: number; last_uid: number}>('SELECT uid_validity, last_uid FROM mail_scan WHERE folder=?', folder).toArray()[0];
+      let last = state && state.uid_validity === box.uidValidity ? state.last_uid : 0;
+      const uids = (await session.since(MAIL_HISTORY_FROM)).filter(uid => uid > last);
+      for (const uid of uids) {
+        if (fetched >= MAIL_MESSAGES_PER_VISIT || late()) { left += uids.filter(other => other > last).length; break; }
+        fetched++;
+        const head = await session.head(uid, MAIL_HEAD_BYTES);
+        if (head) this.storeMailMessage(parseMail(head), `${folder}|${box.uidValidity}|${uid}`, folder === sent, domain);
+        last = uid;
+        this.sql.exec('INSERT INTO mail_scan VALUES(?,?,?) ON CONFLICT(folder) DO UPDATE SET uid_validity=excluded.uid_validity, last_uid=excluded.last_uid', folder, box.uidValidity, last);
+      }
+    }
+    // The model reads the newest first, so the last weeks are ready before the history.
+    let readings = 0;
+    for (const row of this.sql.exec<{key: string}>('SELECT key FROM mail_messages WHERE state=0 ORDER BY at DESC LIMIT ?', MAIL_READINGS_PER_VISIT).toArray()) {
+      if (late()) break;
+      await this.readMailMessage(config, row.key);
+      readings++;
+    }
+    const waiting = this.sql.exec<{count: number}>('SELECT count(*) AS count FROM mail_messages WHERE state=0').toArray()[0].count;
+    return left + waiting;
+  }
+
+  private storeMailMessage(mail: Mail, key: string, fromSent: boolean, domain: string) {
+    const from = mail.from?.address ?? '';
+    const out = fromSent || (!!domain && from.endsWith('@' + domain));
+    const automated = mail.automated || (!out && !!domain && from.endsWith('@' + domain));
+    // A sent message is graded only when it answers a message of a person; that is decided when it is read.
+    this.sql.exec(`INSERT INTO mail_messages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0) ON CONFLICT(key) DO NOTHING`, key, out ? 'out' : 'in', mail.date ?? new Date().toISOString(),
+      from.slice(0, 200), mail.from?.name?.slice(0, 200) ?? null, JSON.stringify([...mail.to, ...mail.cc].map(address => address.address).slice(0, 20)), mail.subject.slice(0, 300),
+      mail.messageId?.slice(0, 300) ?? null, mail.inReplyTo?.slice(0, 300) ?? null, JSON.stringify(mail.references.slice(-20)), automated ? 1 : 0,
+      ownText(mail.text), automated ? 2 : 0, null);
+  }
+
+  /** The model's reading of one stored message: an incoming one gets its topic, a reply to a person its grade. */
+  private async readMailMessage(config: TenantConfig, key: string) {
+    const row = this.mailRows(`key=?`, key)[0];
+    if (!row) return;
+    // The model did not answer: tried again on a later visit, at most three times, so a lasting failure does not keep the visits going.
+    const done = (reading: object | null, state = reading ? 1 : 2) => state === 0
+      ? this.sql.exec('UPDATE mail_messages SET tries=tries+1, state=CASE WHEN tries >= 2 THEN 2 ELSE 0 END WHERE key=?', key)
+      : this.sql.exec('UPDATE mail_messages SET state=?, reading=? WHERE key=?', state, reading ? JSON.stringify(reading) : null, key);
+    const body = this.sql.exec<{body: string}>('SELECT body FROM mail_messages WHERE key=?', key).toArray()[0]?.body ?? '';
+    if (row.direction === 'in') {
+      const answer = await this.askModel(incomingPrompt(config.name), INCOMING_SCHEMA, `Od: ${row.fromName ?? ''} <${row.from}>\nPředmět: ${row.subject}\n<email>\n${body}\n</email>`);
+      return done(answer === undefined ? null : parseIncomingReading(answer), answer === undefined ? 0 : undefined);
+    }
+    const parent = this.replyParent(row);
+    if (!parent) return done(null, 2);
+    const parentBody = this.sql.exec<{body: string}>('SELECT body FROM mail_messages WHERE key=?', parent.key).toArray()[0]?.body ?? '';
+    const answer = await this.askModel(replyPrompt(config.name), REPLY_SCHEMA,
+      `Zpráva pisatele (${parent.from}, předmět „${parent.subject}“):\n<email>\n${parentBody.slice(0, MAIL_TEXT_CHARS / 2)}\n</email>\nOdpověď podniku:\n<odpoved>\n${body.slice(0, MAIL_TEXT_CHARS / 2)}\n</odpoved>`);
+    return done(answer === undefined ? null : parseReplyReading(answer), answer === undefined ? 0 : undefined);
+  }
+
+  /** The incoming message a sent one answers: by In-Reply-To, otherwise the last one of the same subject from its recipient before it. */
+  private replyParent(row: MailRow): MailRow | null {
+    const byId = row.inReplyTo ? this.mailRows(`message_id=? AND direction='in'`, row.inReplyTo)[0] : undefined;
+    if (byId) return byId.automated ? null : byId;
+    const candidates = this.mailRows(`direction='in' AND automated=0 AND at < ? AND at > ? ORDER BY at DESC LIMIT 50`, row.at, new Date(Date.parse(row.at) - 30 * 86400000).toISOString());
+    return candidates.find(other => row.to.includes(other.from) && baseSubject(other.subject) === baseSubject(row.subject) && baseSubject(row.subject).length >= 3) ?? null;
+  }
+
+  /** The model's JSON answer, or undefined when it could not answer (no AI, an error): the message is then tried again later. */
+  private async askModel(system: string, schema: object, text: string): Promise<unknown> {
+    if (!this.env.AI) return undefined;
+    try {
+      const output = await this.env.AI.run(INVOICE_MODEL, {messages: [{role: 'system', content: system}, {role: 'user', content: text}],
+        response_format: {type: 'json_schema', json_schema: schema}, max_tokens: 1200, temperature: 0}) as {response?: unknown};
+      return typeof output?.response === 'string' ? JSON.parse(output.response.match(/\{[\s\S]*\}/)?.[0] ?? 'null') : output?.response ?? undefined;
+    } catch { return undefined; }
+  }
+
+  private mailRows(where: string, ...params: (string | number)[]): MailRow[] {
+    return this.sql.exec<{key: string; direction: 'in' | 'out'; at: string; sender: string; sender_name: string | null; recipients: string; subject: string;
+      message_id: string | null; in_reply_to: string | null; refs: string; automated: number; reading: string | null}>(
+      `SELECT key, direction, at, sender, sender_name, recipients, subject, message_id, in_reply_to, refs, automated, reading FROM mail_messages WHERE ${where}`, ...params).toArray()
+      .map(row => ({key: row.key, direction: row.direction, at: row.at, from: row.sender, fromName: row.sender_name, to: JSON.parse(row.recipients), subject: row.subject,
+        messageId: row.message_id, inReplyTo: row.in_reply_to, references: JSON.parse(row.refs), automated: row.automated === 1, reading: row.reading ? JSON.parse(row.reading) : null}));
+  }
+
+  /** The mailbox over `from`–`to` (ISO times); null while nothing of it has been read. */
+  private mailInsightsBetween(from: string, to: string, now: Date) {
+    const before = new Date(2 * Date.parse(from) - Date.parse(to)).toISOString();
+    const rows = this.mailRows('at >= ? ORDER BY at', before);
+    return rows.length ? mailInsights(rows, from, to, now) : null;
+  }
+
+  /** Morning message: the last 30 days (what waits), on Monday also the week. */
+  private mailBriefFor(date: string, now: Date): MailBrief | null {
+    const days = (count: number) => new Date(now.getTime() - count * 86400000).toISOString();
+    const insights = this.mailInsightsBetween(days(30), now.toISOString(), now);
+    if (!insights) return null;
+    return {insights, weekly: weekday(date) === 0 ? this.mailInsightsBetween(days(7), now.toISOString(), now) : null};
+  }
+
+  /** MCP: the mailbox over any days (at most 400) and its messages with the model's reading (newest first, at most 300). */
+  posMail(from: string, to: string) {
+    const config = this.config();
+    if (!config) return null;
+    const start = zonedMidnight(from, config.timeZone), end = zonedMidnight(addDays(to, 1), config.timeZone);
+    const insights = this.mailInsightsBetween(start, end, new Date());
+    const messages = this.mailRows('at >= ? AND at < ? ORDER BY at DESC LIMIT 300', start, end)
+      .map(row => ({at: row.at, direction: row.direction, from: row.from, fromName: row.fromName, to: row.to, subject: row.subject, automated: row.automated, reading: row.reading}));
+    return {status: this.mailStatus(config), insights, messages};
+  }
+
+  /** Documents from the mailbox of `from`–`to` (the day of the message) that OKO1 could not read. */
+  private unreadableMail(from: string, to: string) {
+    return this.sql.exec<{date: string; sender: string; subject: string}>(`SELECT mail_date AS date, sender, subject FROM mail_documents
+      WHERE status='unreadable' AND mail_date BETWEEN ? AND ? ORDER BY mail_date DESC LIMIT 20`, from, to).toArray().map(row => ({...row}));
+  }
+
+  /** The last visit to the mailbox and what came of it (dashboard, sources). */
+  private mailStatus(config: TenantConfig) {
+    const visit = this.sql.exec<{at: string; error: string | null; backlog: number}>('SELECT at, error, backlog FROM mail_visits WHERE id=1').toArray()[0];
+    if (!visit) return null;
+    const count = (status: string) => this.sql.exec<{count: number}>('SELECT count(*) AS count FROM mail_documents WHERE status=?', status).toArray()[0].count;
+    return {at: stamp(new Date(visit.at), config.timeZone), error: visit.error, readingHistory: visit.backlog > 0, invoices: count('invoice'), unreadable: count('unreadable')};
   }
 
   /** Called by the morning cron trigger. Decides whether this morning's briefing goes out now. */
@@ -1959,7 +2261,7 @@ export class Registry extends DurableObject<Env> {
 const routes: Record<string, string[]> = {
   'v1/ingest': ['POST'], 'v1/menu': ['GET'], 'admin/config': ['GET', 'PUT'], 'admin/pair': ['POST'], 'admin/history': ['POST'],
   'admin/briefing': ['GET'], 'admin/briefings': ['GET'], 'admin/tick': ['POST'], 'admin/report': ['GET', 'PUT'], 'admin/fetch': ['POST'], 'admin/logout': ['POST'],
-  'admin/web': ['GET'], 'admin/ingest': ['GET'], 'admin/competitors': ['GET', 'PUT'],
+  'admin/web': ['GET'], 'admin/ingest': ['GET'], 'admin/competitors': ['GET', 'PUT'], 'admin/mail': ['POST'],
 };
 
 async function readBody(request: Request, limit: number): Promise<unknown | Result> {
@@ -2092,6 +2394,11 @@ export default {
 
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     const tenants = await registry(env).list();
+    // The hourly cron visits the venues' mailboxes; the morning ones prepare and send the briefing.
+    if (event.cron === MAIL_CRON) {
+      for (const tenant of tenants) if (mailAccount(env, tenant)) ctx.waitUntil(tenantStub(env, tenant).mailVisit(tenant, new Date(event.scheduledTime)));
+      return;
+    }
     for (const tenant of tenants) ctx.waitUntil(tenantStub(env, tenant).tick(new Date(event.scheduledTime), tenant));
   },
 };

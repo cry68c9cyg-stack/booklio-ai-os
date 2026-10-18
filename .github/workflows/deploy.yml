@@ -268,6 +268,27 @@ jobs:
           echo "::add-mask::$k"
           printf '%s' "$k" | npx wrangler secret put IUCTO_KEY_JAMES_DEAN --env production > /dev/null
           echo "Klíč iÚčta uložen."
+      - name: Schránka info@jamesdean.cz pro faktury z pošty (INFO_MAIL_PASSWORD, v OKO1 jako MAIL_ACCOUNT_JAMES_DEAN), jen když je vyplněná
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          KEY: ${{ secrets.INFO_MAIL_PASSWORD }}
+        run: |
+          k=$(printf '%s' "$KEY" | tr -d '\r\n')
+          if [ -z "$k" ]; then echo "INFO_MAIL_PASSWORD není vyplněné, faktury z pošty OKO1 nečte."; exit 0; fi
+          echo "::add-mask::$k"
+          jq -cn --arg password "$k" '{host: "imap.websupport.cz", port: 993, user: "info@jamesdean.cz", password: $password}' \
+            | npx wrangler secret put MAIL_ACCOUNT_JAMES_DEAN --env production > /dev/null
+          echo "Schránka info@jamesdean.cz uložena (jen čtení)."
+      - name: První návštěva schránky info@ (jen zda se OKO1 přihlásilo, bez obsahu a počtů)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          KEY: ${{ secrets.INFO_MAIL_PASSWORD }}
+          AI_OS_URL: https://oko1.rr7whdyyhf.workers.dev
+        run: |
+          if [ -z "$KEY" ]; then exit 0; fi
+          export AI_OS_ADMIN_SECRET=$(printf '%s' oko1-admin | openssl dgst -sha256 -hmac "$CLOUDFLARE_API_TOKEN" -r | cut -d' ' -f1)
+          node scripts/admin.ts mail james-dean 2> /dev/null | jq -r 'if .ok then "Schránka: přihlášení v pořádku" + (if .backlog > 0 then ", starší pošta se dál načítá po minutách." else "." end) else "::warning::Schránka: " + (.error // "nenavštívena") end' \
+            || echo "::warning::Schránku nejde navštívit."
       - name: Zkušební SMS (jen když commit obsahuje [test-sms])
         if: contains(github.event.head_commit.message, '[test-sms]')
         env:

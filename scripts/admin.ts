@@ -11,6 +11,7 @@ import {isDate} from '../src/time.ts';
 const usage = `Použití:
   node scripts/admin.ts config <tenant> <konfigurace.json>   uloží nastavení provozovny
   node scripts/admin.ts show <tenant>                         vypíše nastavení
+  node scripts/admin.ts mail <tenant>                         navštíví hned schránku provozovny (faktury z pošty)
   node scripts/admin.ts pair <tenant> <parovani.json>         spáruje pokladnu (soubor z Pexesa: {installationId, token})
   node scripts/admin.ts history <tenant> <export.csv> [--dry-run]   nahraje denní tržby (např. export z rkeeperu)
   node scripts/admin.ts preview <tenant> <YYYY-MM-DD>         ukáže ranní přehled za den
@@ -121,6 +122,9 @@ switch (command) {
     break;
   case 'ingest':
     console.log(JSON.stringify(await call('GET', 'ingest'), null, 2));
+    break;
+  case 'mail':
+    console.log(JSON.stringify(await call('POST', 'mail', {}), null, 2));
     break;
   case 'competitors':
     console.log(JSON.stringify(await call('PUT', 'competitors', await readJson(arg)), null, 2));

@@ -21,7 +21,7 @@ let mf;
 try {
   // Like wrangler: packages resolve for workerd (the MCP SDK and the OAuth provider).
   const bundle = await build({entryPoints: ['src/worker.ts'], bundle: true, write: false, format: 'esm', platform: 'neutral',
-    mainFields: ['module', 'main'], conditions: ['workerd', 'worker', 'browser'], external: ['node:crypto', 'cloudflare:workers']});
+    mainFields: ['module', 'main'], conditions: ['workerd', 'worker', 'browser'], external: ['node:crypto', 'cloudflare:workers', 'cloudflare:sockets']});
   const options = {
     modules: true, script: bundle.outputFiles[0].text, compatibilityDate: '2026-08-06', compatibilityFlags: ['nodejs_compat'],
     durableObjects: {TENANTS: {className: 'TenantObject', useSQLite: true}, REGISTRY: {className: 'Registry', useSQLite: true}},
@@ -170,6 +170,9 @@ try {
   // The morning cron wakes every configured venue.
   const worker = await mf.getWorker();
   await worker.scheduled({scheduledTime: new Date('2026-10-11T05:00:00Z'), cron: '0 5-8 * * *'});
+  // The hourly mailbox visit skips a venue with no mailbox set up (no MAIL_ACCOUNT_<VENUE> secret).
+  await worker.scheduled({scheduledTime: new Date('2026-10-11T05:30:00Z'), cron: '30 * * * *'});
+  assert.deepEqual(await (await call('POST', '/admin/t/test-venue/mail', {})).json(), {visited: false, error: null});
   // SMS delivery through Twilio: a failed send is retried at the next send hour, then marked delivered.
   await mf.dispose();
   const sms = [];
@@ -743,7 +746,7 @@ try {
     body: rpc(1, 'initialize', {protocolVersion: '2025-06-18', capabilities: {}, clientInfo: {name: 'test', version: '1'}})})).json();
   assert.equal(initialized.result.serverInfo.name, 'oko1');
   const listed = await (await local('/mcp', {method: 'POST', headers: {...mcpHeaders, authorization: 'Bearer ' + tokens.access_token}, body: rpc(2, 'tools/list')})).json();
-  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['akce_zebricek', 'den', 'historie_ceny', 'hotovost_a_noci', 'k_vyrizeni', 'kontrola_cen', 'kontrola_lahvi', 'listek', 'menu_engineering', 'naklady_dodavatele', 'odhad_a_vyhled', 'preceneni', 'ranni_prehled', 'report_dne_texty', 'report_manazeru', 'souhrn_obdobi', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty', 'vydelek_polozek',
+  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['akce_zebricek', 'den', 'historie_ceny', 'hotovost_a_noci', 'k_vyrizeni', 'kontrola_cen', 'kontrola_lahvi', 'listek', 'menu_engineering', 'naklady_dodavatele', 'odhad_a_vyhled', 'posta_info', 'preceneni', 'ranni_prehled', 'report_dne_texty', 'report_manazeru', 'souhrn_obdobi', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty', 'vydelek_polozek',
     'web_blokace_a_akce', 'web_darkove_karty', 'web_host', 'web_navstevnost', 'web_platby_lahvi', 'web_prehled', 'web_recenze', 'web_rezervace', 'web_rezervace_detail', 'web_tabulka']);
   assert.ok(listed.result.tools.every(entry => entry.annotations.readOnlyHint === true), 'read only');
 
@@ -853,6 +856,9 @@ try {
   assert.equal((await call('PUT', '/admin/t/james-dean/config', {...jdConfig, foodCostLimitPermille: 10})).status, 400, 'a limit of 1 % is a mistake');
   assert.equal((await call('PUT', '/admin/t/james-dean/config', {...jdConfig, foodCostLimitPermille: 280})).status, 200);
   assert.equal((await mcp('naklady_dodavatele', {od: addDays(today, -6), do: today})).data.foodCostLimitPermille, 280);
+  // Pošta info@ without a mailbox: nothing read yet, no messages.
+  const mail = (await mcp('posta_info', {od: addDays(today, -6), do: today})).data;
+  assert.deepEqual([mail.status, mail.insights, mail.messages], [null, null, []]);
   assert.equal((await call('PUT', '/admin/t/james-dean/config', jdConfig)).status, 200);
   const both = await mcp('den', {datum: today});
   assert.equal(both.data.pokladna.revenueCents, 80000);
