@@ -746,7 +746,7 @@ try {
     body: rpc(1, 'initialize', {protocolVersion: '2025-06-18', capabilities: {}, clientInfo: {name: 'test', version: '1'}})})).json();
   assert.equal(initialized.result.serverInfo.name, 'oko1');
   const listed = await (await local('/mcp', {method: 'POST', headers: {...mcpHeaders, authorization: 'Bearer ' + tokens.access_token}, body: rpc(2, 'tools/list')})).json();
-  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['akce_zebricek', 'den', 'den_a_noc', 'historie_ceny', 'hotovost_a_noci', 'incidenty', 'k_vyrizeni', 'kontrola_cen', 'kontrola_lahvi', 'kpi_tydne', 'listek', 'menu_engineering', 'mzdy_a_smeny', 'naklady_dodavatele', 'odhad_a_vyhled', 'posta_info', 'preceneni', 'promo_a_odpisy', 'ranni_prehled', 'report_dne_texty', 'report_manazeru', 'riziko_mank', 'souhrn_obdobi', 'storna_a_kasa', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty', 'vydelek_polozek', 'vyhled_hotovosti', 'vysledek_mesice', 'vysledek_tydne',
+  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['akce_zebricek', 'den', 'den_a_noc', 'historie_ceny', 'hotovost_a_noci', 'incidenty', 'k_vyrizeni', 'kontrola_cen', 'kontrola_lahvi', 'kpi_tydne', 'listek', 'menu_engineering', 'mzdy_a_smeny', 'naklady_dodavatele', 'nakup_jidla_napoju', 'odhad_a_vyhled', 'posta_info', 'preceneni', 'promo_a_odpisy', 'ranni_prehled', 'report_dne_texty', 'report_manazeru', 'riziko_mank', 'souhrn_obdobi', 'storna_a_kasa', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty', 'vydelek_polozek', 'vyhled_hotovosti', 'vysledek_mesice', 'vysledek_tydne',
     'web_blokace_a_akce', 'web_darkove_karty', 'web_host', 'web_navstevnost', 'web_platby_lahvi', 'web_prehled', 'web_recenze', 'web_rezervace', 'web_rezervace_detail', 'web_tabulka']);
   assert.ok(listed.result.tools.every(entry => entry.annotations.readOnlyHint === true), 'read only');
 
@@ -762,6 +762,8 @@ try {
   assert.ok(!monthResult.error && monthResult.data.month === '2026-10' && monthResult.data.previousThrough === '2026-09-18' && typeof monthResult.data.resultCents === 'number', 'the result of a month');
   const dayNight = await mcp('den_a_noc', {den: '2026-10-18'});
   assert.ok(!dayNight.error && dayNight.data.from === '2026-10-12' && typeof dayNight.data.night.leftCents === 'number', 'the day against the night');
+  const shares = await mcp('nakup_jidla_napoju', {den: '2026-10-18'});
+  assert.ok(!shares.error && shares.data.rows.map(row => row.kind).join() === 'food,beverage', 'food and drinks bought against the revenue');
   const riskList = await mcp('riziko_mank', {od: '2026-10-01', do: '2026-10-31'});
   assert.ok(!riskList.error && Array.isArray(riskList.data.days) && typeof riskList.data.daysWithoutRisk === 'number', 'the shrinkage risk over a period');
   const cashList = await mcp('vyhled_hotovosti', {od: '2026-10-01', do: '2026-10-31'});

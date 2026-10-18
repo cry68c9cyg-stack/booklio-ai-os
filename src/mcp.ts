@@ -255,6 +255,13 @@ export function createServer(context: ToolContext): McpServer {
     const parts = await context.venue.posDayNight(den);
     return parts ? result(parts) : failed('Provozovna není v OKO1 nastavená.');
   });
+  tool('nakup_jidla_napoju', 'Nákup jídla a nápojů', 'Nákup jídla a zvlášť nápojů z faktur dodavatelů (bez DPH) za 7 dní do zadaného dne jako podíl na tržbě bez DPH (promile), proti průměru 4 předchozích týdnů, ' +
+    's dodavatelem, u kterého se nakoupilo nejvíc navíc.',
+  {den: date}, async ({den}: {den: string}) => {
+    if (!isDate(den)) return failed('Den musí být RRRR-MM-DD.');
+    const shares = await context.venue.posPurchaseShares(den);
+    return shares ? result(shares) : failed('Provozovna není v OKO1 nastavená.');
+  });
   tool('riziko_mank', 'Riziko mank', 'Rizikové skóre mank 0–100 po dnech za období (nejvýš 92 dní), nejrizikovější dny první, s důvody a tím, co prověřit: storna po zaplacení, storna nad obvyklým s rozdílem v kase, ' +
     'opakovaný rozdíl v kase, přepočet kasy proti deníku, report proti deníku, neobvyklé slevy, promo 3 dny nad obvyklým, rostoucí dluhy, nesedící tabulky, záporná hotovost v tržbě.',
   {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {

@@ -1,6 +1,7 @@
 import {addDays, weekday} from './time.ts';
 import {promoStreakText} from './promo.ts';
 import {kpiRows} from './kpi.ts';
+import {purchaseShares} from './purchaseshare.ts';
 import {renderWeekResult, weekResultFigures} from './weekresult.ts';
 import {RISK_HIGH, riskScore, riskText} from './risk.ts';
 import {cashForecastText, SURPLUS_CENTS} from './cashflow.ts';
@@ -43,6 +44,8 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   // The week left a fifth less than the average week before: worth a look at revenue and purchases.
   const result = briefing.weekResult && renderWeekResult(briefing.weekResult).length ? weekResultFigures(briefing.weekResult) : null;
   if (result && result.beforeCents !== null && result.beforeCents > 0 && result.resultCents < result.beforeCents * 0.8) items.push({level: 'info', text: renderWeekResult(briefing.weekResult)[0], amountCents: result.beforeCents - result.resultCents});
+  for (const row of briefing.purchaseShares && briefing.purchaseShares.weekRevenueDays >= 5 ? purchaseShares(briefing.purchaseShares).filter(row => row.worse) : [])
+    items.push({level: 'info', text: `Nákup ${row.kind === 'food' ? 'jídla' : 'nápojů'} za týden ${Math.round(row.sharePermille!) / 10} % tržby bez DPH (předtím ${Math.round(row.beforeSharePermille!) / 10} %)${row.rise ? `, nejvíc navíc ${row.rise.supplier}` : ''}: projít faktury a ceny`.replace(/(\d)\.(\d)/g, '$1,$2'), amountCents: row.rise?.overCents ?? null});
   const risk = riskScore(briefing);
   if (risk.score >= RISK_HIGH) warn(`Riziko mank: ${riskText(risk)}`);
   if (briefing.voidAndDiff) warn(`Storna a rozdíl v kase: ${voidAndDiffText(briefing.voidAndDiff)}`, briefing.voidAndDiff.voidCents - briefing.voidAndDiff.usualCents);
