@@ -19,7 +19,7 @@ import {fetchDayFiles, googleDayFiles, googleFolderByName, reportFromFiles} from
 import {authorizeUrl, pkce, redeem, renew} from './microsoft.ts';
 import {googleAccess, serviceAccount} from './google.ts';
 import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
-import {amountConflicts, costOutlook, counted, drinkMargins, dueSoon, nextPaymentBatch, FOOD_COST_LIMIT_PERMILLE, duplicateInvoices, foodCostAlert, monthOverMonth, overdueInvoices, priceRises, supplyBrief, supplySummary, unusualPurchases} from './supplies.ts';
+import {amountConflicts, COST_KIND_NAMES, costOutlook, counted, drinkMargins, dueSoon, newSuppliersFromMail, nextPaymentBatch, FOOD_COST_LIMIT_PERMILLE, duplicateInvoices, foodCostAlert, monthOverMonth, overdueInvoices, priceRises, supplyBrief, supplySummary, unusualPurchases} from './supplies.ts';
 import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
 import {DEFAULT_BOTTLE_LOSS_CENTS, googleFolderId, InputError, validateBatch, withoutGuest, validateCompetitorPrices, validateConfig, validateHistory, type Batch, type CompetitorPrices, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
@@ -28,7 +28,8 @@ import {WEATHER_AGENT, WEATHER_URL, weatherDays, type WeatherDay} from './weathe
 import {MCP_PATH, oauthOptions, type Venues} from './oauth.ts';
 import {folderLabel, sentFolder, withMailbox, type ImapAccount, type ImapSession} from './imap.ts';
 import {parseMail, type Mail} from './mime.ts';
-import {baseSubject, INCOMING_SCHEMA, incomingPrompt, MAIL_TEXT_CHARS, mailInsights, ownText, parseIncomingReading, parseReplyReading, REPLY_SCHEMA, replyPrompt, type MailBrief, type MailRow} from './mail-insights.ts';
+import {zip} from './zip.ts';
+import {baseSubject, DRAFT_SCHEMA, draftPrompt, INCOMING_SCHEMA, incomingPrompt, parseDraft, unanswered, MAIL_TEXT_CHARS, mailInsights, ownText, parseIncomingReading, parseReplyReading, REPLY_SCHEMA, replyPrompt, type MailBrief, type MailRow} from './mail-insights.ts';
 import {asSupplierInvoice, EXTRACTION_SCHEMA, extractionPrompt, invoiceAttachments, isdocSummary, isdocXml, issuedByVenue, looksLikeInvoice, MAIL_HISTORY_FROM,
   MAIL_SOURCE, mailInvoiceId, MAX_DOCUMENT_CHARS, parseExtraction, parseIsdoc, withKinds, type ExtractedInvoice} from './mail-invoices.ts';
 
@@ -61,7 +62,7 @@ const INVOICE_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 /** How long one visit to the mailbox may take, and how many documents it reads; the rest waits for the next visit a minute later. */
 const MAIL_BUDGET_MS = 120000, MAIL_DOCUMENTS_PER_VISIT = 12;
 // The mailbox read for the analysis of info@: messages fetched (only their start, no attachments) and read by the model per visit.
-const MAIL_MESSAGES_PER_VISIT = 150, MAIL_READINGS_PER_VISIT = 15, MAIL_HEAD_BYTES = 65536;
+const MAIL_MESSAGES_PER_VISIT = 150, MAIL_READINGS_PER_VISIT = 15, MAIL_HEAD_BYTES = 65536, MAIL_DRAFTS_PER_VISIT = 5;
 
 /** The venue's mailbox: Worker secret MAIL_ACCOUNT_<TENANT> = {"host", "port", "user", "password"} (set by the deploy). */
 export function mailAccount(env: Env, tenant: string): ImapAccount | null {
@@ -208,6 +209,10 @@ export class TenantObject extends DurableObject<Env> {
     // Wrong codes for unknown venues are counted per venue name in the shared stand-in (see `loginStub`).
     if (!this.sql.exec<{name: string}>('PRAGMA table_info(login_failures)').toArray().some(column => column.name === 'scope')) {
       this.sql.exec("ALTER TABLE login_failures ADD COLUMN scope TEXT NOT NULL DEFAULT ''");
+    }
+    // Draft answers to waiting mail (18. 10. 2026), for a database made before them.
+    if (!this.sql.exec<{name: string}>('PRAGMA table_info(mail_messages)').toArray().some(column => column.name === 'draft')) {
+      this.sql.exec('ALTER TABLE mail_messages ADD COLUMN draft TEXT');
     }
   }
 
@@ -1208,6 +1213,10 @@ export class TenantObject extends DurableObject<Env> {
     const payoutsCents = this.reportSums('payout', date.slice(0, 8) + '01', date).reduce((sum, row) => sum + row.amountCents, 0);
     const brief = supplyBrief([...year, ...unpaid], date, this.revenueBetween(date.slice(0, 8) + '01', date), {payoutsCents, menu: this.menu(), foodCostLimitPermille: config.foodCostLimitPermille,
       restRevenueCents, withCancelled: this.invoices(config, addDays(date, -34), date, false, true)});
+    const senders = new Map(this.sql.exec<{invoice_id: string; sender: string}>("SELECT invoice_id, sender FROM mail_documents WHERE invoice_id IS NOT NULL AND mail_date >= ?", addDays(date, -14)).toArray()
+      .map(row => [row.invoice_id, row.sender]));
+    const newFromMail = newSuppliersFromMail(year, addDays(date, -6), date, senders);
+    if (brief && newFromMail.length) brief.newFromMail = newFromMail;
     const unreadable = this.unreadableMail(addDays(date, -6), date);
     return brief && unreadable.length ? {...brief, unreadable} : brief;
   }
@@ -1231,10 +1240,45 @@ export class TenantObject extends DurableObject<Env> {
       mail: this.mailStatus(config), unreadable: this.unreadableMail(addDays(day, -29), day).slice(0, 10),
       payments: nextPaymentBatch([...year, ...unpaid.filter(invoice => !year.some(other => other.id === invoice.id))], day),
       outlook: costOutlook(unpaid, month, day, restRevenueCents),
-      conflicts: amountConflicts(this.invoices(config, addDays(day, -89), day, false, true)).slice(0, 10)};
+      conflicts: amountConflicts(this.invoices(config, addDays(day, -89), day, false, true)).slice(0, 10),
+      newFromMail: newSuppliersFromMail(year, addDays(day, -29), day, new Map(this.sql.exec<{invoice_id: string; sender: string}>(
+        'SELECT invoice_id, sender FROM mail_documents WHERE invoice_id IS NOT NULL AND mail_date >= ?', addDays(day, -45)).toArray().map(row => [row.invoice_id, row.sender]))).slice(0, 10)};
   }
 
 
+
+  /**
+   * The month's supplier invoices for the accountant (dashboard button): a ZIP with a table of all invoices that count
+   * and the documents of those read from the mailbox, from the archive. Supplier data only, nothing about guests.
+   */
+  async invoiceExport(tenant: string, month: string): Promise<{name: string; bytes: Uint8Array} | null> {
+    const config = this.config();
+    if (!config || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return null;
+    const last = addDays(addDays(month + '-01', 32).slice(0, 8) + '01', -1);
+    const invoices = this.invoices(config, month + '-01', last).sort((a, b) => a.businessDate.localeCompare(b.businessDate) || a.supplier.localeCompare(b.supplier, 'cs'));
+    const money = (cents: number) => (cents / 100).toFixed(2).replace('.', ',');
+    const cell = (value: string | null) => /[;"\n]/.test(value ?? '') ? `"${(value ?? '').replace(/"/g, '""')}"` : value ?? '';
+    const files: {name: string; data: Uint8Array}[] = [];
+    const rows = [['Vystaveno', 'Dodavatel', 'IČO', 'Číslo', 'Splatnost', 'Zaplaceno', 'Bez DPH', 'S DPH', 'Druh', 'Kategorie', 'Zdroj', 'Doklad'].join(';')];
+    for (const invoice of invoices) {
+      let document = '';
+      if (invoice.source === MAIL_SOURCE && this.env.ARCHIVE) {
+        const listed = await this.env.ARCHIVE.list({prefix: `t/${tenant}/posta/${invoice.id}/`, limit: 5});
+        for (const object of listed.objects) {
+          const body = await this.env.ARCHIVE.get(object.key);
+          if (!body) continue;
+          document = `doklady/${invoice.businessDate}_${invoice.supplier.normalize('NFD').replace(/\p{M}/gu, '').replace(/[^\w]+/g, '_').slice(0, 40)}_${(invoice.number ?? invoice.id).replace(/[^\w-]+/g, '_')}_${object.key.split('/').pop()}`;
+          files.push({name: document, data: new Uint8Array(await body.arrayBuffer())});
+          break;
+        }
+      }
+      rows.push([invoice.businessDate, invoice.supplier, invoice.supplierId, invoice.number, invoice.dueDate, invoice.paidDate, money(invoice.netCents), money(invoice.grossCents),
+        COST_KIND_NAMES[invoice.kind], invoice.category, invoice.source === MAIL_SOURCE ? 'pošta info@' : invoice.source, document].map(value => cell(value)).join(';'));
+    }
+    // With a byte order mark, so Excel reads the Czech letters.
+    files.unshift({name: `faktury-${month}.csv`, data: new TextEncoder().encode('\ufeff' + rows.join('\r\n') + '\r\n')});
+    return {name: `faktury-${config.name.normalize('NFD').replace(/\p{M}/gu, '').replace(/[^\w]+/g, '-').toLowerCase()}-${month}.zip`, bytes: zip(files)};
+  }
 
   /** MCP: purchases over any stretch of days (at most 400) with price rises in it, invoices overdue today and the invoices themselves. */
   posSupplies(from: string, to: string) {
@@ -1925,7 +1969,7 @@ export class TenantObject extends DurableObject<Env> {
       cashNeed: this.cashNeedFor(date), payoutAlarm: this.payoutAlarmFor(date), till: this.tillFor(date), nights: weekday(date) === 0 ? this.nightsFor(addDays(date, -27), date) : null,
       tableChecks: tableChecks(this.report(date), this.report(addDays(date, -1))), noteThemes: noteThemes(this.report(date)?.notes),
       themes: weekday(date) === 0 ? this.themeSummary(date) : null, djRanking: weekday(date) === 0 ? this.djRanking(date) : null,
-      supplies: this.supplyBriefFor(config, date, forecast?.month.month === date.slice(0, 7) ? forecast.month.restCents : null), mail: this.mailBriefFor(date, now),
+      supplies: this.supplyBriefFor(config, date, forecast?.month.month === date.slice(0, 7) ? forecast.month.restCents : null), mail: this.mailBriefFor(config, date, now),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};
   }
@@ -2088,6 +2132,14 @@ export class TenantObject extends DurableObject<Env> {
       await this.readMailMessage(config, row.key);
       readings++;
     }
+    // Draft answers for the newest messages still without an answer (after an hour, so a quick answer by the staff needs none).
+    const now = new Date(), recent = this.mailRows('at >= ? ORDER BY at', new Date(now.getTime() - 14 * 86400000).toISOString());
+    for (const row of unanswered(recent, now, 1).filter(row => !row.draft && row.reading).reverse().slice(0, MAIL_DRAFTS_PER_VISIT)) {
+      if (late()) break;
+      const body = this.sql.exec<{body: string}>('SELECT body FROM mail_messages WHERE key=?', row.key).toArray()[0]?.body ?? '';
+      const draft = parseDraft(await this.askModel(draftPrompt(config.name), DRAFT_SCHEMA, `Od: ${row.fromName ?? ''} <${row.from}>\nPředmět: ${row.subject}\n<email>\n${body}\n</email>`));
+      if (draft) this.sql.exec('UPDATE mail_messages SET draft=? WHERE key=?', draft, row.key);
+    }
     const waiting = this.sql.exec<{count: number}>('SELECT count(*) AS count FROM mail_messages WHERE state=0').toArray()[0].count;
     return left + waiting;
   }
@@ -2097,7 +2149,8 @@ export class TenantObject extends DurableObject<Env> {
     const out = fromSent || (!!domain && from.endsWith('@' + domain));
     const automated = mail.automated || (!out && !!domain && from.endsWith('@' + domain));
     // A sent message is graded only when it answers a message of a person; that is decided when it is read.
-    this.sql.exec(`INSERT INTO mail_messages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0) ON CONFLICT(key) DO NOTHING`, key, out ? 'out' : 'in', mail.date ?? new Date().toISOString(),
+    this.sql.exec(`INSERT INTO mail_messages(key, direction, at, sender, sender_name, recipients, subject, message_id, in_reply_to, refs, automated, body, state, reading, tries)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0) ON CONFLICT(key) DO NOTHING`, key, out ? 'out' : 'in', mail.date ?? new Date().toISOString(),
       from.slice(0, 200), mail.from?.name?.slice(0, 200) ?? null, JSON.stringify([...mail.to, ...mail.cc].map(address => address.address).slice(0, 20)), mail.subject.slice(0, 300),
       mail.messageId?.slice(0, 300) ?? null, mail.inReplyTo?.slice(0, 300) ?? null, JSON.stringify(mail.references.slice(-20)), automated ? 1 : 0,
       ownText(mail.text), automated ? 2 : 0, null);
@@ -2144,10 +2197,10 @@ export class TenantObject extends DurableObject<Env> {
 
   private mailRows(where: string, ...params: (string | number)[]): MailRow[] {
     return this.sql.exec<{key: string; direction: 'in' | 'out'; at: string; sender: string; sender_name: string | null; recipients: string; subject: string;
-      message_id: string | null; in_reply_to: string | null; refs: string; automated: number; reading: string | null}>(
-      `SELECT key, direction, at, sender, sender_name, recipients, subject, message_id, in_reply_to, refs, automated, reading FROM mail_messages WHERE ${where}`, ...params).toArray()
+      message_id: string | null; in_reply_to: string | null; refs: string; automated: number; reading: string | null; draft: string | null}>(
+      `SELECT key, direction, at, sender, sender_name, recipients, subject, message_id, in_reply_to, refs, automated, reading, draft FROM mail_messages WHERE ${where}`, ...params).toArray()
       .map(row => ({key: row.key, direction: row.direction, at: row.at, from: row.sender, fromName: row.sender_name, to: JSON.parse(row.recipients), subject: row.subject,
-        messageId: row.message_id, inReplyTo: row.in_reply_to, references: JSON.parse(row.refs), automated: row.automated === 1, reading: row.reading ? JSON.parse(row.reading) : null}));
+        messageId: row.message_id, inReplyTo: row.in_reply_to, references: JSON.parse(row.refs), automated: row.automated === 1, reading: row.reading ? JSON.parse(row.reading) : null, draft: row.draft}));
   }
 
   /** The mailbox over `from`–`to` (ISO times); null while nothing of it has been read. */
@@ -2158,11 +2211,13 @@ export class TenantObject extends DurableObject<Env> {
   }
 
   /** Morning message: the last 30 days (what waits), on Monday also the week. */
-  private mailBriefFor(date: string, now: Date): MailBrief | null {
+  private mailBriefFor(config: TenantConfig, date: string, now: Date): MailBrief | null {
     const days = (count: number) => new Date(now.getTime() - count * 86400000).toISOString();
     const insights = this.mailInsightsBetween(days(30), now.toISOString(), now);
     if (!insights) return null;
-    return {insights, weekly: weekday(date) === 0 ? this.mailInsightsBetween(days(7), now.toISOString(), now) : null};
+    // On the last day of the month: its complaints by cause.
+    const monthly = addDays(date, 1).endsWith('-01') ? this.mailInsightsBetween(zonedMidnight(date.slice(0, 8) + '01', config.timeZone), now.toISOString(), now) : null;
+    return {insights, weekly: weekday(date) === 0 ? this.mailInsightsBetween(days(7), now.toISOString(), now) : null, monthly};
   }
 
   /** MCP: the mailbox over any days (at most 400) and its messages with the model's reading (newest first, at most 300). */
@@ -2354,6 +2409,14 @@ async function dashboard(request: Request, env: Env, tenant: string, action: str
     const start = await stub.onedriveStart(tenant, new URL(ONEDRIVE_CALLBACK, request.url).toString()) as Result;
     if (start.status !== 200) return onedrivePage(tenant, 'OneDrive teď připojit nejde (' + String((start.body as {error?: string}).error) + ').');
     return new Response(null, {status: 303, headers: {location: (start.body as {url: string}).url, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer'}});
+  }
+  // "Faktury za měsíc pro účetnictví": a ZIP download from the logged-in dashboard.
+  if (action === 'faktury' && request.method === 'GET') {
+    if (!known || !await stub.validSession(cookie(request))) return Response.redirect(new URL(path, request.url).toString(), 303);
+    const file = await stub.invoiceExport(tenant, new URL(request.url).searchParams.get('mesic') ?? '');
+    if (!file) return new Response('Měsíc je zadaný špatně.', {status: 400, headers: {'content-type': 'text/plain; charset=utf-8'}});
+    return new Response(file.bytes, {headers: {'content-type': 'application/zip', 'content-disposition': `attachment; filename="${file.name}"`,
+      'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer'}});
   }
   // One menu item over half a year: price and sales by week (the search in the menu card).
   if (action === 'item' && request.method === 'GET') {

@@ -65,3 +65,22 @@ test('the batch payment and conflicts are in the morning message and the to-do l
   assert.ok(todo.some(item => item.text === 'Připravit hromadnou platbu na úterý 20. 10.: 1 faktura za 1 120 Kč'));
   assert.ok(todo.some(item => item.level === 'warn' && item.text.startsWith('Stejná faktura s jinou částkou, ověřit u dodavatele: Zelenina Test č. K1')));
 });
+
+import {newSuppliersFromMail} from '../src/supplies.ts';
+import {unzip, zip} from '../src/zip.ts';
+
+test('an invoice from the mailbox by a supplier never invoiced before is flagged, with who sent it', () => {
+  const invoices = [invoice('old', {supplier: 'Maso Test s.r.o.', businessDate: '2026-09-01'}), invoice('posta-1', {source: 'posta', supplier: 'MASO TEST, s. r. o.', supplierId: '12345678', businessDate: '2026-10-15'}),
+    invoice('posta-2', {source: 'posta', supplier: 'Neznámá Firma a.s.', supplierId: '87654321', businessDate: '2026-10-16'}),
+    invoice('posta-3', {source: 'posta', supplier: 'Neznámá firma', supplierId: '87654321', businessDate: '2026-10-17'})];
+  assert.deepEqual(newSuppliersFromMail(invoices, '2026-10-11', '2026-10-17', new Map([['posta-2', 'fakturace@example.cz']])).map(row => [row.id, row.sender]), [['posta-2', 'fakturace@example.cz']]);
+  const lines = renderSupplies({...supplyBrief(invoices, '2026-10-17', {revenueCents: 0, revenueDays: 0})!, newFromMail: newSuppliersFromMail(invoices, '2026-10-11', '2026-10-17')});
+  assert.ok(lines.some(line => line.startsWith('⚠ Faktura z pošty od dodavatele, kterého ještě neznáme (ověřit, než se zaplatí): Neznámá Firma a.s. (IČO 87654321) č. posta-2, 1 120 Kč')), lines.join('\n'));
+});
+
+test('the export ZIP is read back with its file names and contents', async () => {
+  const bytes = zip([{name: 'faktury-2026-10.csv', data: new TextEncoder().encode('﻿Dodavatel;S DPH\r\nTest;1,00\r\n')}, {name: 'doklady/2026-10-01_Zelenina_č.pdf', data: new Uint8Array([37, 80, 68, 70])}]);
+  const files = await unzip(bytes);
+  assert.deepEqual([...files.keys()], ['faktury-2026-10.csv', 'doklady/2026-10-01_Zelenina_č.pdf']);
+  assert.deepEqual([...files.get('doklady/2026-10-01_Zelenina_č.pdf')!], [37, 80, 68, 70]);
+});
