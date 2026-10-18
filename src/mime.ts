@@ -10,6 +10,8 @@ export type MailAttachment = {filename: string; contentType: string; data: Uint8
 export type Mail = {
   messageId: string | null; inReplyTo: string | null; references: string[]; date: string | null; subject: string;
   from: MailAddress | null; to: MailAddress[]; cc: MailAddress[]; text: string; attachments: MailAttachment[];
+  /** Sent by a machine, not a person: newsletters, notifications, auto-replies, bounces (needs no answer). */
+  automated: boolean;
 };
 
 /** Most parts a message may have; a message beyond it is read up to there. */
@@ -186,14 +188,19 @@ export function parseMail(bytes: Uint8Array): Mail {
     return decodeWords(/[\x80-\xff]/.test(value) ? decodeCharset(asBytes, 'utf-8') : value);
   };
   const id = (value: string | undefined) => value?.match(/<[^>]+>/)?.[0] ?? null;
+  const autoSubmitted = (headers.get('auto-submitted') ?? 'no').trim().toLowerCase();
+  const from = parseAddresses(header('from'))[0] ?? null;
+  const automated = autoSubmitted !== 'no' || /^(bulk|list|junk|auto_reply)$/i.test((headers.get('precedence') ?? '').trim())
+    || ['list-unsubscribe', 'list-id', 'x-autoreply', 'x-autorespond', 'feedback-id'].some(name => headers.has(name))
+    || /^(no-?reply|do-?not-?reply|mailer-daemon|postmaster|notifications?|newsletter|bounce)[^@]*@/i.test(from?.address ?? '');
   const parsedDate = headers.get('date') ? Date.parse(headers.get('date')!.replace(/\s*\([^)]*\)\s*$/, '')) : NaN;
   return {
     messageId: id(headers.get('message-id')), inReplyTo: id(headers.get('in-reply-to')),
     references: headers.get('references')?.match(/<[^>]+>/g) ?? [],
     date: Number.isFinite(parsedDate) ? new Date(parsedDate).toISOString() : null,
     subject: (header('subject') ?? '').trim(),
-    from: parseAddresses(header('from'))[0] ?? null, to: parseAddresses(header('to')), cc: parseAddresses(header('cc')),
+    from, to: parseAddresses(header('to')), cc: parseAddresses(header('cc')),
     text: (state.texts.length ? state.texts.join('\n\n') : state.htmls.map(htmlText).join('\n\n')).trim(),
-    attachments: state.attachments,
+    attachments: state.attachments, automated,
   };
 }

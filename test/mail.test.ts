@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {ImapReader, imapDate, parseList, quoted, sentFolder} from '../src/imap.ts';
+import {folderLabel, ImapReader, imapDate, parseList, quoted, sentFolder} from '../src/imap.ts';
 import {asSupplierInvoice, invoiceAttachments, isdocXml, issuedByVenue, looksLikeInvoice, mailInvoiceId, parseExtraction, parseIsdoc, withKinds} from '../src/mail-invoices.ts';
 import {decodeWords, parseAddresses, parseMail} from '../src/mime.ts';
 import {overdueInvoices, renderSupplies, type SupplyBrief} from '../src/supplies.ts';
@@ -84,6 +84,9 @@ test('IMAP helpers: quoting, dates, folders and the sent folder', () => {
   assert.equal(sentFolder(folders), 'INBOX.Odeslaná pošta');
   assert.equal(sentFolder([{name: 'Sent', flags: []}]), 'Sent');
   assert.equal(sentFolder([{name: 'INBOX', flags: []}]), null);
+  assert.equal(folderLabel('INBOX.Ko&AWE-'), 'INBOX.Koš');
+  assert.equal(sentFolder([{name: 'INBOX.Odeslan&AOE- po&AWE-ta', flags: []}]), 'INBOX.Odeslan&AOE- po&AWE-ta');
+  assert.equal(folderLabel('A&-B'), 'A&B');
 });
 
 const isdoc = `<?xml version="1.0" encoding="UTF-8"?>
@@ -167,3 +170,69 @@ test('unreadable documents from the mailbox are in the morning brief', () => {
 function emptyBrief(): SupplyBrief {
   return {month: {invoices: 0}, rises: [], overdue: [], sources: []} as unknown as SupplyBrief;
 }
+
+// --- Pošta info@ (synthetic conversations) -----------------------------------------------------------------------------
+import {baseSubject, mailInsights, ownText, pairReplies, parseIncomingReading, parseReplyReading, renderMail, type MailRow} from '../src/mail-insights.ts';
+import {todoList as todos} from '../src/todo.ts';
+import {buildBriefing, renderBriefing} from '../src/briefing.ts';
+import type {TenantConfig} from '../src/validate.ts';
+import {zonedMidnight} from '../src/time.ts';
+
+const row = (key: string, extra: Partial<MailRow>): MailRow => ({key, direction: 'in', at: '2026-10-10T10:00:00.000Z', from: 'host@example.cz', fromName: 'Host Testovací', to: ['info@example.cz'],
+  subject: 'Dotaz', messageId: `<${key}@example.cz>`, inReplyTo: null, references: [], automated: false, reading: null, ...extra});
+
+test('own text of a message: the quoted conversation is cut off', () => {
+  assert.equal(ownText('Děkujeme, stůl je rezervovaný.\n\nDne 10. 10. 2026 v 10:00 Host napsal(a):\n> Chtěl bych stůl'), 'Děkujeme, stůl je rezervovaný.');
+  assert.equal(ownText('Ahoj\n> citace\nkonec'), 'Ahoj\nkonec');
+  assert.equal(baseSubject('RE: Odp: Fwd:  Rezervace  pátek'), 'rezervace pátek');
+});
+
+test('replies pair by In-Reply-To or by subject and address; waiting, speed, topics, complaints and grades', () => {
+  const now = new Date('2026-10-18T12:00:00Z');
+  const rows: MailRow[] = [
+    row('a', {at: '2026-10-15T08:00:00.000Z', subject: 'Rezervace na pátek', reading: {topic: 'reservation', needsReply: true, complaint: false, summary: 'Chce stůl na pátek.'}}),
+    row('a-re', {direction: 'out', at: '2026-10-15T10:00:00.000Z', from: 'info@example.cz', fromName: null, to: ['host@example.cz'], subject: 'Re: Rezervace na pátek', inReplyTo: '<a@example.cz>',
+      reading: {quality: 5, issues: null, better: null}}),
+    row('b', {at: '2026-10-14T09:00:00.000Z', from: 'jiny@example.cz', fromName: null, subject: 'Studené jídlo', reading: {topic: 'complaint', needsReply: true, complaint: true, summary: 'Stěžuje si na studené jídlo.'}}),
+    row('b-re', {direction: 'out', at: '2026-10-17T09:00:00.000Z', from: 'info@example.cz', fromName: null, to: ['jiny@example.cz'], subject: 'RE: Studené jídlo', messageId: null,
+      reading: {quality: 2, issues: 'Bez omluvy.', better: 'Omlouváme se…'}}),
+    row('c', {at: '2026-10-16T09:00:00.000Z', from: 'treti@example.cz', fromName: 'Třetí', subject: 'Ztracená bunda', reading: {topic: 'lost', needsReply: true, complaint: false, summary: 'Hledá bundu.'}}),
+    row('c2', {at: '2026-10-17T09:00:00.000Z', from: 'treti@example.cz', fromName: 'Třetí', subject: 'Re: Ztracená bunda', reading: {topic: 'lost', needsReply: true, complaint: false, summary: 'Znovu se ptá.'}}),
+    row('d', {at: '2026-10-17T09:00:00.000Z', from: 'newsletter@example.cz', subject: 'Akce týdne', automated: true}),
+    row('old', {at: '2026-09-10T09:00:00.000Z', reading: {topic: 'lost', needsReply: true, complaint: false, summary: ''}}),
+  ];
+  assert.deepEqual([...pairReplies(rows)].map(([key, reply]) => [key, reply.key]), [['a', 'a-re'], ['b', 'b-re']]);
+  const insights = mailInsights(rows, '2026-09-18T12:00:00.000Z', now.toISOString(), now);
+  assert.equal(insights.received, 4);
+  assert.equal(insights.answered, 2);
+  assert.equal(insights.medianReplyHours, 37); // 2 h and 72 h
+  assert.equal(insights.within24Permille, 250);
+  assert.deepEqual(insights.waiting.map(w => [w.from, w.hours]), [['treti@example.cz', 51]]);
+  assert.deepEqual(insights.topics.map(t => [t.topic, t.count, t.previous]), [['lost', 2, 1], ['reservation', 1, 0], ['complaint', 1, 0]]);
+  assert.equal(insights.complaints[0].answeredHours, 72);
+  assert.equal(insights.complaints[0].better, 'Omlouváme se…');
+  assert.equal(insights.qualityTenths, 35);
+  assert.deepEqual(insights.weakest.map(w => w.quality), [2]);
+  assert.ok(insights.outOfControl.some(text => text === 'Třetí <treti@example.cz> píše už 2× bez odpovědi („Re: Ztracená bunda“)'), insights.outOfControl.join('\n'));
+  assert.ok(insights.outOfControl.some(text => text.startsWith('1 odpověď přišla až po víc než 48')));
+  const lines = renderMail(insights, insights);
+  assert.match(lines[0], /^⚠ Pošta info@: 1 bez odpovědi přes 24 h: Třetí \(„Ztracená bunda“, 2 dny\)$/);
+  assert.ok(lines.some(line => line.startsWith('Pošta info@ za týden: 4 zpráv k odpovědi, odpovězeno 2, obvykle za 37 h, odpovědi 3,5/5')), lines.join('\n'));
+  const config = {name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7], registers: [], sections: {}, recipients: [], bottleCheck: null,
+    reportsLink: null, dashboardPhones: null, web: null, location: null, disabledSources: [], foodCostLimitPermille: null} as unknown as TenantConfig;
+  const briefing = buildBriefing({businessDate: '2026-10-17', config, bills: [], closings: [], planHistory: [], incomplete: false, mail: {insights, weekly: null}});
+  assert.match(renderBriefing(config.name, briefing), /\n⚠ Pošta info@: 1 bez odpovědi/);
+  assert.ok(todos(briefing).some(item => item.text.startsWith('Odpovědět na e-mail: Třetí („Ztracená bunda“, 2 dny) – Hledá bundu.')));
+});
+
+test('the model readings of mail are checked', () => {
+  assert.deepEqual(parseIncomingReading({topic: 'group', needsReply: true, complaint: false, summary: '  Oslava   pro 20 lidí '}), {topic: 'group', needsReply: true, complaint: false, summary: 'Oslava pro 20 lidí'});
+  assert.equal(parseIncomingReading({topic: 'neznámé', needsReply: true, complaint: false, summary: ''}), null);
+  assert.deepEqual(parseReplyReading({quality: 4.4, issues: '', better: null}), {quality: 4, issues: null, better: null});
+  assert.equal(parseReplyReading({quality: 7}), null);
+});
+
+test('local midnight of a day in Prague, in summer and winter time', () => {
+  assert.equal(zonedMidnight('2026-10-18', 'Europe/Prague'), '2026-10-17T22:00:00.000Z');
+  assert.equal(zonedMidnight('2026-12-01', 'Europe/Prague'), '2026-11-30T23:00:00.000Z');
+});

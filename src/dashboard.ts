@@ -436,6 +436,28 @@ function suppliesCard(s) {
   return h + '</div>';
 }
 
+// The mailbox info@ over 30 days: what waits for an answer, how fast and how well the staff answers, topics, complaints.
+function mailCard(m) {
+  if (!m) return '';
+  const when = iso => { const d = new Date(iso); return d.getDate() + '. ' + (d.getMonth() + 1) + '. ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  const ago = h => h < 48 ? h + ' h' : Math.floor(h / 24) + (Math.floor(h / 24) <= 4 ? ' dny' : ' dní');
+  const num = v => String(v).replace('.', ',');
+  let h = '<div class="card"><h2>Pošta info@ (30 dní)</h2><div class="big">' + m.waiting.length + ' bez odpovědi</div><div class="muted">' + m.received + ' zpráv k odpovědi, odpovězeno ' + m.answered +
+    (m.medianReplyHours !== null ? ', obvykle za ' + num(m.medianReplyHours) + ' h' : '') + (m.within24Permille !== null ? ', do 24 h ' + Math.round(m.within24Permille / 10) + ' %' : '') +
+    (m.qualityTenths !== null ? ' · odpovědi obsluhy <b>' + num(m.qualityTenths / 10) + '/5</b> (' + m.graded + ')' : '') + '</div>';
+  if (m.outOfControl.length) h += '<h3>Co nemáme v řízení</h3><ul>' + m.outOfControl.map(t => '<li class="warn">' + esc(t) + '</li>').join('') + '</ul>';
+  h += '<h3>Čeká na odpověď přes 24 h</h3>' + (m.waiting.length ? '<ul>' + m.waiting.map(w => '<li' + (w.complaint ? ' class="warn"' : '') + '>' + esc(when(w.at)) + ' <b>' + esc(w.fromName || w.from) + '</b>: ' + esc(w.subject || 'bez předmětu') +
+    ' <span class="muted">(' + ago(w.hours) + (w.summary ? ' · ' + esc(w.summary) : '') + ')</span></li>').join('') + '</ul>' : '<span class="muted">nic nečeká</span>');
+  if (m.topics.length) h += '<h3>Témata</h3><table>' + m.topics.map(t => '<tr><td>' + esc(t.name) + '</td><td class="n">' + t.count + '</td><td class="n muted">předtím ' + t.previous + '</td></tr>').join('') + '</table>';
+  if (m.complaints.length) h += '<h3>Stížnosti</h3><ul>' + m.complaints.map(c => '<li>' + esc(when(c.at)) + ' <b>' + esc(c.fromName || c.from) + '</b>: ' + esc(c.summary || c.subject) + ' <span class="' + (c.answeredHours === null ? 'warn' : 'muted') + '">(' +
+    (c.answeredHours === null ? 'bez odpovědi' : 'odpověď za ' + num(c.answeredHours) + ' h' + (c.quality ? ', ' + c.quality + '/5' : '')) + ')</span>' +
+    (c.issues ? '<div class="muted">' + esc(c.issues) + '</div>' : '') + (c.better ? '<details><summary>Lepší odpověď</summary><div style="white-space:pre-wrap">' + esc(c.better) + '</div></details>' : '') + '</li>').join('') + '</ul>';
+  const weak = m.weakest.filter(w => !m.complaints.some(c => c.better && c.better === w.better));
+  if (weak.length) h += '<details><summary>Nejslabší odpovědi (' + weak.length + ')</summary><ul>' + weak.map(w => '<li>' + esc(when(w.at)) + ' ' + esc(w.to) + ': ' + esc(w.subject) + ' <b>' + w.quality + '/5</b>' +
+    (w.issues ? '<div class="muted">' + esc(w.issues) + '</div>' : '') + (w.better ? '<details><summary>Lepší odpověď</summary><div style="white-space:pre-wrap">' + esc(w.better) + '</div></details>' : '') + '</li>').join('') + '</ul></details>';
+  return h + '</div>';
+}
+
 // Who sends data to OKO1 and when it last arrived; a sender silent too long is marked.
 function sourcesCard(s) {
   if (!s) return '';
@@ -511,7 +533,7 @@ function render(data) {
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card" id="todo">' + todoCard(data.todo) + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
-  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast, b.target) + weekCard(data.week) + eventsCard(data.eventRanking) + themesCard(data.themes, data.djRanking) + trendsCard(data.trends) + menuInterestCard(data.menuInterest) + monthCard(data.month) + suppliesCard(data.supplies) + menuCard(data.menu) + sourcesCard(data.sources);
+  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast, b.target) + weekCard(data.week) + eventsCard(data.eventRanking) + themesCard(data.themes, data.djRanking) + trendsCard(data.trends) + menuInterestCard(data.menuInterest) + monthCard(data.month) + suppliesCard(data.supplies) + mailCard(data.mail) + menuCard(data.menu) + sourcesCard(data.sources);
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
   if (r) {

@@ -11,7 +11,7 @@ import {competitorComparison, competitorSections, COMPETITOR_SHARE, itemProfit, 
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
 import {czechHolidays, holidayName} from './holidays.ts';
-import {addDays, businessDate, isDate, localTime, sameClockDaysBefore, weekday} from './time.ts';
+import {addDays, businessDate, isDate, localTime, sameClockDaysBefore, weekday, zonedMidnight} from './time.ts';
 import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-report.ts';
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, googleDayFiles, googleFolderByName, reportFromFiles} from './onedrive.ts';
@@ -25,8 +25,9 @@ import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-cli
 import {dashboardWeb} from './web-views.ts';
 import {WEATHER_AGENT, WEATHER_URL, weatherDays, type WeatherDay} from './weather.ts';
 import {MCP_PATH, oauthOptions, type Venues} from './oauth.ts';
-import {sentFolder, withMailbox, type ImapAccount, type ImapSession} from './imap.ts';
+import {folderLabel, sentFolder, withMailbox, type ImapAccount, type ImapSession} from './imap.ts';
 import {parseMail, type Mail} from './mime.ts';
+import {baseSubject, INCOMING_SCHEMA, incomingPrompt, MAIL_TEXT_CHARS, mailInsights, ownText, parseIncomingReading, parseReplyReading, REPLY_SCHEMA, replyPrompt, type MailBrief, type MailRow} from './mail-insights.ts';
 import {asSupplierInvoice, EXTRACTION_SCHEMA, extractionPrompt, invoiceAttachments, isdocSummary, isdocXml, issuedByVenue, looksLikeInvoice, MAIL_HISTORY_FROM,
   MAIL_SOURCE, mailInvoiceId, MAX_DOCUMENT_CHARS, parseExtraction, parseIsdoc, withKinds, type ExtractedInvoice} from './mail-invoices.ts';
 
@@ -58,6 +59,8 @@ const MAIL_CRON = '30 * * * *';
 const INVOICE_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 /** How long one visit to the mailbox may take, and how many documents it reads; the rest waits for the next visit a minute later. */
 const MAIL_BUDGET_MS = 120000, MAIL_DOCUMENTS_PER_VISIT = 12;
+// The mailbox read for the analysis of info@: messages fetched (only their start, no attachments) and read by the model per visit.
+const MAIL_MESSAGES_PER_VISIT = 150, MAIL_READINGS_PER_VISIT = 15, MAIL_HEAD_BYTES = 65536;
 
 /** The venue's mailbox: Worker secret MAIL_ACCOUNT_<TENANT> = {"host", "port", "user", "password"} (set by the deploy). */
 export function mailAccount(env: Env, tenant: string): ImapAccount | null {
@@ -190,6 +193,16 @@ export class TenantObject extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS mail_visits(id INTEGER PRIMARY KEY CHECK(id=1), tenant TEXT NOT NULL, at TEXT NOT NULL, error TEXT, backlog INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS mail_documents(folder TEXT NOT NULL, uid_validity INTEGER NOT NULL, uid INTEGER NOT NULL, at TEXT NOT NULL, mail_date TEXT,
         status TEXT NOT NULL, sender TEXT NOT NULL, subject TEXT NOT NULL, invoice_id TEXT, PRIMARY KEY(folder, uid_validity, uid));
+      -- Every message of the inbox and the sent folder since April 2026 for the analysis of info@ (MC, 18. 10. 2026): who wrote,
+      -- when, the subject, the message's own text and the model's reading (topic, wants an answer, complaint; a reply's grade).
+      -- State 0 = waiting for the model, 1 = read, 2 = nothing to read (machine mail, a sent message that answers nothing, or
+      -- three failed tries).
+      CREATE TABLE IF NOT EXISTS mail_scan(folder TEXT PRIMARY KEY, uid_validity INTEGER NOT NULL, last_uid INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS mail_messages(key TEXT PRIMARY KEY, direction TEXT NOT NULL CHECK(direction IN ('in','out')), at TEXT NOT NULL,
+        sender TEXT NOT NULL, sender_name TEXT, recipients TEXT NOT NULL, subject TEXT NOT NULL, message_id TEXT, in_reply_to TEXT, refs TEXT NOT NULL,
+        automated INTEGER NOT NULL, body TEXT NOT NULL, state INTEGER NOT NULL, reading TEXT, tries INTEGER NOT NULL DEFAULT 0);
+      CREATE INDEX IF NOT EXISTS mail_messages_at ON mail_messages(at);
+      CREATE INDEX IF NOT EXISTS mail_messages_id ON mail_messages(message_id);
     `));
     // Wrong codes for unknown venues are counted per venue name in the shared stand-in (see `loginStub`).
     if (!this.sql.exec<{name: string}>('PRAGMA table_info(login_failures)').toArray().some(column => column.name === 'scope')) {
@@ -374,7 +387,7 @@ export class TenantObject extends DurableObject<Env> {
     const stored = this.sql.exec<{text: string}>('SELECT text FROM briefings WHERE business_date=?', day).toArray()[0];
     const todo = this.todoFor(day, briefing);
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
-      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day),
+      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day), mail: this.mailInsightsBetween(new Date(Date.now() - 30 * 86400000).toISOString(), new Date().toISOString(), new Date()),
       themes: briefing.themes ?? this.themeSummary(day), djRanking: briefing.djRanking ?? this.djRanking(day)});
   }
 
@@ -1860,7 +1873,7 @@ export class TenantObject extends DurableObject<Env> {
       lastYearRevenueCents: this.dayRevenue(addDays(date, -364)), target: this.monthTargetFor(date), dataGaps: this.dataGaps(config, date, now),
       tableChecks: tableChecks(this.report(date), this.report(addDays(date, -1))), noteThemes: noteThemes(this.report(date)?.notes),
       themes: weekday(date) === 0 ? this.themeSummary(date) : null, djRanking: weekday(date) === 0 ? this.djRanking(date) : null,
-      supplies: this.supplyBriefFor(config, date),
+      supplies: this.supplyBriefFor(config, date), mail: this.mailBriefFor(date, now),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};
   }
@@ -1880,14 +1893,14 @@ export class TenantObject extends DurableObject<Env> {
   async mailVisit(tenant: string, now = new Date()) {
     const config = this.config(), account = mailAccount(this.env, tenant);
     if (!config || !account) return {visited: false};
-    const started = Date.now(), late = () => Date.now() - started > MAIL_BUDGET_MS * 0.8;
+    const started = Date.now(), late = () => Date.now() - started > MAIL_BUDGET_MS * 0.5;
     let documents = 0, backlog = 0;
     const result = await withMailbox(account, async session => {
       const all = await session.folders(), sent = sentFolder(all);
       const skipped = ['\\noselect', '\\nonexistent', '\\sent', '\\drafts', '\\junk', '\\trash', '\\all'];
       const folders = all.filter(folder => folder.name !== sent && !folder.flags.some(flag => skipped.includes(flag))
-        && !/(^|[./])(sent|drafts?|spam|junk|trash|deleted|ko[sš]|odeslan|koncept|nevy[zž][aá]dan)/i.test(folder.name));
-      for (const folder of folders) {
+        && !/(^|[./])(sent|drafts?|spam|junk|trash|deleted|ko[sš]|odeslan|koncept|nevy[zž][aá]dan)/i.test(folderLabel(folder.name)));
+      invoices: for (const folder of folders) {
         const box = await session.examine(folder.name);
         const state = this.sql.exec<{uid_validity: number; last_uid: number}>('SELECT uid_validity, last_uid FROM mail_folders WHERE folder=?', folder.name).toArray()[0];
         let last = state && state.uid_validity === box.uidValidity ? state.last_uid : 0;
@@ -1904,9 +1917,10 @@ export class TenantObject extends DurableObject<Env> {
             this.sql.exec('INSERT INTO mail_folders VALUES(?,?,?) ON CONFLICT(folder) DO UPDATE SET uid_validity=excluded.uid_validity, last_uid=excluded.last_uid',
               folder.name, box.uidValidity, last);
           }
-          if (backlog) return;
+          if (backlog) break invoices;
         }
       }
+      backlog += await this.scanMail(config, account.user, session, all, sent, started);
     }, MAIL_BUDGET_MS + 30000);
     this.sql.exec(`INSERT INTO mail_visits VALUES(1,?,?,?,?) ON CONFLICT(id) DO UPDATE SET tenant=excluded.tenant, at=excluded.at, error=excluded.error, backlog=excluded.backlog`,
       tenant, now.toISOString(), result.ok ? null : result.error, backlog);
@@ -1982,6 +1996,124 @@ export class TenantObject extends DurableObject<Env> {
       ON CONFLICT(type, id) DO NOTHING`, record.type, record.id, record.version, record.businessDate, '', JSON.stringify(record), MAIL_SOURCE, now).rowsWritten;
     if (added) this.archive(`t/${tenant}/posta/${id}/${attachment.filename.replace(/[^\w.-]+/g, '_').slice(-80)}`, attachment.data);
     return id;
+  }
+
+  /**
+   * The analysis part of a visit: new messages of the inbox and the sent folder are stored (their start only), then the
+   * model reads the newest waiting ones. Returns how much is left for the next visit.
+   */
+  private async scanMail(config: TenantConfig, user: string, session: ImapSession, all: {name: string; flags: string[]}[], sent: string | null, started: number): Promise<number> {
+    const late = () => Date.now() - started > MAIL_BUDGET_MS * 0.8;
+    const domain = user.split('@')[1]?.toLowerCase() ?? '';
+    const inbox = all.find(folder => folder.name.toUpperCase() === 'INBOX')?.name;
+    let fetched = 0, left = 0;
+    for (const folder of [inbox, sent].filter((name): name is string => !!name)) {
+      const box = await session.examine(folder);
+      const state = this.sql.exec<{uid_validity: number; last_uid: number}>('SELECT uid_validity, last_uid FROM mail_scan WHERE folder=?', folder).toArray()[0];
+      let last = state && state.uid_validity === box.uidValidity ? state.last_uid : 0;
+      const uids = (await session.since(MAIL_HISTORY_FROM)).filter(uid => uid > last);
+      for (const uid of uids) {
+        if (fetched >= MAIL_MESSAGES_PER_VISIT || late()) { left += uids.filter(other => other > last).length; break; }
+        fetched++;
+        const head = await session.head(uid, MAIL_HEAD_BYTES);
+        if (head) this.storeMailMessage(parseMail(head), `${folder}|${box.uidValidity}|${uid}`, folder === sent, domain);
+        last = uid;
+        this.sql.exec('INSERT INTO mail_scan VALUES(?,?,?) ON CONFLICT(folder) DO UPDATE SET uid_validity=excluded.uid_validity, last_uid=excluded.last_uid', folder, box.uidValidity, last);
+      }
+    }
+    // The model reads the newest first, so the last weeks are ready before the history.
+    let readings = 0;
+    for (const row of this.sql.exec<{key: string}>('SELECT key FROM mail_messages WHERE state=0 ORDER BY at DESC LIMIT ?', MAIL_READINGS_PER_VISIT).toArray()) {
+      if (late()) break;
+      await this.readMailMessage(config, row.key);
+      readings++;
+    }
+    const waiting = this.sql.exec<{count: number}>('SELECT count(*) AS count FROM mail_messages WHERE state=0').toArray()[0].count;
+    return left + waiting;
+  }
+
+  private storeMailMessage(mail: Mail, key: string, fromSent: boolean, domain: string) {
+    const from = mail.from?.address ?? '';
+    const out = fromSent || (!!domain && from.endsWith('@' + domain));
+    const automated = mail.automated || (!out && !!domain && from.endsWith('@' + domain));
+    // A sent message is graded only when it answers a message of a person; that is decided when it is read.
+    this.sql.exec(`INSERT INTO mail_messages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0) ON CONFLICT(key) DO NOTHING`, key, out ? 'out' : 'in', mail.date ?? new Date().toISOString(),
+      from.slice(0, 200), mail.from?.name?.slice(0, 200) ?? null, JSON.stringify([...mail.to, ...mail.cc].map(address => address.address).slice(0, 20)), mail.subject.slice(0, 300),
+      mail.messageId?.slice(0, 300) ?? null, mail.inReplyTo?.slice(0, 300) ?? null, JSON.stringify(mail.references.slice(-20)), automated ? 1 : 0,
+      ownText(mail.text), automated ? 2 : 0, null);
+  }
+
+  /** The model's reading of one stored message: an incoming one gets its topic, a reply to a person its grade. */
+  private async readMailMessage(config: TenantConfig, key: string) {
+    const row = this.mailRows(`key=?`, key)[0];
+    if (!row) return;
+    // The model did not answer: tried again on a later visit, at most three times, so a lasting failure does not keep the visits going.
+    const done = (reading: object | null, state = reading ? 1 : 2) => state === 0
+      ? this.sql.exec('UPDATE mail_messages SET tries=tries+1, state=CASE WHEN tries >= 2 THEN 2 ELSE 0 END WHERE key=?', key)
+      : this.sql.exec('UPDATE mail_messages SET state=?, reading=? WHERE key=?', state, reading ? JSON.stringify(reading) : null, key);
+    const body = this.sql.exec<{body: string}>('SELECT body FROM mail_messages WHERE key=?', key).toArray()[0]?.body ?? '';
+    if (row.direction === 'in') {
+      const answer = await this.askModel(incomingPrompt(config.name), INCOMING_SCHEMA, `Od: ${row.fromName ?? ''} <${row.from}>\nPředmět: ${row.subject}\n<email>\n${body}\n</email>`);
+      return done(answer === undefined ? null : parseIncomingReading(answer), answer === undefined ? 0 : undefined);
+    }
+    const parent = this.replyParent(row);
+    if (!parent) return done(null, 2);
+    const parentBody = this.sql.exec<{body: string}>('SELECT body FROM mail_messages WHERE key=?', parent.key).toArray()[0]?.body ?? '';
+    const answer = await this.askModel(replyPrompt(config.name), REPLY_SCHEMA,
+      `Zpráva pisatele (${parent.from}, předmět „${parent.subject}“):\n<email>\n${parentBody.slice(0, MAIL_TEXT_CHARS / 2)}\n</email>\nOdpověď podniku:\n<odpoved>\n${body.slice(0, MAIL_TEXT_CHARS / 2)}\n</odpoved>`);
+    return done(answer === undefined ? null : parseReplyReading(answer), answer === undefined ? 0 : undefined);
+  }
+
+  /** The incoming message a sent one answers: by In-Reply-To, otherwise the last one of the same subject from its recipient before it. */
+  private replyParent(row: MailRow): MailRow | null {
+    const byId = row.inReplyTo ? this.mailRows(`message_id=? AND direction='in'`, row.inReplyTo)[0] : undefined;
+    if (byId) return byId.automated ? null : byId;
+    const candidates = this.mailRows(`direction='in' AND automated=0 AND at < ? AND at > ? ORDER BY at DESC LIMIT 50`, row.at, new Date(Date.parse(row.at) - 30 * 86400000).toISOString());
+    return candidates.find(other => row.to.includes(other.from) && baseSubject(other.subject) === baseSubject(row.subject) && baseSubject(row.subject).length >= 3) ?? null;
+  }
+
+  /** The model's JSON answer, or undefined when it could not answer (no AI, an error): the message is then tried again later. */
+  private async askModel(system: string, schema: object, text: string): Promise<unknown> {
+    if (!this.env.AI) return undefined;
+    try {
+      const output = await this.env.AI.run(INVOICE_MODEL, {messages: [{role: 'system', content: system}, {role: 'user', content: text}],
+        response_format: {type: 'json_schema', json_schema: schema}, max_tokens: 1200, temperature: 0}) as {response?: unknown};
+      return typeof output?.response === 'string' ? JSON.parse(output.response.match(/\{[\s\S]*\}/)?.[0] ?? 'null') : output?.response ?? undefined;
+    } catch { return undefined; }
+  }
+
+  private mailRows(where: string, ...params: (string | number)[]): MailRow[] {
+    return this.sql.exec<{key: string; direction: 'in' | 'out'; at: string; sender: string; sender_name: string | null; recipients: string; subject: string;
+      message_id: string | null; in_reply_to: string | null; refs: string; automated: number; reading: string | null}>(
+      `SELECT key, direction, at, sender, sender_name, recipients, subject, message_id, in_reply_to, refs, automated, reading FROM mail_messages WHERE ${where}`, ...params).toArray()
+      .map(row => ({key: row.key, direction: row.direction, at: row.at, from: row.sender, fromName: row.sender_name, to: JSON.parse(row.recipients), subject: row.subject,
+        messageId: row.message_id, inReplyTo: row.in_reply_to, references: JSON.parse(row.refs), automated: row.automated === 1, reading: row.reading ? JSON.parse(row.reading) : null}));
+  }
+
+  /** The mailbox over `from`–`to` (ISO times); null while nothing of it has been read. */
+  private mailInsightsBetween(from: string, to: string, now: Date) {
+    const before = new Date(2 * Date.parse(from) - Date.parse(to)).toISOString();
+    const rows = this.mailRows('at >= ? ORDER BY at', before);
+    return rows.length ? mailInsights(rows, from, to, now) : null;
+  }
+
+  /** Morning message: the last 30 days (what waits), on Monday also the week. */
+  private mailBriefFor(date: string, now: Date): MailBrief | null {
+    const days = (count: number) => new Date(now.getTime() - count * 86400000).toISOString();
+    const insights = this.mailInsightsBetween(days(30), now.toISOString(), now);
+    if (!insights) return null;
+    return {insights, weekly: weekday(date) === 0 ? this.mailInsightsBetween(days(7), now.toISOString(), now) : null};
+  }
+
+  /** MCP: the mailbox over any days (at most 400) and its messages with the model's reading (newest first, at most 300). */
+  posMail(from: string, to: string) {
+    const config = this.config();
+    if (!config) return null;
+    const start = zonedMidnight(from, config.timeZone), end = zonedMidnight(addDays(to, 1), config.timeZone);
+    const insights = this.mailInsightsBetween(start, end, new Date());
+    const messages = this.mailRows('at >= ? AND at < ? ORDER BY at DESC LIMIT 300', start, end)
+      .map(row => ({at: row.at, direction: row.direction, from: row.from, fromName: row.fromName, to: row.to, subject: row.subject, automated: row.automated, reading: row.reading}));
+    return {status: this.mailStatus(config), insights, messages};
   }
 
   /** Documents from the mailbox of `from`–`to` (the day of the message) that OKO1 could not read. */
