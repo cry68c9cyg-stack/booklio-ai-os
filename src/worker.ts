@@ -1,7 +1,7 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
-import {cashDay, cashNeed, nightSummary, payoutAlarm, type NightSummary} from './cash.ts';
+import {cashDay, cashNeed, nightSummary, payoutAlarm, tillDay, type NightSummary, type Till} from './cash.ts';
 import {tableChecks} from './checks.ts';
 import {GAP_DAYS, monthBase, monthTarget, shiftSignals, type DataGaps, type MonthTarget, type TargetBase} from './goals.ts';
 import {noteThemes, rankDjs, djOf, summarizeThemes, type DjRank, type ThemeSummary} from './themes.ts';
@@ -1816,6 +1816,18 @@ export class TenantObject extends DurableObject<Env> {
     return payoutAlarm(day(date), [7, 14, 21, 28].map(back => day(addDays(date, -back))).filter(entry => entry !== null));
   }
 
+  /** The till of the day: IOUs against a week before, Vklad JD and negative cash in the revenue rows, with the month so far. */
+  private tillFor(date: string): Till | null {
+    const day = tillDay(this.report(date));
+    if (!day) return null;
+    let monthDepositsCents = 0, monthTipsCents = 0;
+    for (let entry = date.slice(0, 8) + '01'; entry <= date; entry = addDays(entry, 1)) {
+      const other = entry === date ? day : tillDay(this.report(entry));
+      monthDepositsCents += other?.depositsCents ?? 0; monthTipsCents += other?.tipsCents ?? 0;
+    }
+    return {day, debtsWeekAgoCents: tillDay(this.report(addDays(date, -7)))?.debtsCents ?? null, month: date.slice(0, 7), monthDepositsCents, monthTipsCents};
+  }
+
   /** Each night with the club's revenue and the cash book: what is left after the night's staff is paid, by weekday and DJ. */
   private nightsFor(from: string, to: string): NightSummary {
     const nights = this.noteDays(from, to).map(day => {
@@ -1829,7 +1841,9 @@ export class TenantObject extends DurableObject<Env> {
   /** MCP: the nights of a stretch of days, cash payouts and expenses, and the averages by weekday and DJ. */
   posNights(from: string, to: string) {
     if (!this.config()) return null;
-    return this.nightsFor(from, to);
+    const till = [];
+    for (let entry = from; entry <= to; entry = addDays(entry, 1)) { const day = tillDay(this.report(entry)); if (day) till.push(day); }
+    return {...this.nightsFor(from, to), till};
   }
 
   posNotes(from: string, to: string) {
@@ -1900,7 +1914,7 @@ export class TenantObject extends DurableObject<Env> {
       menuByLanguage: weekday(date) === 0 ? sumMenuInterest(this.webDays(addDays(date, -27), date), addDays(date, -27), date) : null,
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
       lastYearRevenueCents: this.dayRevenue(addDays(date, -364)), target: this.monthTargetFor(date), dataGaps: this.dataGaps(config, date, now),
-      cashNeed: this.cashNeedFor(date), payoutAlarm: this.payoutAlarmFor(date), nights: weekday(date) === 0 ? this.nightsFor(addDays(date, -27), date) : null,
+      cashNeed: this.cashNeedFor(date), payoutAlarm: this.payoutAlarmFor(date), till: this.tillFor(date), nights: weekday(date) === 0 ? this.nightsFor(addDays(date, -27), date) : null,
       tableChecks: tableChecks(this.report(date), this.report(addDays(date, -1))), noteThemes: noteThemes(this.report(date)?.notes),
       themes: weekday(date) === 0 ? this.themeSummary(date) : null, djRanking: weekday(date) === 0 ? this.djRanking(date) : null,
       supplies: this.supplyBriefFor(config, date), mail: this.mailBriefFor(date, now),

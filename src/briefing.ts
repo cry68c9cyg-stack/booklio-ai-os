@@ -5,7 +5,7 @@ import type {NotePoint, NotesAnalysis} from './notes.ts';
 import {weatherText, type WeatherDay} from './weather.ts';
 import type {TableCheck} from './checks.ts';
 import {renderThemes, THEMES, type DjRank, type ThemeSummary} from './themes.ts';
-import {cashNeedText, payoutAlarmText, renderNights, type CashNeed, type NightSummary, type PayoutAlarm} from './cash.ts';
+import {cashNeedText, payoutAlarmText, renderNights, renderTill, type CashNeed, type NightSummary, type PayoutAlarm, type Till} from './cash.ts';
 import {gapsText, hasGaps, shiftSignals, shiftText, type DataGaps, type MonthTarget} from './goals.ts';
 import {renderSupplies, type SupplyBrief} from './supplies.ts';
 import {renderMail, type MailBrief} from './mail-insights.ts';
@@ -114,6 +114,8 @@ export type Briefing = {
   cashNeed?: CashNeed | null;
   payoutAlarm?: PayoutAlarm | null;
   nights?: NightSummary | null;
+  /** IOUs, Vklad JD and negative cash in the revenue rows of the cash book (src/cash.ts). */
+  till?: Till | null;
   /** The target of the month the starting day is in (src/goals.ts). */
   target?: MonthTarget | null;
   /** Days of the 14 before without revenue or with the cash book only; only for this morning's message. */
@@ -727,7 +729,7 @@ export function buildBriefing(input: {
   discountHistory?: DiscountHistory;
   tableChecks?: TableCheck[]; noteThemes?: string[]; themes?: ThemeSummary | null; djRanking?: DjRank[] | null;
   lastYearRevenueCents?: number | null; target?: MonthTarget | null; dataGaps?: DataGaps | null;
-  cashNeed?: CashNeed | null; payoutAlarm?: PayoutAlarm | null; nights?: NightSummary | null;
+  cashNeed?: CashNeed | null; payoutAlarm?: PayoutAlarm | null; nights?: NightSummary | null; till?: Till | null;
 }): Briefing {
   const closed = input.bills.filter(bill => bill.status === 'closed');
   const add = <K>(map: Map<K, number>, key: K, value: number) => map.set(key, (map.get(key) ?? 0) + value);
@@ -816,7 +818,7 @@ export function buildBriefing(input: {
     noShows: noShowRate(input.reservations ?? [], input.noShowHistory ?? null),
     unusualDiscounts: report ? unusualDiscounts(report, input.discountHistory ?? {days: 0, totals: {}}) : [],
     silent: input.silent ?? [],
-    cashNeed: input.cashNeed ?? null, payoutAlarm: input.payoutAlarm ?? null, nights: input.nights ?? null,
+    cashNeed: input.cashNeed ?? null, payoutAlarm: input.payoutAlarm ?? null, nights: input.nights ?? null, till: input.till ?? null,
     lastYearRevenueCents: input.lastYearRevenueCents ?? null, target: input.target ?? null, dataGaps: input.dataGaps ?? null,
     tableChecks: input.tableChecks ?? [], noteThemes: input.noteThemes ?? [], themes: input.themes ?? null, djRanking: input.djRanking ?? null,
     incomplete: input.incomplete,
@@ -868,6 +870,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderReport(briefing));
   lines.push(...renderTableChecks(briefing.tableChecks));
   if (briefing.payoutAlarm) lines.push(`⚠ Výplaty v hotovosti: ${payoutAlarmText(briefing.payoutAlarm)}`);
+  lines.push(...renderTill(briefing.till));
   if (briefing.cashNeed) lines.push(`⚠ Hotovost na dnešek: ${cashNeedText(briefing.cashNeed)}; doplň hotovost nebo rozlož výplaty.`);
   lines.push(...renderBottles(briefing));
   lines.push(...renderReservations(briefing.reservations, briefing.outlook));
