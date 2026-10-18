@@ -3,6 +3,7 @@ import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provid
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
 import {cashDay, cashNeed, nightSummary, payoutAlarm, tillDay, type NightSummary, type Till} from './cash.ts';
 import {tableChecks} from './checks.ts';
+import {riskScore, type Risk} from './risk.ts';
 import {cashFlowDay, cashForecast, cashShare, movementDay, sumMovements, type CashFlowDay} from './cashflow.ts';
 import {cashDiffRepeat, sumVoids, voidAndDiff, voidDay, voidPastDates, type VoidDay} from './voids.ts';
 import {promoDay, promoStreaks, sumPromo, type PromoDay} from './promo.ts';
@@ -430,7 +431,7 @@ export class TenantObject extends DurableObject<Env> {
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
       week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day, briefing.forecast?.month.month === day.slice(0, 7) ? briefing.forecast.month.restCents : null), mail: this.mailCardData(),
       themes: briefing.themes ?? this.themeSummary(day), djRanking: briefing.djRanking ?? this.djRanking(day), nights: this.nightsFor(addDays(day, -27), day),
-      incidents: this.incidentsBetween(addDays(day, -89), day).reverse(), wages: this.posWages(addDays(day, -29), day), promo: this.posPromo(addDays(day, -29), day), voids: this.posVoids(addDays(day, -29), day), cashFlow: this.posCashFlow(addDays(day, -29), day), foreignWeek: briefing.foreignWeek ?? foreignWeek(day, Array.from({length: 15}, (_, i) => this.foreignCash(addDays(day, i - 14))))});
+      incidents: this.incidentsBetween(addDays(day, -89), day).reverse(), wages: this.posWages(addDays(day, -29), day), promo: this.posPromo(addDays(day, -29), day), voids: this.posVoids(addDays(day, -29), day), cashFlow: this.posCashFlow(addDays(day, -29), day), risk: riskScore(briefing), riskWeek: briefing.riskWeek ?? this.riskDays(config, addDays(day, -6), day), foreignWeek: briefing.foreignWeek ?? foreignWeek(day, Array.from({length: 15}, (_, i) => this.foreignCash(addDays(day, i - 14))))});
   }
 
   /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
@@ -1991,6 +1992,30 @@ export class TenantObject extends DurableObject<Env> {
     return days;
   }
 
+  /**
+   * The shrinkage risk of a day from a lighter briefing with only what the score reads (src/risk.ts): the same signals as
+   * the morning message of that day, without its forecasts, mail and menu.
+   */
+  private riskFor(config: TenantConfig, date: string): Risk {
+    return riskScore(buildBriefing({businessDate: date, config, bills: this.day<Bill>('bill', date), closings: [], planHistory: [], incomplete: false,
+      report: this.report(date), discountHistory: this.discountHistory(date), promoStreaks: promoStreaks(this.promoDays(addDays(date, -30), date), date),
+      cashDiffRepeat: cashDiffRepeat(this.voidDays(addDays(date, -6), date)), voidAndDiff: voidAndDiff(voidDay(this.report(date)), voidPastDates(date).map(entry => voidDay(this.report(entry)))),
+      till: this.tillFor(date), tableChecks: tableChecks(this.report(date), this.report(addDays(date, -1)))}));
+  }
+  private riskDays(config: TenantConfig, from: string, to: string): Risk[] {
+    const days: Risk[] = [];
+    for (let entry = from; entry <= to; entry = addDays(entry, 1)) days.push(this.riskFor(config, entry));
+    return days;
+  }
+
+  /** MCP: the shrinkage risk of each day of a stretch with its reasons, the riskiest first. */
+  posRisk(from: string, to: string) {
+    const config = this.config();
+    if (!config) return null;
+    const days = this.riskDays(config, from, to);
+    return {from, to, days: [...days].filter(day => day.score > 0).sort((a, b) => b.score - a.score || b.date.localeCompare(a.date)), daysWithoutRisk: days.filter(day => !day.score).length};
+  }
+
   /** Vklad JD, cash from the bank and cash taken to an account over a stretch. */
   private movements(from: string, to: string) {
     const days = [];
@@ -2136,6 +2161,7 @@ export class TenantObject extends DurableObject<Env> {
       cashNeed: this.cashNeedFor(date), payoutAlarm: this.payoutAlarmFor(date), till: this.tillFor(date), wageDay: wageDay(this.report(date)), nightShare: this.nightShareFor(date), staffGaps: this.staffGapsFor(date), promoStreaks: promoStreaks(this.promoDays(addDays(date, -30), date), date),
       cashDiffRepeat: cashDiffRepeat(this.voidDays(addDays(date, -6), date)), voidAndDiff: voidAndDiff(voidDay(this.report(date)), voidPastDates(date).map(entry => voidDay(this.report(entry)))),
       cashForecast: cashForecast(date, this.cashFlowDays(addDays(date, -27), date)),
+      riskWeek: weekday(date) === 0 ? this.riskDays(config, addDays(date, -6), date) : null,
       cashShare: weekday(date) === 0 ? {week: cashShare(this.cashFlowDays(addDays(date, -6), date)), before: cashShare(this.cashFlowDays(addDays(date, -34), addDays(date, -7)))} : null,
       voidWeek: weekday(date) === 0 ? {week: sumVoids(this.voidDays(addDays(date, -6), date)), before: sumVoids(this.voidDays(addDays(date, -34), addDays(date, -7)))} : null,
       promoWeek: weekday(date) === 0 ? {week: sumPromo(this.promoDays(addDays(date, -6), date)), before: sumPromo(this.promoDays(addDays(date, -34), addDays(date, -7)))} : null,

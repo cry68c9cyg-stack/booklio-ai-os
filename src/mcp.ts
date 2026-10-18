@@ -227,6 +227,14 @@ export function createServer(context: ToolContext): McpServer {
     const list = await context.venue.posIncidents(od, until);
     return list ? result(list) : failed('Provozovna není v OKO1 nastavená.');
   });
+  tool('riziko_mank', 'Riziko mank', 'Rizikové skóre mank 0–100 po dnech za období (nejvýš 92 dní), nejrizikovější dny první, s důvody a tím, co prověřit: storna po zaplacení, storna nad obvyklým s rozdílem v kase, ' +
+    'opakovaný rozdíl v kase, přepočet kasy proti deníku, report proti deníku, neobvyklé slevy, promo 3 dny nad obvyklým, rostoucí dluhy, nesedící tabulky, záporná hotovost v tržbě.',
+  {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
+    const bad = badRange(od, until) ?? (addDays(od, 91) < until ? failed('Najednou nejvýš 92 dní.') : null);
+    if (bad) return bad;
+    const risk = await context.venue.posRisk(od, until);
+    return risk ? result(risk) : failed('Provozovna není v OKO1 nastavená.');
+  });
   tool('vyhled_hotovosti', 'Výhled hotovosti', 'Hotovost v kase po dnech za období (nejvýš 400 dní) z peněžního deníku: hotovost z tržeb, výplaty a výdaje, přepočet hotovosti a trezoru, vklady JD, výběry z banky a peníze na účet; ' +
     'podíl hotovosti z tržeb na celkové tržbě a odhad na 7 dní po posledním dni (průměr stejného dne v týdnu za 4 týdny) s vklady JD, které budou potřeba, po dnech.',
   {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {

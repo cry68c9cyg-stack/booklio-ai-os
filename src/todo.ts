@@ -1,5 +1,6 @@
 import {addDays, weekday} from './time.ts';
 import {promoStreakText} from './promo.ts';
+import {RISK_HIGH, riskScore, riskText} from './risk.ts';
 import {cashForecastText, SURPLUS_CENTS} from './cashflow.ts';
 import {cashDiffRepeatText, voidAndDiffText} from './voids.ts';
 import {nightShareText, staffGapToday} from './wages.ts';
@@ -36,6 +37,8 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   if (briefing.nightShare) warn(`Výplaty noci nad obvyklým podílem: ${nightShareText(briefing.nightShare)}`, briefing.nightShare.overCents);
   const staffGap = staffGapToday(addDays(briefing.businessDate, 1), briefing.staffGaps);
   if (staffGap) items.push({level: 'info', text: `Personál: ${staffGap}`, amountCents: null});
+  const risk = riskScore(briefing);
+  if (risk.score >= RISK_HIGH) warn(`Riziko mank: ${riskText(risk)}`);
   if (briefing.voidAndDiff) warn(`Storna a rozdíl v kase: ${voidAndDiffText(briefing.voidAndDiff)}`, briefing.voidAndDiff.voidCents - briefing.voidAndDiff.usualCents);
   if (briefing.cashDiffRepeat) warn(`Kasa: ${cashDiffRepeatText(briefing.cashDiffRepeat)}`, briefing.cashDiffRepeat.reduce((sum, day) => sum + day.cents, 0));
   for (const streak of briefing.promoStreaks ?? []) warn(promoStreakText(streak), streak.days.reduce((sum, day) => sum + day.cents - day.usualCents, 0));
