@@ -45,6 +45,14 @@ export type SupplyBrief = {month: SupplySummary; rises: PriceRise[]; overdue: Ov
   unusual?: UnusualPurchase[];
   /** Invoice-like attachments from the venue's mailbox of the 7 days up to the day that OKO1 could not read. */
   unreadable?: UnreadableMail[];
+  /** Purchases of the month expected by its end (the month's pace on the revenue forecast for the rest of it). */
+  outlook?: CostOutlook | null;
+  /** On the last day of the month: the month closed. */
+  closing?: MonthClosing | null;
+  /** Before a payment day (Tuesday, Thursday): what to pay in that batch. */
+  payments?: PaymentBatch | null;
+  /** The same invoice (supplier and number) arrived with different amounts. */
+  conflicts?: AmountConflict[];
   /** Only in the Monday message (about Sunday): the week's rises per supplier, the drinks with the lowest margin and the categories growing most against the month before. */
   weekly?: {suppliers: SupplierRises[]; lowMargins: DrinkMargin[]; growing?: CategoryChange[]} | null};
 /** An unpaid invoice due soon: `days` until the due date (0 = today). */
@@ -55,6 +63,16 @@ export type CategoryChange = {name: string; netCents: number; previousCents: num
 export type UnreadableMail = {date: string; sender: string; subject: string};
 /** A purchase out of the ordinary: a supplier not bought from in the year before, or an invoice over 3× the supplier's usual (median). */
 export type UnusualPurchase = {kind: 'new_supplier' | 'large'; supplier: string; date: string; number: string | null; netCents: number; usualCents: number | null};
+
+/** Expected purchases of the month: what was bought so far plus the same share of the revenue forecast for its rest; and what is still to pay in it. */
+export type CostOutlook = {month: string; purchasesCents: number; estimateCents: number; restRevenueCents: number;
+  byKind: {kind: CostKind; name: string; estimateCents: number}[]; dueRestCents: number; dueRest: number};
+/** The month closed: purchases without VAT by kind, food cost, the month before, invoices of the month not paid yet. */
+export type MonthClosing = {month: string; summary: SupplySummary; previousNetCents: number; unpaidCents: number; unpaid: number};
+/** One batch payment (MC's office pays on Tuesday and Thursday): unpaid invoices due before the next payment day. */
+export type PaymentBatch = {payDay: string; nextPayDay: string; rows: {supplier: string; number: string | null; dueDate: string; grossCents: number; source: string}[]; totalCents: number};
+/** Invoices of one supplier with the same number but different amounts (a corrected invoice, or a mistake). */
+export type AmountConflict = {supplier: string; number: string; amounts: number[]; dates: string[]};
 
 /** Food cost limit when the venue sets none: 30 % of revenue with VAT (MC, 14. 10. 2026). */
 export const FOOD_COST_LIMIT_PERMILLE = 300;
@@ -141,18 +159,82 @@ export function overdueInvoices(invoices: SupplierInvoice[], today: string): Ove
 
 /** The brief for a reported day: the month up to it, rises of the 7 days up to it, invoices overdue on the day that starts after it. */
 export function supplyBrief(invoices: SupplierInvoice[], date: string, revenue: {revenueCents: number; revenueDays: number},
-  extra: {payoutsCents?: number; menu?: Menu | null; foodCostLimitPermille?: number | null} = {}): SupplyBrief | null {
+  extra: {payoutsCents?: number; menu?: Menu | null; foodCostLimitPermille?: number | null; restRevenueCents?: number | null; withCancelled?: SupplierInvoice[]} = {}): SupplyBrief | null {
   if (!invoices.length) return null;
   const month = supplySummary(invoices, date.slice(0, 8) + '01', date, revenue), rises = priceRises(invoices, addDays(date, -6), date);
   const payoutsCents = extra.payoutsCents ?? 0;
   return {month, rises, overdue: overdueInvoices(invoices, addDays(date, 1)), sources: [...new Set(invoices.map(invoice => invoice.source))].sort(),
     dueSoon: dueSoon(invoices, addDays(date, 1)), foodCostAlert: foodCostAlert(month, extra.foodCostLimitPermille),
     unusual: unusualPurchases(invoices, addDays(date, -6), date),
+    outlook: Number(date.slice(8)) >= 7 && !addDays(date, 1).endsWith('-01') ? costOutlook(invoices, month, date, extra.restRevenueCents ?? null) : null,
+    closing: monthClosing(invoices, date, revenue), payments: paymentBatch(invoices, date),
+    conflicts: amountConflicts((extra.withCancelled ?? invoices).filter(invoice => invoice.businessDate >= addDays(date, -34) && invoice.businessDate <= date)),
     duplicates: duplicateInvoices(invoices.filter(invoice => invoice.businessDate >= addDays(date, -34) && invoice.businessDate <= date)),
     result: revenue.revenueDays ? {revenueCents: revenue.revenueCents, purchasesCents: month.netCents, payoutsCents,
       resultCents: revenue.revenueCents - month.netCents - payoutsCents} : null,
     weekly: weekday(date) === 0 ? {suppliers: risesBySupplier(rises), lowMargins: extra.menu ? drinkMargins(extra.menu, invoices, date).margins.slice(0, LOW_MARGINS) : [],
       growing: monthOverMonth(invoices, date).filter(row => row.changeCents > 0).sort((a, b) => b.changeCents - a.changeCents).slice(0, 3)} : null};
+}
+
+/** Purchases expected by the end of the month, from 7 days of revenue on and with a forecast for the rest. */
+export function costOutlook(invoices: SupplierInvoice[], month: SupplySummary, date: string, restRevenueCents: number | null): CostOutlook | null {
+  if (restRevenueCents === null || month.revenueDays < FOOD_COST_MIN_DAYS || month.revenueCents <= 0 || !month.invoices) return null;
+  const share = (cents: number) => cents + Math.round(cents * restRevenueCents / month.revenueCents);
+  const monthEnd = addDays(addDays(date.slice(0, 8) + '01', 32).slice(0, 8) + '01', -1);
+  const due = invoices.filter(invoice => !invoice.paidDate && invoice.dueDate && invoice.dueDate > date && invoice.dueDate <= monthEnd);
+  return {month: date.slice(0, 7), purchasesCents: month.netCents, estimateCents: share(month.netCents), restRevenueCents,
+    byKind: month.byKind.map(row => ({kind: row.kind, name: row.name, estimateCents: share(row.netCents)})),
+    dueRestCents: due.reduce((sum, invoice) => sum + invoice.grossCents, 0), dueRest: due.length};
+}
+
+/** The month of `date` closed, on its last day. */
+export function monthClosing(invoices: SupplierInvoice[], date: string, revenue: {revenueCents: number; revenueDays: number}): MonthClosing | null {
+  if (!addDays(date, 1).endsWith('-01')) return null;
+  const first = date.slice(0, 8) + '01', summary = supplySummary(invoices, first, date, revenue);
+  if (!summary.invoices) return null;
+  const previousFirst = addDays(first, -1).slice(0, 8) + '01';
+  const unpaid = invoices.filter(invoice => invoice.businessDate >= first && invoice.businessDate <= date && !invoice.paidDate && invoice.grossCents > 0);
+  return {month: date.slice(0, 7), summary, previousNetCents: supplySummary(invoices, previousFirst, addDays(first, -1), {revenueCents: 0, revenueDays: 0}).netCents,
+    unpaidCents: unpaid.reduce((sum, invoice) => sum + invoice.grossCents, 0), unpaid: unpaid.length};
+}
+
+/** Payment days of the office (Nancy, 17. 10. 2026: batch payment on Tuesday and Thursday). 2 = Tuesday, 4 = Thursday. */
+export const PAYMENT_WEEKDAYS = [2, 4];
+
+/** The batch of the payment day that starts after `date` (the morning message), or null when that is no payment day. */
+export function paymentBatch(invoices: SupplierInvoice[], date: string): PaymentBatch | null {
+  const payDay = addDays(date, 1);
+  if (!PAYMENT_WEEKDAYS.includes(weekday(payDay))) return null;
+  let nextPayDay = addDays(payDay, 1);
+  while (!PAYMENT_WEEKDAYS.includes(weekday(nextPayDay))) nextPayDay = addDays(nextPayDay, 1);
+  // Due before the next payment day; long overdue ones (over 30 days) are left to the overdue list.
+  const rows = invoices.filter(invoice => !invoice.paidDate && invoice.dueDate && invoice.grossCents > 0 && invoice.dueDate < nextPayDay && invoice.dueDate >= addDays(payDay, -30))
+    .map(invoice => ({supplier: invoice.supplier, number: invoice.number, dueDate: invoice.dueDate!, grossCents: invoice.grossCents, source: invoice.source}))
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || b.grossCents - a.grossCents);
+  return rows.length ? {payDay, nextPayDay, rows, totalCents: rows.reduce((sum, row) => sum + row.grossCents, 0)} : null;
+}
+
+const invoiceKey = (invoice: SupplierInvoice) => `${invoice.supplierId ?? invoice.supplier.trim().toLocaleLowerCase('cs').replace(/\s+/g, ' ')}|${(invoice.number ?? '').replace(/[\s/-]+/g, '').toLowerCase()}`;
+
+/** The next batch from the day after `date` on (the dashboard and Claude): the first payment day within a week. */
+export function nextPaymentBatch(invoices: SupplierInvoice[], date: string): PaymentBatch | null {
+  for (let day = date; day <= addDays(date, 6); day = addDays(day, 1)) {
+    if (PAYMENT_WEEKDAYS.includes(weekday(addDays(day, 1)))) return paymentBatch(invoices, day);
+  }
+  return null;
+}
+
+/** Invoices with the same supplier and number but different amounts with VAT (from any source, cancelled copies included). */
+export function amountConflicts(invoices: SupplierInvoice[]): AmountConflict[] {
+  const groups = new Map<string, SupplierInvoice[]>();
+  for (const invoice of invoices) {
+    if (!invoice.number) continue;
+    const key = invoiceKey(invoice);
+    groups.set(key, [...(groups.get(key) ?? []), invoice]);
+  }
+  return [...groups.values()].filter(group => new Set(group.map(invoice => invoice.grossCents)).size > 1)
+    .map(group => ({supplier: group[0].supplier, number: group[0].number!, amounts: [...new Set(group.map(invoice => invoice.grossCents))],
+      dates: [...new Set(group.map(invoice => invoice.businessDate))].sort()}));
 }
 
 /** One unreadable document from the mailbox for the morning message and the to-do list. */
@@ -320,6 +402,11 @@ export const foodCostText = (alert: {permille: number; limitPermille: number}) =
   `Food cost ${String(alert.permille / 10).replace('.', ',')} % z tržeb s DPH je nad hranicí ${String(alert.limitPermille / 10).replace('.', ',')} %`;
 
 /** Morning message: purchases of the month so far with food cost, the biggest price rises of the week and overdue invoices. */
+const dayName = (date: string) => ['neděle', 'pondělí', 'úterý', 'středa', 'čtvrtek', 'pátek', 'sobota'][weekday(date)];
+const monthName = (month: string) => ['leden', 'únor', 'březen', 'duben', 'květen', 'červen', 'červenec', 'srpen', 'září', 'říjen', 'listopad', 'prosinec'][Number(month.slice(5)) - 1];
+export const conflictText = (row: AmountConflict) => `${row.supplier} č. ${row.number}: ${row.amounts.map(crownsTotal).join(' / ')}`;
+export const paymentText = (batch: PaymentBatch) => `${dayName(batch.payDay)} ${shortDate(batch.payDay)}: ${batch.rows.length} ${batch.rows.length === 1 ? 'faktura' : batch.rows.length <= 4 ? 'faktury' : 'faktur'} za ${crownsTotal(batch.totalCents)}`;
+
 export function renderSupplies(brief: SupplyBrief | null): string[] {
   if (!brief) return [];
   const lines: string[] = [], month = brief.month;
@@ -341,6 +428,20 @@ export function renderSupplies(brief: SupplyBrief | null): string[] {
   if (brief.unusual?.length) lines.push(`⚠ Neobvyklý nákup: ${brief.unusual.slice(0, 3).map(unusualText).join(' · ')}${brief.unusual.length > 3 ? ` · … a další ${brief.unusual.length - 3}` : ''}`);
   if (brief.unreadable?.length) lines.push(`Z pošty nešlo přečíst ${brief.unreadable.length === 1 ? '1 doklad' : `${brief.unreadable.length} ${brief.unreadable.length <= 4 ? 'doklady' : 'dokladů'}`}: ${brief.unreadable.slice(0, 3).map(unreadableText).join(' · ')}`);
   if (brief.duplicates?.length) lines.push(`⚠ Možná duplicitní faktury: ${brief.duplicates.slice(0, 3).map(duplicateText).join(' · ')}`);
+  if (brief.conflicts?.length) lines.push(`⚠ Stejná faktura s jinou částkou: ${brief.conflicts.slice(0, 3).map(conflictText).join(' · ')}`);
+  if (brief.payments) lines.push(`Hromadná platba ${paymentText(brief.payments)} (splatné do ${shortDate(addDays(brief.payments.nextPayDay, -1))}): ` +
+    brief.payments.rows.slice(0, 5).map(row => `${row.supplier} ${crownsTotal(row.grossCents)}`).join(' · ') + (brief.payments.rows.length > 5 ? ` · … a další ${brief.payments.rows.length - 5}` : ''));
+  if (brief.outlook) {
+    const o = brief.outlook;
+    lines.push(`Výhled nákupů za ${monthName(o.month)}: ${crownsTotal(o.estimateCents)} bez DPH (zatím ${crownsTotal(o.purchasesCents)}, podle odhadu tržeb na zbytek měsíce)` +
+      (o.dueRest ? ` · do konce měsíce zaplatit ještě ${o.dueRest}× za ${crownsTotal(o.dueRestCents)}` : ''));
+  }
+  if (brief.closing) {
+    const c = brief.closing, m = c.summary;
+    lines.push(`Uzávěrka ${monthName(c.month)}: nákupy ${crownsTotal(m.netCents)} bez DPH (${m.byKind.map(row => `${row.name} ${crownsTotal(row.netCents)}`).join(', ')})` +
+      (m.foodCostPermille !== null ? ` · food cost ${String(m.foodCostPermille / 10).replace('.', ',')} %` : '') +
+      (c.previousNetCents ? ` · proti minulému měsíci ${signed(m.netCents - c.previousNetCents)}` : '') + (c.unpaid ? ` · nezaplaceno ${c.unpaid}× za ${crownsTotal(c.unpaidCents)}` : ''));
+  }
   if (brief.result) {
     const r = brief.result;
     lines.push(`Provozní výsledek od ${shortDate(month.from)}: tržby ${crownsTotal(r.revenueCents)} − nákupy ${crownsTotal(r.purchasesCents)}`

@@ -19,7 +19,7 @@ import {fetchDayFiles, googleDayFiles, googleFolderByName, reportFromFiles} from
 import {authorizeUrl, pkce, redeem, renew} from './microsoft.ts';
 import {googleAccess, serviceAccount} from './google.ts';
 import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
-import {counted, drinkMargins, dueSoon, FOOD_COST_LIMIT_PERMILLE, duplicateInvoices, foodCostAlert, monthOverMonth, overdueInvoices, priceRises, supplyBrief, supplySummary, unusualPurchases} from './supplies.ts';
+import {amountConflicts, costOutlook, counted, drinkMargins, dueSoon, nextPaymentBatch, FOOD_COST_LIMIT_PERMILLE, duplicateInvoices, foodCostAlert, monthOverMonth, overdueInvoices, priceRises, supplyBrief, supplySummary, unusualPurchases} from './supplies.ts';
 import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
 import {DEFAULT_BOTTLE_LOSS_CENTS, googleFolderId, InputError, validateBatch, withoutGuest, validateCompetitorPrices, validateConfig, validateHistory, type Batch, type CompetitorPrices, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
@@ -388,7 +388,7 @@ export class TenantObject extends DurableObject<Env> {
     const stored = this.sql.exec<{text: string}>('SELECT text FROM briefings WHERE business_date=?', day).toArray()[0];
     const todo = this.todoFor(day, briefing);
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
-      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day), mail: this.mailInsightsBetween(new Date(Date.now() - 30 * 86400000).toISOString(), new Date().toISOString(), new Date()),
+      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day, briefing.forecast?.month.month === day.slice(0, 7) ? briefing.forecast.month.restCents : null), mail: this.mailInsightsBetween(new Date(Date.now() - 30 * 86400000).toISOString(), new Date().toISOString(), new Date()),
       themes: briefing.themes ?? this.themeSummary(day), djRanking: briefing.djRanking ?? this.djRanking(day), nights: this.nightsFor(addDays(day, -27), day)});
   }
 
@@ -1183,11 +1183,12 @@ export class TenantObject extends DurableObject<Env> {
    * Supplier invoices issued in `from`–`to` that count: not cancelled, not from a switched-off sender (`disabledSources`).
    * With `unpaidOnly`, every unpaid invoice with a due date, whenever it was issued.
    */
-  private invoices(config: TenantConfig, from: string, to: string, unpaidOnly = false): SupplierInvoice[] {
+  private invoices(config: TenantConfig, from: string, to: string, unpaidOnly = false, withCancelled = false): SupplierInvoice[] {
     const rows = unpaidOnly
       ? this.sql.exec<{json: string}>("SELECT json FROM records WHERE type='supplier_invoice' AND json_extract(json, '$.dueDate') IS NOT NULL AND json_extract(json, '$.paidDate') IS NULL").toArray()
       : this.sql.exec<{json: string}>("SELECT json FROM records WHERE type='supplier_invoice' AND business_date BETWEEN ? AND ?", from, to).toArray();
-    return counted(rows.map(row => JSON.parse(row.json) as SupplierInvoice), config.disabledSources);
+    const invoices = rows.map(row => JSON.parse(row.json) as SupplierInvoice);
+    return withCancelled ? invoices.filter(invoice => !config.disabledSources.includes(invoice.source)) : counted(invoices, config.disabledSources);
   }
 
   /** Revenue with VAT over `from`–`to` and the days that have it (POS, managers' report or imported history). */
@@ -1201,17 +1202,18 @@ export class TenantObject extends DurableObject<Env> {
   }
 
   /** Morning message: purchases of the month up to the day, rises of its last 7 days (against a year of purchases), overdue invoices. */
-  private supplyBriefFor(config: TenantConfig, date: string) {
+  private supplyBriefFor(config: TenantConfig, date: string, restRevenueCents: number | null = null) {
     const year = this.invoices(config, addDays(date, -365), date);
     const unpaid = this.invoices(config, '', '', true).filter(invoice => !year.some(other => other.id === invoice.id));
     const payoutsCents = this.reportSums('payout', date.slice(0, 8) + '01', date).reduce((sum, row) => sum + row.amountCents, 0);
-    const brief = supplyBrief([...year, ...unpaid], date, this.revenueBetween(date.slice(0, 8) + '01', date), {payoutsCents, menu: this.menu(), foodCostLimitPermille: config.foodCostLimitPermille});
+    const brief = supplyBrief([...year, ...unpaid], date, this.revenueBetween(date.slice(0, 8) + '01', date), {payoutsCents, menu: this.menu(), foodCostLimitPermille: config.foodCostLimitPermille,
+      restRevenueCents, withCancelled: this.invoices(config, addDays(date, -34), date, false, true)});
     const unreadable = this.unreadableMail(addDays(date, -6), date);
     return brief && unreadable.length ? {...brief, unreadable} : brief;
   }
 
   /** Dashboard: the month up to the shown day, rises over its 30 days, invoices overdue the day after, and which senders are off. */
-  private suppliesCard(config: TenantConfig, day: string) {
+  private suppliesCard(config: TenantConfig, day: string, restRevenueCents: number | null = null) {
     const year = this.invoices(config, addDays(day, -365), day);
     const unpaid = this.invoices(config, '', '', true), overdue = overdueInvoices(unpaid, addDays(day, 1)), due = dueSoon(unpaid, addDays(day, 1));
     if (!year.length && !overdue.length) return null;
@@ -1226,8 +1228,13 @@ export class TenantObject extends DurableObject<Env> {
       dueSoon: due.slice(0, 15), dueSoonCount: due.length, dueSoonCents: due.reduce((sum, row) => sum + row.grossCents, 0),
       foodCostAlert: foodCostAlert(month, config.foodCostLimitPermille), foodCostLimitPermille: config.foodCostLimitPermille ?? FOOD_COST_LIMIT_PERMILLE,
       monthCompare: monthOverMonth(year, day).slice(0, 15), unusual: unusualPurchases(year, addDays(day, -29), day).slice(0, 10),
-      mail: this.mailStatus(config), unreadable: this.unreadableMail(addDays(day, -29), day).slice(0, 10)};
+      mail: this.mailStatus(config), unreadable: this.unreadableMail(addDays(day, -29), day).slice(0, 10),
+      payments: nextPaymentBatch([...year, ...unpaid.filter(invoice => !year.some(other => other.id === invoice.id))], day),
+      outlook: costOutlook(unpaid, month, day, restRevenueCents),
+      conflicts: amountConflicts(this.invoices(config, addDays(day, -89), day, false, true)).slice(0, 10)};
   }
+
+
 
   /** MCP: purchases over any stretch of days (at most 400) with price rises in it, invoices overdue today and the invoices themselves. */
   posSupplies(from: string, to: string) {
@@ -1240,7 +1247,8 @@ export class TenantObject extends DurableObject<Env> {
     return {summary: supplySummary(invoices, from, to, this.revenueBetween(from, to)), rises: priceRises(history, from, to),
       duplicates: duplicateInvoices(invoices), drinkMargins: menu ? drinkMargins(menu, history, to) : null,
       overdue: overdueInvoices(unpaid, today), dueSoon: dueSoon(unpaid, today), unusual: unusualPurchases(history, from, to),
-      monthCompare: monthOverMonth(history, to), foodCostLimitPermille: config.foodCostLimitPermille ?? FOOD_COST_LIMIT_PERMILLE, disabledSources: config.disabledSources,
+      monthCompare: monthOverMonth(history, to), nextPayment: nextPaymentBatch(unpaid, today),
+      amountConflicts: amountConflicts(this.invoices(config, from, to, false, true)), foodCostLimitPermille: config.foodCostLimitPermille ?? FOOD_COST_LIMIT_PERMILLE, disabledSources: config.disabledSources,
       invoices: invoices.sort((a, b) => b.businessDate.localeCompare(a.businessDate)).slice(0, 1000), truncated: invoices.length > 1000};
   }
 
@@ -1889,7 +1897,7 @@ export class TenantObject extends DurableObject<Env> {
   }
 
   private briefingFor(config: TenantConfig, date: string, incomplete: boolean, now = new Date()) {
-    const guestOutlook = this.guestOutlook(config, date, now);
+    const guestOutlook = this.guestOutlook(config, date, now), forecast = this.forecast(date);
     const planHistory = [7, 14, 21, 28].map(days => this.dayRevenue(addDays(date, -days))).filter((value): value is number => value !== null).map(revenueCents => ({revenueCents}));
     const briefing = buildBriefing({businessDate: date, config, bills: this.day<Bill>('bill', date), closings: this.day<CashClosing>('cash_closing', date),
       bottleChecks: this.day<BottleCheck>('bottle_check', date), planHistory, incomplete, report: this.report(date), notes: this.notes(date),
@@ -1901,7 +1909,7 @@ export class TenantObject extends DurableObject<Env> {
       week: weekday(date) === 0 ? this.week(date) : null, silent: this.silentSources(config, date, now),
       month: weekday(date) === 0 || addDays(date, 1).endsWith('-01') ? this.month(config, date) : null,
       lastWeekRevenueCents: this.dayRevenue(addDays(date, -7)), discountHistory: this.discountHistory(date),
-      ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast: this.forecast(date), pendingAhead: this.pendingAhead(config, date, now), events: this.todayEvents(config, addDays(date, 1)), guestOutlook,
+      ...this.outlookHistory(addDays(date, 1)), noShowHistory: this.noShowHistory(date), forecast, pendingAhead: this.pendingAhead(config, date, now), events: this.todayEvents(config, addDays(date, 1)), guestOutlook,
       // The ranking only when it is shown: tips for weak days, and the message about a month's last day.
       eventRanking: guestOutlook?.days.some(day => day.weak) || addDays(date, 1).endsWith('-01') ? this.eventRanking(date) : null,
       menuWeek: weekday(date) === 0 ? this.menuWeek(date) : null, menuMonth: addDays(date, 1).endsWith('-01') ? this.menuMonth(date.slice(0, 7)) : null,
@@ -1917,7 +1925,7 @@ export class TenantObject extends DurableObject<Env> {
       cashNeed: this.cashNeedFor(date), payoutAlarm: this.payoutAlarmFor(date), till: this.tillFor(date), nights: weekday(date) === 0 ? this.nightsFor(addDays(date, -27), date) : null,
       tableChecks: tableChecks(this.report(date), this.report(addDays(date, -1))), noteThemes: noteThemes(this.report(date)?.notes),
       themes: weekday(date) === 0 ? this.themeSummary(date) : null, djRanking: weekday(date) === 0 ? this.djRanking(date) : null,
-      supplies: this.supplyBriefFor(config, date), mail: this.mailBriefFor(date, now),
+      supplies: this.supplyBriefFor(config, date, forecast?.month.month === date.slice(0, 7) ? forecast.month.restCents : null), mail: this.mailBriefFor(date, now),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};
   }
@@ -2035,7 +2043,15 @@ export class TenantObject extends DurableObject<Env> {
 
   /** Stores an invoice from the mailbox once (the same invoice e-mailed again is kept as it was) and archives its document in the EU. */
   private storeMailInvoice(tenant: string, invoice: ExtractedInvoice, attachment: {filename: string; data: Uint8Array}): string {
-    const id = mailInvoiceId(invoice), record = asSupplierInvoice(invoice, id), now = new Date().toISOString();
+    let id = mailInvoiceId(invoice), record = asSupplierInvoice(invoice, id);
+    const now = new Date().toISOString();
+    // The same invoice again with another amount (a correction, a mistake): kept aside as cancelled, so it is not counted
+    // twice, and reported as a conflict of amounts until someone checks it.
+    const stored = this.sql.exec<{json: string}>("SELECT json FROM records WHERE type='supplier_invoice' AND id=?", id).toArray()[0];
+    if (stored && (JSON.parse(stored.json) as SupplierInvoice).grossCents !== record.grossCents) {
+      id = `${id}-${record.grossCents}`;
+      record = {...asSupplierInvoice(invoice, id), status: 'cancelled'};
+    }
     const added = this.sql.exec(`INSERT INTO records(type, id, version, business_date, register_id, json, installation_id, received_at) VALUES(?,?,?,?,?,?,?,?)
       ON CONFLICT(type, id) DO NOTHING`, record.type, record.id, record.version, record.businessDate, '', JSON.stringify(record), MAIL_SOURCE, now).rowsWritten;
     if (added) this.archive(`t/${tenant}/posta/${id}/${attachment.filename.replace(/[^\w.-]+/g, '_').slice(-80)}`, attachment.data);
