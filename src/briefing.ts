@@ -6,6 +6,7 @@ import {weatherText, type WeatherDay} from './weather.ts';
 import type {TableCheck} from './checks.ts';
 import {renderThemes, THEMES, type DjRank, type ThemeSummary} from './themes.ts';
 import {cashNeedText, payoutAlarmText, renderNights, renderTill, type CashNeed, type NightSummary, type PayoutAlarm, type Till} from './cash.ts';
+import {renderForeignWeek, renderIncidents, staffMealsText, type ForeignWeek, type Incident, type StaffMeals} from './incidents.ts';
 import {gapsText, hasGaps, shiftSignals, shiftText, type DataGaps, type MonthTarget} from './goals.ts';
 import {renderSupplies, type SupplyBrief} from './supplies.ts';
 import {renderMail, type MailBrief} from './mail-insights.ts';
@@ -116,6 +117,9 @@ export type Briefing = {
   nights?: NightSummary | null;
   /** IOUs, Vklad JD and negative cash in the revenue rows of the cash book (src/cash.ts). */
   till?: Till | null;
+  /** On a month's last day the incidents of the month, on Monday the foreign cash of the week (src/incidents.ts). */
+  incidents?: Incident[] | null;
+  foreignWeek?: ForeignWeek | null;
   /** The target of the month the starting day is in (src/goals.ts). */
   target?: MonthTarget | null;
   /** Days of the 14 before without revenue or with the cash book only; only for this morning's message. */
@@ -157,6 +161,8 @@ export type Month = {
   payouts: {label: string; amountCents: number}[]; payoutsCents: number;
   expenses: {label: string; amountCents: number}[]; expensesCents: number;
   discounts: {label: string; amountCents: number}[]; discountsCents: number;
+  /** "Personál" discounts of the month; a month stored before has none. */
+  staffMeals?: StaffMeals;
   reviews?: ReviewStats;
 };
 /** Discounts by type summed over the same weekday of the previous weeks that have a managers' report (`days` of them). */
@@ -730,6 +736,7 @@ export function buildBriefing(input: {
   tableChecks?: TableCheck[]; noteThemes?: string[]; themes?: ThemeSummary | null; djRanking?: DjRank[] | null;
   lastYearRevenueCents?: number | null; target?: MonthTarget | null; dataGaps?: DataGaps | null;
   cashNeed?: CashNeed | null; payoutAlarm?: PayoutAlarm | null; nights?: NightSummary | null; till?: Till | null;
+  incidents?: Incident[] | null; foreignWeek?: ForeignWeek | null;
 }): Briefing {
   const closed = input.bills.filter(bill => bill.status === 'closed');
   const add = <K>(map: Map<K, number>, key: K, value: number) => map.set(key, (map.get(key) ?? 0) + value);
@@ -818,7 +825,7 @@ export function buildBriefing(input: {
     noShows: noShowRate(input.reservations ?? [], input.noShowHistory ?? null),
     unusualDiscounts: report ? unusualDiscounts(report, input.discountHistory ?? {days: 0, totals: {}}) : [],
     silent: input.silent ?? [],
-    cashNeed: input.cashNeed ?? null, payoutAlarm: input.payoutAlarm ?? null, nights: input.nights ?? null, till: input.till ?? null,
+    cashNeed: input.cashNeed ?? null, payoutAlarm: input.payoutAlarm ?? null, nights: input.nights ?? null, till: input.till ?? null, incidents: input.incidents ?? null, foreignWeek: input.foreignWeek ?? null,
     lastYearRevenueCents: input.lastYearRevenueCents ?? null, target: input.target ?? null, dataGaps: input.dataGaps ?? null,
     tableChecks: input.tableChecks ?? [], noteThemes: input.noteThemes ?? [], themes: input.themes ?? null, djRanking: input.djRanking ?? null,
     incomplete: input.incomplete,
@@ -894,11 +901,11 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderMenuWeek(briefing.menuDay, 'Lístek se změnil'), ...(briefing.menuProblems ?? []).map(text => `⚠ ${text}`));
   lines.push(...renderNotes(briefing));
   // The week in a few numbers once a week, in the message about Sunday (Monday morning).
-  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceResults(briefing.priceResults), ...renderPriceCheck(briefing.priceCheck), ...renderMenuGaps(briefing.menuGaps), ...renderMenuInterest(briefing.menuInterest), ...renderMenuByLanguage(briefing.menuByLanguage), ...renderCompetitors(briefing.competitors), ...renderThemes(briefing.themes), ...renderDjs(briefing.djRanking), ...renderNights(briefing.nights));
+  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceResults(briefing.priceResults), ...renderPriceCheck(briefing.priceCheck), ...renderMenuGaps(briefing.menuGaps), ...renderMenuInterest(briefing.menuInterest), ...renderMenuByLanguage(briefing.menuByLanguage), ...renderCompetitors(briefing.competitors), ...renderThemes(briefing.themes), ...renderDjs(briefing.djRanking), ...renderNights(briefing.nights), ...renderForeignWeek(briefing.foreignWeek));
   // The month so far once a week, and the whole month in the message about its last day (the 1st in the morning).
   lines.push(...renderMonth(briefing.month));
   // Which events draw guests, once a month in the message about its last day.
-  if (addDays(briefing.businessDate, 1).endsWith('-01')) lines.push(...renderEventRanking(briefing.eventRanking), ...renderMenuMonth(briefing.menuMonth), ...renderSlowSellers(briefing.slowSellers));
+  if (addDays(briefing.businessDate, 1).endsWith('-01')) lines.push(...renderEventRanking(briefing.eventRanking), ...renderMenuMonth(briefing.menuMonth), ...renderSlowSellers(briefing.slowSellers), ...renderIncidents(briefing.businessDate.slice(0, 7), briefing.incidents));
   return lines.join('\n');
 }
 
@@ -1162,6 +1169,7 @@ export function renderMonth(month: Briefing['month']): string[] {
   if (month.payoutsCents) parts.push(`výplaty v hotovosti ${crowns(month.payoutsCents)}${share(month.payoutsCents, now.revenueCents)}`);
   if (month.expensesCents) parts.push(`výdaje z kasy ${crowns(month.expensesCents)}`);
   if (month.discountsCents) parts.push(`slevy ${crowns(month.discountsCents)}`);
+  if (month.staffMeals?.cents) parts.push(staffMealsText(month.staffMeals));
   if (month.reviews?.reviews) parts.push(`recenze ${month.reviews.reviews}${month.reviews.starsTenths !== null ? `, průměr ${stars(month.reviews.starsTenths)}` : ''}`);
   return [`${title}${month.complete ? ' celkem' : ` do ${shortDate(month.through)}`}: ${parts.join(' · ')}`];
 }
