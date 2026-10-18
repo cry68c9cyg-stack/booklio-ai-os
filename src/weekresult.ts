@@ -47,3 +47,35 @@ export function renderWeekResult(result: WeekResult | null | undefined): string[
   if (week.expensesCents) parts.push(`výdaje z kasy ${kc(week.expensesCents)} navíc neodečtené (část jsou zaplacené faktury)`);
   return [`Výsledek týdne ${shortDate(result.from)}–${shortDate(result.to)} (tržba bez DPH ${kc(week.revenueNetCents)} − nákup z faktur bez DPH − výplaty z kasy; DPH z tržby odhadem, bez nájmu, energií a mezd z účtu): ${parts.join(' · ')}`];
 }
+
+/**
+ * Batch „Výsledek měsíce v Kč“ (MC „jo“ 18. 10. 2026): the same result for the month so far, against the same days of the
+ * month before, and a rough projection to the month's end: the revenue still forecast (with VAT, src/briefing.ts) taken
+ * without VAT at the month's own ratio and kept at the month's own margin so far, against the whole month before.
+ */
+export type MonthOutcome = {month: string; through: string; complete: boolean; now: ResultPart;
+  /** The month before, the same days (1st up to the same day, or its end), and the whole of it. */
+  previousThrough: string; previous: ResultPart; previousFull: ResultPart;
+  /** Revenue with VAT still forecast for the rest of the month; `null` without a forecast or once it is over. */
+  restRevenueCents: number | null};
+
+export function monthResultFigures(result: MonthOutcome) {
+  const {now} = result, resultCents = resultOf(now);
+  const comparable = (part: ResultPart) => part.invoices > 0 && part.revenueDays > 0;
+  const projectedCents = !result.complete && result.restRevenueCents !== null && now.revenueCents > 0 && now.revenueNetCents > 0
+    ? Math.round(resultCents + result.restRevenueCents * now.revenueNetCents / now.revenueCents * resultCents / now.revenueNetCents) : null;
+  return {resultCents, previousCents: comparable(result.previous) ? resultOf(result.previous) : null,
+    projectedCents, previousFullCents: comparable(result.previousFull) ? resultOf(result.previousFull) : null,
+    foodCostPermille: foodCost(now), previousFoodCostPermille: comparable(result.previous) ? foodCost(result.previous) : null};
+}
+
+/** Monday and the month's last day, with the month's lines; once the month has revenue on 5 days and an invoice. */
+export function renderMonthResult(result: MonthOutcome | null | undefined): string[] {
+  if (!result || result.now.revenueDays < 5 || !result.now.invoices) return [];
+  const figures = monthResultFigures(result), before = `${shortDate(result.previousThrough.slice(0, 8) + '01')}–${shortDate(result.previousThrough)}`;
+  const parts = [`${kc(figures.resultCents)}${figures.previousCents !== null ? ` (minulý měsíc ${before} ${kc(figures.previousCents)})` : ''}`];
+  if (figures.projectedCents !== null) parts.push(`odhad za celý měsíc ${kc(figures.projectedCents)}${figures.previousFullCents !== null ? ` (minulý měsíc celkem ${kc(figures.previousFullCents)})` : ''}`);
+  if (figures.foodCostPermille !== null) parts.push(`jídlo a nápoje ${percent(figures.foodCostPermille)} tržby bez DPH${figures.previousFoodCostPermille !== null ? ` (minulý měsíc ${percent(figures.previousFoodCostPermille)})` : ''}`);
+  if (result.now.expensesCents) parts.push(`výdaje z kasy ${kc(result.now.expensesCents)} neodečtené`);
+  return [`Výsledek měsíce ${result.complete ? 'celkem' : `do ${shortDate(result.through)}`} (tržba bez DPH ${kc(result.now.revenueNetCents)} − nákup z faktur ${kc(result.now.purchasesCents)} − výplaty z kasy ${kc(result.now.payoutsCents)}): ${parts.join(' · ')}`];
+}

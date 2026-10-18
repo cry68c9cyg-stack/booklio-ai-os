@@ -241,6 +241,13 @@ export function createServer(context: ToolContext): McpServer {
     const week = await context.venue.posWeekResult(den);
     return week ? result(week) : failed('Provozovna není v OKO1 nastavená.');
   });
+  tool('vysledek_mesice', 'Výsledek měsíce', 'Hrubý provozní výsledek měsíce do zadaného dne stejným výpočtem jako vysledek_tydne (tržba bez DPH − nákup z faktur bez DPH − výplaty z kasy), ' +
+    'proti stejným dnům minulého měsíce, a odhad za celý měsíc (předpověď tržby se stejnou marží) proti celému minulému měsíci; nákup jídla a nápojů z tržby bez DPH (promile).',
+  {den: date}, async ({den}: {den: string}) => {
+    if (!isDate(den)) return failed('Den musí být RRRR-MM-DD.');
+    const month = await context.venue.posMonthResult(den);
+    return month ? result(month) : failed('Provozovna není v OKO1 nastavená.');
+  });
   tool('riziko_mank', 'Riziko mank', 'Rizikové skóre mank 0–100 po dnech za období (nejvýš 92 dní), nejrizikovější dny první, s důvody a tím, co prověřit: storna po zaplacení, storna nad obvyklým s rozdílem v kase, ' +
     'opakovaný rozdíl v kase, přepočet kasy proti deníku, report proti deníku, neobvyklé slevy, promo 3 dny nad obvyklým, rostoucí dluhy, nesedící tabulky, záporná hotovost v tržbě.',
   {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {

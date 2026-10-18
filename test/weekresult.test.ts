@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {buildBriefing, renderBriefing} from '../src/briefing.ts';
-import {renderWeekResult, SECTION_VAT, weekResultFigures, withoutVat, type ResultPart} from '../src/weekresult.ts';
+import {monthResultFigures, renderMonthResult, renderWeekResult, SECTION_VAT, weekResultFigures, withoutVat, type ResultPart} from '../src/weekresult.ts';
 import {todoList} from '../src/todo.ts';
 import type {TenantConfig} from '../src/validate.ts';
 
@@ -45,4 +45,18 @@ test('Monday line, and the to-do list when the week left a fifth less', () => {
   const saturday = buildBriefing({businessDate: '2026-10-17', ...empty});
   saturday.weekResult = result;
   assert.doesNotMatch(renderBriefing('Test', saturday), /Výsledek týdne/, 'only on Monday');
+});
+
+const month = {month: '2026-10', through: '2026-10-18', complete: false, now: part(2000000, 18, 30, 800000, 600000, 400000, 50000), previousThrough: '2026-09-18',
+  previous: part(1800000, 18, 28, 700000, 540000, 400000, 0), previousFull: part(3100000, 30, 45, 1200000, 900000, 700000, 0), restRevenueCents: Math.round(1300000 * 121)};
+
+test('the month so far against the same days before, and to its end at the same margin', () => {
+  assert.deepEqual(monthResultFigures(month), {resultCents: 80000000, previousCents: 70000000, projectedCents: 132000000, previousFullCents: 120000000, foodCostPermille: 300, previousFoodCostPermille: 300});
+  assert.deepEqual(renderMonthResult(month), ['Výsledek měsíce do 18. 10. (tržba bez DPH 2 000 000 Kč − nákup z faktur 800 000 Kč − výplaty z kasy 400 000 Kč): 800 000 Kč (minulý měsíc 1. 9.–18. 9. 700 000 Kč) · ' +
+    'odhad za celý měsíc 1 320 000 Kč (minulý měsíc celkem 1 200 000 Kč) · jídlo a nápoje 30 % tržby bez DPH (minulý měsíc 30 %) · výdaje z kasy 50 000 Kč neodečtené']);
+  assert.equal(monthResultFigures({...month, complete: true, restRevenueCents: null}).projectedCents, null, 'the month is over');
+  assert.equal(monthResultFigures({...month, previous: part(1800000, 18, 0, 0, 0, 400000, 0)}).previousCents, null, 'no invoices the month before');
+  const briefing = buildBriefing({businessDate: '2026-10-17', ...empty});
+  briefing.monthResult = month;
+  assert.doesNotMatch(renderBriefing('Test', briefing), /Výsledek měsíce/, 'only with the month\'s lines');
 });
