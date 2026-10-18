@@ -1,6 +1,7 @@
 import {addDays, weekday} from './time.ts';
 import {promoStreakText} from './promo.ts';
 import {kpiRows} from './kpi.ts';
+import {renderWeekResult, weekResultFigures} from './weekresult.ts';
 import {RISK_HIGH, riskScore, riskText} from './risk.ts';
 import {cashForecastText, SURPLUS_CENTS} from './cashflow.ts';
 import {cashDiffRepeatText, voidAndDiffText} from './voids.ts';
@@ -39,6 +40,9 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   const staffGap = staffGapToday(addDays(briefing.businessDate, 1), briefing.staffGaps);
   if (staffGap) items.push({level: 'info', text: `Personál: ${staffGap}`, amountCents: null});
   for (const row of briefing.kpi ? kpiRows(briefing.kpi).filter(row => row.worse) : []) items.push({level: 'info', text: `KPI horší: ${row.name} ${row.now}${row.before !== null ? ` (předtím ${row.before})` : ''} – ${row.owner}: ${row.action}`, amountCents: null});
+  // The week left a fifth less than the average week before: worth a look at revenue and purchases.
+  const result = briefing.weekResult && renderWeekResult(briefing.weekResult).length ? weekResultFigures(briefing.weekResult) : null;
+  if (result && result.beforeCents !== null && result.beforeCents > 0 && result.resultCents < result.beforeCents * 0.8) items.push({level: 'info', text: renderWeekResult(briefing.weekResult)[0], amountCents: result.beforeCents - result.resultCents});
   const risk = riskScore(briefing);
   if (risk.score >= RISK_HIGH) warn(`Riziko mank: ${riskText(risk)}`);
   if (briefing.voidAndDiff) warn(`Storna a rozdíl v kase: ${voidAndDiffText(briefing.voidAndDiff)}`, briefing.voidAndDiff.voidCents - briefing.voidAndDiff.usualCents);

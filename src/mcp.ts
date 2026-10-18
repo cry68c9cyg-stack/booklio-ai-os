@@ -234,6 +234,13 @@ export function createServer(context: ToolContext): McpServer {
     const kpi = await context.venue.posKpi(den);
     return kpi ? result(kpi) : failed('Provozovna není v OKO1 nastavená.');
   });
+  tool('vysledek_tydne', 'Výsledek týdne', 'Hrubý provozní výsledek 7 dní do zadaného dne proti průměrnému týdnu ze 4 předchozích: tržba bez DPH (DPH podle sazeb pokladny, jinak odhadem: Restaurace den 12 %, noc a Club 21 %) − nákup z faktur dodavatelů bez DPH − výplaty z kasy; ' +
+    'nákup jídla a nápojů z tržby bez DPH (promile), výdaje z kasy zvlášť (neodečtené, část jsou zaplacené faktury). Bez nájmu, energií a mezd z účtu.',
+  {den: date}, async ({den}: {den: string}) => {
+    if (!isDate(den)) return failed('Den musí být RRRR-MM-DD.');
+    const week = await context.venue.posWeekResult(den);
+    return week ? result(week) : failed('Provozovna není v OKO1 nastavená.');
+  });
   tool('riziko_mank', 'Riziko mank', 'Rizikové skóre mank 0–100 po dnech za období (nejvýš 92 dní), nejrizikovější dny první, s důvody a tím, co prověřit: storna po zaplacení, storna nad obvyklým s rozdílem v kase, ' +
     'opakovaný rozdíl v kase, přepočet kasy proti deníku, report proti deníku, neobvyklé slevy, promo 3 dny nad obvyklým, rostoucí dluhy, nesedící tabulky, záporná hotovost v tržbě.',
   {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
