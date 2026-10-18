@@ -1,6 +1,7 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
+import {cashDay, cashNeed, nightSummary, payoutAlarm, type NightSummary} from './cash.ts';
 import {tableChecks} from './checks.ts';
 import {GAP_DAYS, monthBase, monthTarget, shiftSignals, type DataGaps, type MonthTarget, type TargetBase} from './goals.ts';
 import {noteThemes, rankDjs, djOf, summarizeThemes, type DjRank, type ThemeSummary} from './themes.ts';
@@ -335,7 +336,7 @@ export class TenantObject extends DurableObject<Env> {
     const todo = this.todoFor(day, briefing);
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
       week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day),
-      themes: briefing.themes ?? this.themeSummary(day), djRanking: briefing.djRanking ?? this.djRanking(day)});
+      themes: briefing.themes ?? this.themeSummary(day), djRanking: briefing.djRanking ?? this.djRanking(day), nights: this.nightsFor(addDays(day, -27), day)});
   }
 
   /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
@@ -1747,6 +1748,34 @@ export class TenantObject extends DurableObject<Env> {
   }
 
   /** MCP: the managers' "Report dne" texts of a stretch of days with their topics and DJ, how often each topic came up, and the DJs' club revenue. */
+  /** Cash counted last night against what today's weekday usually pays out of the till (src/cash.ts). */
+  private cashNeedFor(date: string) {
+    const today = addDays(date, 1);
+    return cashNeed(today, cashDay(this.report(date)), [7, 14, 21, 28].map(back => cashDay(this.report(addDays(today, -back)))));
+  }
+
+  /** The day's cash payouts against their usual share of the revenue on the same weekday of the 4 weeks before. */
+  private payoutAlarmFor(date: string) {
+    const day = (entry: string) => { const cash = cashDay(this.report(entry)); return cash ? {date: entry, payoutsCents: cash.payoutsCents, revenueCents: this.dayRevenue(entry)} : null; };
+    return payoutAlarm(day(date), [7, 14, 21, 28].map(back => day(addDays(date, -back))).filter(entry => entry !== null));
+  }
+
+  /** Each night with the club's revenue and the cash book: what is left after the night's staff is paid, by weekday and DJ. */
+  private nightsFor(from: string, to: string): NightSummary {
+    const nights = this.noteDays(from, to).map(day => {
+      const cash = cashDay(this.report(day.date));
+      return {date: day.date, dj: day.dj, clubCents: day.clubCents, revenueCents: this.dayRevenue(day.date), staffCents: cash?.staffCents ?? 0,
+        payoutsCents: cash?.payoutsCents ?? 0, expensesCents: cash?.expensesCents ?? 0, resultCents: day.clubCents !== null && cash ? day.clubCents - cash.staffCents : null};
+    });
+    return nightSummary(from, to, nights);
+  }
+
+  /** MCP: the nights of a stretch of days, cash payouts and expenses, and the averages by weekday and DJ. */
+  posNights(from: string, to: string) {
+    if (!this.config()) return null;
+    return this.nightsFor(from, to);
+  }
+
   posNotes(from: string, to: string) {
     const days = this.noteDays(from, to);
     return {from, to, days: days.map(day => ({...day, analysis: this.notes(day.date)})),
@@ -1814,6 +1843,7 @@ export class TenantObject extends DurableObject<Env> {
       menuByLanguage: weekday(date) === 0 ? sumMenuInterest(this.webDays(addDays(date, -27), date), addDays(date, -27), date) : null,
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
       lastYearRevenueCents: this.dayRevenue(addDays(date, -364)), target: this.monthTargetFor(date), dataGaps: this.dataGaps(config, date, now),
+      cashNeed: this.cashNeedFor(date), payoutAlarm: this.payoutAlarmFor(date), nights: weekday(date) === 0 ? this.nightsFor(addDays(date, -27), date) : null,
       tableChecks: tableChecks(this.report(date), this.report(addDays(date, -1))), noteThemes: noteThemes(this.report(date)?.notes),
       themes: weekday(date) === 0 ? this.themeSummary(date) : null, djRanking: weekday(date) === 0 ? this.djRanking(date) : null,
       supplies: this.supplyBriefFor(config, date),
