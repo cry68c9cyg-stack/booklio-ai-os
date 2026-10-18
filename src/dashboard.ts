@@ -423,6 +423,7 @@ function suppliesCard(s) {
     '<b>' + esc(u.supplier) + '</b> ' + kc(u.netCents) + ' <span class="muted">(obvykle ' + kc(u.usualCents) + ')</span>') + '</li>').join('') + '</ul>';
   if (s.result) h += '<div>Provozní výsledek od ' + esc(short(m.from)) + ': <b>' + kc(s.result.resultCents) + '</b> <span class="muted">(tržby ' + kc(s.result.revenueCents) + ' − nákupy ' + kc(s.result.purchasesCents) +
     (s.result.payoutsCents ? ' − výplaty z kasy ' + kc(s.result.payoutsCents) : '') + '; hrubý odhad bez mezd mimo kasu a režií)</span></div>';
+  if (s.unreadable && s.unreadable.length) h += '<h3>Doklady z pošty, které nešly přečíst</h3><ul>' + s.unreadable.map(u => '<li class="warn">' + esc(short(u.date)) + ' ' + esc(u.sender) + (u.subject ? ': ' + esc(u.subject) : '') + '</li>').join('') + '</ul>';
   if (s.duplicates && s.duplicates.length) h += '<div class="warn">Možná duplicitní faktury: ' + s.duplicates.map(d => esc(d.supplier) + ' ' + d.count + '× ' + kc(d.grossCents) + ' (' + esc(short(d.date)) + ')').join(' · ') + '</div>';
   if (s.margins && s.margins.rows.length) h += '<details><summary>Marže nápojů (' + s.margins.paired + ' spárováno s nákupem, ' + s.margins.unpaired + ' bez nákupu)</summary><div class="scroll"><table><tr><th>Nápoj</th><th class="n">Prodej bez DPH</th><th class="n">Nákup</th><th class="n">Marže</th><th>Nákup podle</th></tr>' +
     s.margins.rows.map(r => '<tr><td>' + esc(r.name) + ' <span class="muted">' + String(r.volumeMl / 1000).replace('.', ',') + ' l</span></td><td class="n">' + kc(r.priceNetCents) + '</td><td class="n">' + kc(r.costCents) + '</td><td class="n' + (r.marginPermille < 600 ? ' warn' : '') + '">' + Math.round(r.marginPermille / 10) + ' %</td><td class="muted">' +
@@ -446,6 +447,8 @@ function sourcesCard(s) {
   else if (od && od.connected) rows.push('<tr><td class="muted">OneDrive připojený</td><td class="n muted">od ' + esc(od.since) + '</td></tr>');
   else if (od && od.canConnect) rows.push('<tr><td>' + (od.error ? '<span class="warn">Přístup k OneDrive vypršel</span>' : 'OneDrive zatím není připojený') + '</td><td class="n"><a href="' + esc(location.pathname) + '/onedrive">Připojit OneDrive</a></td></tr>');
   if (s.costs) rows.push('<tr><td>Náklady (iÚčto)</td><td class="n">' + esc(s.costs.at) + (s.costs.ok ? '' : ' · <span class="warn">chyba</span>') + '</td></tr>');
+  if (s.mail) rows.push('<tr><td>Faktury z pošty info@</td><td class="n">' + esc(s.mail.at) + (s.mail.error ? ' · <span class="warn">' + esc(s.mail.error) + '</span>' : '') +
+    (s.mail.readingHistory ? ' · načítám starší poštu' : '') + ' · ' + s.mail.invoices + ' dokladů' + (s.mail.unreadable ? ', <span class="warn">' + s.mail.unreadable + ' nečitelných</span>' : '') + '</td></tr>');
   return '<div class="card"><h2>Zdroje dat</h2>' + (rows.length ? '<table>' + rows.join('') + '</table>' : '<span class="muted">zatím žádný zdroj neposlal data</span>') + '</div>';
 }
 

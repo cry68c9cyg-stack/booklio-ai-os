@@ -21,7 +21,7 @@ let mf;
 try {
   // Like wrangler: packages resolve for workerd (the MCP SDK and the OAuth provider).
   const bundle = await build({entryPoints: ['src/worker.ts'], bundle: true, write: false, format: 'esm', platform: 'neutral',
-    mainFields: ['module', 'main'], conditions: ['workerd', 'worker', 'browser'], external: ['node:crypto', 'cloudflare:workers']});
+    mainFields: ['module', 'main'], conditions: ['workerd', 'worker', 'browser'], external: ['node:crypto', 'cloudflare:workers', 'cloudflare:sockets']});
   const options = {
     modules: true, script: bundle.outputFiles[0].text, compatibilityDate: '2026-08-06', compatibilityFlags: ['nodejs_compat'],
     durableObjects: {TENANTS: {className: 'TenantObject', useSQLite: true}, REGISTRY: {className: 'Registry', useSQLite: true}},
@@ -170,6 +170,8 @@ try {
   // The morning cron wakes every configured venue.
   const worker = await mf.getWorker();
   await worker.scheduled({scheduledTime: new Date('2026-10-11T05:00:00Z'), cron: '0 5-8 * * *'});
+  // The hourly mailbox visit skips a venue with no mailbox set up (no MAIL_ACCOUNT_<VENUE> secret).
+  await worker.scheduled({scheduledTime: new Date('2026-10-11T05:30:00Z'), cron: '30 * * * *'});
   // SMS delivery through Twilio: a failed send is retried at the next send hour, then marked delivered.
   await mf.dispose();
   const sms = [];

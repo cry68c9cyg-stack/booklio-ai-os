@@ -168,7 +168,7 @@ export function createServer(context: ToolContext): McpServer {
   });
 
   tool('naklady_dodavatele', 'Náklady a dodavatelé', 'Faktury dodavatelů za období (nejvýš 400 dní, zatím z Dishboardu, později z Pexesa): nákupy bez DPH po druzích (jídlo, nápoje, ostatní), kategoriích a dodavatelích, ' +
-    'food cost (jídlo a nápoje bez DPH k tržbám s DPH týchž dní, v promile), zdražení položek od 5 % proti předchozímu nákupu, faktury dnes po splatnosti a splatné do 7 dní, neobvyklé nákupy (nový dodavatel, faktura aspoň 3× nad obvyklou u dodavatele), nákupy po kategoriích proti stejným dnům minulého měsíce ke dni „do“, hranice food costu provozovny (promile), možné duplicity (stejný dodavatel, den a částka), marže nápojů z lístku proti poslednímu nákupu (párování podle názvu) a samotné faktury s položkami a cenami za jednotku. Částky v haléřích.',
+    'food cost (jídlo a nápoje bez DPH k tržbám s DPH týchž dní, v promile), zdražení položek od 5 % proti předchozímu nákupu, faktury dnes po splatnosti a splatné do 7 dní, neobvyklé nákupy (nový dodavatel, faktura aspoň 3× nad obvyklou u dodavatele), nákupy po kategoriích proti stejným dnům minulého měsíce ke dni „do“, hranice food costu provozovny (promile), možné duplicity (stejný dodavatel, den a částka), marže nápojů z lístku proti poslednímu nákupu (párování podle názvu) a samotné faktury s položkami a cenami za jednotku (i ty, které OKO1 přečetlo ze schránky provozovny, zdroj „posta“; ty nejsou nikdy po splatnosti, pošta nezná platby). Částky v haléřích.',
   {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
     const bad = badRange(od, until);
     if (bad) return bad;
@@ -216,7 +216,7 @@ export function createServer(context: ToolContext): McpServer {
     const events = await context.venue.posEvents(datum);
     return events ? result(events) : failed('Provozovna není v OKO1 nastavená.');
   });
-  tool('k_vyrizeni', 'Seznam k vyřízení', 'Seznam k vyřízení za provozní den jako na dashboardu (s tím, co už je „Vyřízeno“) a kdy naposledy poslal data každý zdroj (pokladna, web, report manažerů, náklady).',
+  tool('k_vyrizeni', 'Seznam k vyřízení', 'Seznam k vyřízení za provozní den jako na dashboardu (s tím, co už je „Vyřízeno“) a kdy naposledy poslal data každý zdroj (pokladna, web, report manažerů, náklady, faktury z pošty info@).',
     {datum: date}, async ({datum}: {datum: string}) => {
       if (!isDate(datum)) return badDate;
       const todo = await context.venue.posTodo(datum);

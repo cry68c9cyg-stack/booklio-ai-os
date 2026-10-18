@@ -7,7 +7,10 @@
   "workers_dev": false,
   "preview_urls": false,
   // 5–8 UTC covers the 7, 8 and 9 o'clock send hours in Prague in both summer and winter time.
-  "triggers": {"crons": ["0 5-8 * * *"]},
+  // Minute 30 of every hour: a visit of the venue's mailbox (supplier invoices from e-mail, src/worker.ts MAIL_CRON).
+  "triggers": {"crons": ["0 5-8 * * *", "30 * * * *"]},
+  // Workers AI: reading PDF invoices from the mailbox (text of the PDF and its fields).
+  "ai": {"binding": "AI"},
   "durable_objects": {"bindings": [
     {"name": "TENANTS", "class_name": "TenantObject"},
     {"name": "REGISTRY", "class_name": "Registry"}
@@ -22,6 +25,7 @@
       "workers_dev": true,
       "preview_urls": false,
       "vars": {"DATA_JURISDICTION": "eu"},
+      "ai": {"binding": "AI"},
       // Archiv původních dat a denní export, jen v EU. Kbelík vytvoří nasazení (deploy.yml).
       "r2_buckets": [{"binding": "ARCHIVE", "bucket_name": "oko1-archive", "jurisdiction": "eu"}],
       // Granty a tokeny OAuth pro MCP server: jmenný prostor oko1-oauth (vytvořený 12. 10. 2026). Token nasazení nemá

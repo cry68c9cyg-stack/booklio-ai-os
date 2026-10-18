@@ -237,7 +237,7 @@ Doplněno 13. 10. 2026 zpětně kompatibilně (rozhodnutí MC 13. 10. 2026: Dish
 |---|---|---|
 | `id`, `version` | string, int ≥ 1 | stálý klíč faktury u odesílatele; vyšší `version` (třeba čas změny v ms) fakturu celou nahradí |
 | `businessDate` | `YYYY-MM-DD` | den vystavení (u účtenky den nákupu) |
-| `source` | string | odesílatel, např. `dishboard` |
+| `source` | string | odesílatel, např. `dishboard`; `posta` = faktury, které OKO1 čte ze schránky provozovny samo (níže) |
 | `supplier`, `supplierId` | string ≤ 200, string \| `null` | dodavatel a jeho IČO |
 | `number` | string ≤ 60 \| `null` | číslo faktury |
 | `dueDate`, `paidDate` | `YYYY-MM-DD` \| `null` | splatnost a den zaplacení; nezaplacená po splatnosti jde do seznamu k vyřízení |
@@ -264,6 +264,19 @@ OKO1 z faktur počítá:
 - **náklad na kus pro výdělek po položkách lístku**: nápoj s objemem dostane náklad nalitého objemu podle posledního spárovaného nákupu (stejně jako marže nápojů); jídlo zatím bez nákladu, chybí receptury.
 
 Ranní zpráva má řádek nákupů s food costem, varování nad hranicí food costu, souhrn splatných do 7 dní, nejvýš tři nejdražší zdražení, souhrn faktur po splatnosti, neobvyklé nákupy za 7 dní, možné duplicity a provozní výsledek měsíce; v pondělí (zpráva o neděli) navíc zdražení za týden podle dodavatelů, tři nápoje s nejnižší marží a tři kategorie, které proti minulému měsíci nejvíc rostou. Seznam k vyřízení má každé zdražení (váha = o kolik víc nákup stál), každou fakturu po splatnosti, každou možnou duplicitu, každý neobvyklý nákup, překročený food cost a jako informaci každou fakturu k zaplacení do 7 dní; dashboard kartu „Náklady a dodavatelé“ (s provozním výsledkem, splatnými do 7 dní, neobvyklými nákupy za 30 dní, srovnáním s minulým měsícem a tabulkou marží nápojů); MCP server nástroj `naklady_dodavatele(od, do)` (i s duplicitami, maržemi nápojů, splatnými, neobvyklými nákupy a srovnáním s minulým měsícem).
+
+#### Faktury z pošty provozovny (`source: "posta"`)
+
+Doplněno 18. 10. 2026 zpětně kompatibilně (rozhodnutí MC 18. 10. 2026: Dishboard nemá API, OKO1 čte faktury, které dodavatelé posílají e-mailem, samo). Tyto faktury nikdo neposílá na `/ingest`; OKO1 je ukládá samo se `source: "posta"`, provozovna je může vypnout přes `disabledSources: ["posta"]`.
+
+- **Schránka**: tajemství Workeru `MAIL_ACCOUNT_<PROVOZOVNA>` (velkými písmeny, pomlčky jako `_`) = JSON `{host, port, user, password}`; u James Dean ho nasazení skládá z GitHub secretu `INFO_MAIL_PASSWORD` (IMAP `imap.websupport.cz:993`, `info@jamesdean.cz`). Bez tajemství se pošta nečte.
+- **Jen čtení**: složky se otevírají přes `EXAMINE` a zprávy přes `BODY.PEEK[]`, nic se nemaže, nepřesouvá ani neoznačuje jako přečtené. Odeslaná pošta, koncepty, spam a koš se pro faktury přeskakují.
+- **Kdy**: každou hodinu v 30. minutě; je-li toho víc (první načtení od 1. 4. 2026), pokračuje po minutě, nejvýš 12 dokladů na návštěvu. Každá složka si pamatuje poslední přečtenou zprávu (UID a UIDVALIDITY), nic se nečte dvakrát.
+- **Čtení**: stahují se jen zprávy s přílohou PDF nebo ISDOC (podle struktury zprávy), nejvýš 15 MB. ISDOC (i zabalený `.isdocx`) se čte přesně podle normy: dodavatel, IČO, číslo, vystavení, splatnost, součty bez DPH a s DPH, položky; typ 1 faktura, 2 dobropis (záporně), 3 vrubopis; zálohové faktury se nepočítají. PDF, které podle předmětu, názvu nebo textu vypadá jako doklad, přečte Workers AI (text dokumentu a z něj pole faktury); výsledek se kontroluje (dodavatel, datum vystavení, s DPH 98–130 % bez DPH, položky jen když dají součet do 3 %). Faktura vystavená samotnou provozovnou se neukládá.
+- **Klíč**: `id` = `posta-` + otisk IČO (jinak názvu) dodavatele a čísla faktury, takže tatáž faktura poslaná dvakrát (kopie, upomínka) je uložená jednou.
+- **Splatnost**: pošta neví, co je zaplacené, proto faktury z pošty **nikdy nejsou po splatnosti**, jen v „Splatné do 7 dní“; zaplacené při vystavení (hotově, kartou) mají `paidDate` = den vystavení.
+- **Co nešlo přečíst** (doklad bez čitelného textu nebo s nesmyslnými součty): ranní zpráva (7 dní), seznam k vyřízení a dashboard (30 dní) uvádějí odesílatele, den a předmět. Příloha uložené faktury se archivuje v R2 (EU).
+- Dashboard v kartě „Zdroje dat“ ukazuje poslední návštěvu schránky, chybu, rozpracované načítání starší pošty a počty dokladů.
 
 ## Kdy posílat
 

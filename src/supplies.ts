@@ -43,12 +43,16 @@ export type SupplyBrief = {month: SupplySummary; rises: PriceRise[]; overdue: Ov
   foodCostAlert?: {permille: number; limitPermille: number} | null;
   /** New suppliers and unusually large invoices of the 7 days up to the day. */
   unusual?: UnusualPurchase[];
+  /** Invoice-like attachments from the venue's mailbox of the 7 days up to the day that OKO1 could not read. */
+  unreadable?: UnreadableMail[];
   /** Only in the Monday message (about Sunday): the week's rises per supplier, the drinks with the lowest margin and the categories growing most against the month before. */
   weekly?: {suppliers: SupplierRises[]; lowMargins: DrinkMargin[]; growing?: CategoryChange[]} | null};
 /** An unpaid invoice due soon: `days` until the due date (0 = today). */
 export type DueInvoice = {supplier: string; number: string | null; dueDate: string; days: number; grossCents: number};
 /** A category's purchases of the month so far against the same days of the month before. */
 export type CategoryChange = {name: string; netCents: number; previousCents: number; changeCents: number};
+/** A document from the venue's mailbox that OKO1 could not read: the day of the message, who sent it and its subject. */
+export type UnreadableMail = {date: string; sender: string; subject: string};
 /** A purchase out of the ordinary: a supplier not bought from in the year before, or an invoice over 3× the supplier's usual (median). */
 export type UnusualPurchase = {kind: 'new_supplier' | 'large'; supplier: string; date: string; number: string | null; netCents: number; usualCents: number | null};
 
@@ -121,9 +125,15 @@ export function priceRises(invoices: SupplierInvoice[], from: string, to: string
   return [...rises.values()].sort((a, b) => b.extraCents - a.extraCents || b.permille - a.permille || a.name.localeCompare(b.name, 'cs'));
 }
 
+/**
+ * Senders that cannot know when an invoice was paid (the mailbox sees the invoice, not the bank): their invoices are
+ * never called overdue, only listed as due.
+ */
+export const PAYMENT_UNKNOWN_SOURCES: readonly string[] = ['posta'];
+
 /** Unpaid invoices past their due date on `today` (a due date of today is not late yet), the oldest first. */
 export function overdueInvoices(invoices: SupplierInvoice[], today: string): OverdueInvoice[] {
-  return invoices.filter(invoice => invoice.dueDate && invoice.dueDate < today && !invoice.paidDate)
+  return invoices.filter(invoice => invoice.dueDate && invoice.dueDate < today && !invoice.paidDate && !PAYMENT_UNKNOWN_SOURCES.includes(invoice.source))
     .map(invoice => ({supplier: invoice.supplier, number: invoice.number, dueDate: invoice.dueDate!, grossCents: invoice.grossCents,
       days: Math.round((Date.parse(today) - Date.parse(invoice.dueDate!)) / 86400000)}))
     .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || b.grossCents - a.grossCents);
@@ -143,6 +153,11 @@ export function supplyBrief(invoices: SupplierInvoice[], date: string, revenue: 
       resultCents: revenue.revenueCents - month.netCents - payoutsCents} : null,
     weekly: weekday(date) === 0 ? {suppliers: risesBySupplier(rises), lowMargins: extra.menu ? drinkMargins(extra.menu, invoices, date).margins.slice(0, LOW_MARGINS) : [],
       growing: monthOverMonth(invoices, date).filter(row => row.changeCents > 0).sort((a, b) => b.changeCents - a.changeCents).slice(0, 3)} : null};
+}
+
+/** One unreadable document from the mailbox for the morning message and the to-do list. */
+export function unreadableText(row: UnreadableMail): string {
+  return `${row.sender}, ${shortDate(row.date)}${row.subject ? ` („${row.subject.slice(0, 60)}“)` : ''}`;
 }
 
 /** Unpaid invoices due on `today` or within the 6 days after it, the soonest first. */
@@ -324,6 +339,7 @@ export function renderSupplies(brief: SupplyBrief | null): string[] {
     lines.push(`Splatné do 7 dní: ${brief.dueSoon.length} za ${crownsTotal(total)} (nejbližší ${dueText(brief.dueSoon[0])})`);
   }
   if (brief.unusual?.length) lines.push(`⚠ Neobvyklý nákup: ${brief.unusual.slice(0, 3).map(unusualText).join(' · ')}${brief.unusual.length > 3 ? ` · … a další ${brief.unusual.length - 3}` : ''}`);
+  if (brief.unreadable?.length) lines.push(`Z pošty nešlo přečíst ${brief.unreadable.length === 1 ? '1 doklad' : `${brief.unreadable.length} ${brief.unreadable.length <= 4 ? 'doklady' : 'dokladů'}`}: ${brief.unreadable.slice(0, 3).map(unreadableText).join(' · ')}`);
   if (brief.duplicates?.length) lines.push(`⚠ Možná duplicitní faktury: ${brief.duplicates.slice(0, 3).map(duplicateText).join(' · ')}`);
   if (brief.result) {
     const r = brief.result;
