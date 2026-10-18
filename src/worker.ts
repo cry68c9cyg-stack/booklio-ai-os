@@ -230,6 +230,12 @@ export class TenantObject extends DurableObject<Env> {
       if (route === 'admin/briefing' && method === 'GET') return this.preview(query.date);
       if (route === 'admin/ingest' && method === 'GET') return ok(this.ingestStatus());
       if (route === 'admin/briefings' && method === 'GET') return ok(this.sql.exec('SELECT business_date AS businessDate, status, incomplete, text, created_at AS createdAt FROM briefings ORDER BY business_date DESC LIMIT 60').toArray());
+      // A visit to the mailbox now (the deploy runs one right after storing the mailbox): whether it connected, no contents.
+      if (route === 'admin/mail' && method === 'POST') {
+        const visit = await this.mailVisit(tenant);
+        const error = this.sql.exec<{error: string | null}>('SELECT error FROM mail_visits WHERE id=1').toArray()[0]?.error ?? null;
+        return ok({...visit, error});
+      }
       if (route === 'admin/tick' && method === 'POST') {
         const at = (body as {at?: unknown})?.at;
         if (typeof at !== 'string' || Number.isNaN(Date.parse(at))) return failure('INVALID_REQUEST', 400);
@@ -2093,7 +2099,7 @@ export class Registry extends DurableObject<Env> {
 const routes: Record<string, string[]> = {
   'v1/ingest': ['POST'], 'v1/menu': ['GET'], 'admin/config': ['GET', 'PUT'], 'admin/pair': ['POST'], 'admin/history': ['POST'],
   'admin/briefing': ['GET'], 'admin/briefings': ['GET'], 'admin/tick': ['POST'], 'admin/report': ['GET', 'PUT'], 'admin/fetch': ['POST'], 'admin/logout': ['POST'],
-  'admin/web': ['GET'], 'admin/ingest': ['GET'], 'admin/competitors': ['GET', 'PUT'],
+  'admin/web': ['GET'], 'admin/ingest': ['GET'], 'admin/competitors': ['GET', 'PUT'], 'admin/mail': ['POST'],
 };
 
 async function readBody(request: Request, limit: number): Promise<unknown | Result> {
