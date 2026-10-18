@@ -3,7 +3,7 @@ import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provid
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
 import {cashDay, cashNeed, nightSummary, payoutAlarm, tillDay, type NightSummary, type Till} from './cash.ts';
 import {tableChecks} from './checks.ts';
-import {cashFlowDay, cashForecast, cashShare, type CashFlowDay} from './cashflow.ts';
+import {cashFlowDay, cashForecast, cashShare, movementDay, sumMovements, type CashFlowDay} from './cashflow.ts';
 import {cashDiffRepeat, sumVoids, voidAndDiff, voidDay, voidPastDates, type VoidDay} from './voids.ts';
 import {promoDay, promoStreaks, sumPromo, type PromoDay} from './promo.ts';
 import {nightShare, staffGaps, sumWages, wageDay, type WageDay} from './wages.ts';
@@ -1563,7 +1563,7 @@ export class TenantObject extends DurableObject<Env> {
       current: this.monthPart(config, from, date), previous: {...this.monthPart(config, previousMonth + '-01', previousThrough), month: previousMonth, through: previousThrough},
       lastYear: {...this.monthPart(config, yearBack(from), yearBack(date)), month: yearBack(from).slice(0, 7), through: yearBack(date)},
       payouts, payoutsCents: sum(payouts), expenses, expensesCents: sum(expenses), discounts: discounts.rows, discountsCents: discounts.totalCents,
-      staffMeals: this.staffMeals(from, date), wages: sumWages(this.wageDays(from, date)), promo: sumPromo(this.promoDays(from, date)), voids: sumVoids(this.voidDays(from, date)), reviews: this.reviewStats(from, date)};
+      staffMeals: this.staffMeals(from, date), wages: sumWages(this.wageDays(from, date)), promo: sumPromo(this.promoDays(from, date)), voids: sumVoids(this.voidDays(from, date)), movements: this.movements(from, date), reviews: this.reviewStats(from, date)};
   }
 
   /** Discounts by type on the same weekday of the 4 weeks before, counting only days whose managers' report has the discount block. */
@@ -1957,7 +1957,10 @@ export class TenantObject extends DurableObject<Env> {
       const other = entry === date ? day : tillDay(this.report(entry));
       monthDepositsCents += other?.depositsCents ?? 0; monthTipsCents += other?.tipsCents ?? 0;
     }
-    return {day, debtsWeekAgoCents: tillDay(this.report(addDays(date, -7)))?.debtsCents ?? null, month: date.slice(0, 7), monthDepositsCents, monthTipsCents};
+    // What the forecast of the morning before expected the day to need.
+    const forecast = cashForecast(addDays(date, -1), this.cashFlowDays(addDays(date, -28), addDays(date, -1)));
+    return {day, debtsWeekAgoCents: tillDay(this.report(addDays(date, -7)))?.debtsCents ?? null, month: date.slice(0, 7), monthDepositsCents, monthTipsCents,
+      depositForecastCents: forecast ? forecast.days[0].depositCents : null};
   }
 
   /** The cash payouts of each day of a stretch by kind (night, other wages, trial shifts; src/wages.ts). */
@@ -1988,11 +1991,21 @@ export class TenantObject extends DurableObject<Env> {
     return days;
   }
 
-  /** MCP: the till by day over a stretch, the cash part of the revenue, and the 7 days after its last day. */
+  /** Vklad JD, cash from the bank and cash taken to an account over a stretch. */
+  private movements(from: string, to: string) {
+    const days = [];
+    for (let entry = from; entry <= to; entry = addDays(entry, 1)) days.push(movementDay(this.report(entry)));
+    return sumMovements(days);
+  }
+
+  /** MCP: the till by day over a stretch with its movements, the cash part of the revenue, and the 7 days after its last day. */
   posCashFlow(from: string, to: string) {
     if (!this.config()) return null;
     const days = this.cashFlowDays(from, to);
-    return {from, to, cashShare: cashShare(days), days: days.filter(day => day !== null), forecast: cashForecast(to, this.cashFlowDays(addDays(to, -27), to))};
+    const moves = new Map<string, ReturnType<typeof movementDay>>();
+    for (let entry = from; entry <= to; entry = addDays(entry, 1)) moves.set(entry, movementDay(this.report(entry)));
+    return {from, to, cashShare: cashShare(days), movements: sumMovements([...moves.values()]),
+      days: days.filter(day => day !== null).map(day => ({...day, movements: moves.get(day.date) ?? null})), forecast: cashForecast(to, this.cashFlowDays(addDays(to, -27), to))};
   }
 
   /** MCP: voids and cash differences over a stretch, by day, with the checks of its last day. */

@@ -1,6 +1,6 @@
 import {addDays, weekday} from './time.ts';
 import {promoStreakText} from './promo.ts';
-import {cashForecastText} from './cashflow.ts';
+import {cashForecastText, SURPLUS_CENTS} from './cashflow.ts';
 import {cashDiffRepeatText, voidAndDiffText} from './voids.ts';
 import {nightShareText, staffGapToday} from './wages.ts';
 import {cashNeedText, debtsRising, debtsText, payoutAlarmText} from './cash.ts';
@@ -28,6 +28,8 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   for (const check of briefing.tableChecks ?? []) items.push({level: check.level, text: `Tabulky: ${check.text}`, amountCents: check.amountCents});
   for (const text of themeTodos(briefing.noteThemes)) items.push({level: 'info', text, amountCents: null});
   if (briefing.cashNeed) warn(`Hotovost na dnešek nestačí: ${cashNeedText(briefing.cashNeed)}`, -briefing.cashNeed.shortCents);
+  if (briefing.cashForecast && !briefing.cashForecast.firstShort && briefing.cashForecast.surplusCents >= SURPLUS_CENTS)
+    items.push({level: 'info', text: `Hotovost nad potřebou týdne: asi ${crowns(briefing.cashForecast.surplusCents)} může na účet`, amountCents: briefing.cashForecast.surplusCents});
   if (briefing.cashForecast?.firstShort) items.push({level: 'info', text: `Hotovost na 7 dní: ${cashForecastText(briefing.cashForecast)}`, amountCents: briefing.cashForecast.depositCents});
   if (debtsRising(briefing.till)) warn(`Dluhy ve výčetce rostou: ${debtsText(briefing.till!)}`, briefing.till!.day.debtsCents! - briefing.till!.debtsWeekAgoCents!);
   if (briefing.payoutAlarm) warn(`Výplaty v hotovosti nad obvyklým: ${payoutAlarmText(briefing.payoutAlarm)}`, briefing.payoutAlarm.payoutsCents - briefing.payoutAlarm.usualCents);

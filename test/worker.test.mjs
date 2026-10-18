@@ -755,7 +755,7 @@ try {
   const voidList = await mcp('storna_a_kasa', {od: '2026-10-01', do: '2026-10-31'});
   assert.ok(!voidList.error && Array.isArray(voidList.data.days) && typeof voidList.data.total.voidCents === 'number' && Array.isArray(voidList.data.total.diffDays), 'voids over a period');
   const cashList = await mcp('vyhled_hotovosti', {od: '2026-10-01', do: '2026-10-31'});
-  assert.ok(!cashList.error && Array.isArray(cashList.data.days) && typeof cashList.data.cashShare.inCents === 'number' && 'forecast' in cashList.data, 'the till over a period');
+  assert.ok(!cashList.error && Array.isArray(cashList.data.days) && typeof cashList.data.cashShare.inCents === 'number' && typeof cashList.data.movements.depositsCents === 'number' && 'forecast' in cashList.data, 'the till over a period');
   const promoList = await mcp('promo_a_odpisy', {od: '2026-10-01', do: '2026-10-31'});
   assert.ok(!promoList.error && Array.isArray(promoList.data.days) && Array.isArray(promoList.data.streaks) && Array.isArray(promoList.data.total.rows), 'promo over a period');
   const wageList = await mcp('mzdy_a_smeny', {od: '2026-10-01', do: '2026-10-31'});

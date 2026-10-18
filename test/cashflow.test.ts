@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {buildBriefing, renderBriefing} from '../src/briefing.ts';
-import {cashFlowDay, cashForecast, cashShare, renderCashShare, renderDeposits} from '../src/cashflow.ts';
+import {buildBriefing, renderBriefing, renderMonth} from '../src/briefing.ts';
+import {renderTill, tillDay} from '../src/cash.ts';
+import {cashFlowDay, cashForecast, cashShare, movementDay, movementMonthText, renderCashShare, renderDeposits, sumMovements} from '../src/cashflow.ts';
 import type {DailyReport} from '../src/daily-report.ts';
 import {addDays, weekday} from '../src/time.ts';
 import {todoList} from '../src/todo.ts';
@@ -47,7 +48,10 @@ test('the 7 days ahead with the deposits it takes', () => {
   assert.match(text, /\nVklady JD na týden, aby hotovost na výplaty a výdaje stačila: po 19\. 10\. 46 000 Kč, út 20\. 10\. 6 000 Kč, .*ne 25\. 10\. 6 000 Kč \(celkem 82 000 Kč\)(\n|$)/);
   assert.ok(todoList(briefing).some(item => item.level === 'info' && item.amountCents === 8200000));
   const enough = cashForecast('2026-10-18', days.map(day => day && {...day, cashCents: 50000000}))!;
-  assert.equal(enough.firstShort, null);
+  assert.deepEqual([enough.firstShort, enough.surplusCents], [null, 37800000], 'the lowest cash of the week can go to the account');
+  const rich = buildBriefing({businessDate: '2026-10-17', ...empty, cashForecast: enough});
+  assert.match(renderBriefing('Test', rich), /; vystačí, na konci asi 378 000 Kč; navíc je asi 378 000 Kč, ty mohou na účet(\n|$)/);
+  assert.ok(todoList(rich).some(item => item.level === 'info' && item.text === 'Hotovost nad potřebou týdne: asi 378 000 Kč může na účet'));
   assert.deepEqual(renderDeposits(enough), ['Vklady JD na týden: nebudou potřeba, hotovost na výplaty a výdaje obvykle vystačí (na konci týdne asi 378 000 Kč)']);
   assert.doesNotMatch(renderBriefing('Test', buildBriefing({businessDate: '2026-10-17', ...empty, cashForecast: forecast})), /Vklady JD na týden/, 'the deposits only on Monday');
 });
@@ -58,4 +62,23 @@ test('the cash part of the revenue, the week against the 4 weeks before', () => 
   assert.deepEqual(renderCashShare(share), ['Hotovost z tržeb za týden: 28 000 Kč = 2 % celkové tržby (4 týdny předtím 3 %)']);
   assert.deepEqual(renderCashShare({...share, before: cashShare(days('2026-10-11', 10, 6000))}), [], 'too few days before');
   assert.match(renderBriefing('Test', buildBriefing({businessDate: '2026-10-18', ...empty, cashShare: share})), /\nHotovost z tržeb za týden: 28 000 Kč/);
+});
+
+test('Vklad JD against the forecast, and the month of deposits, withdrawals and cash to the account', () => {
+  const report = book('2026-10-12', 2000, 10000);
+  const move = (key: string, label: string, crowns: number) => report.lines.push({kind: 'movement', key, label, count: null, amountCents: crowns * 100});
+  move('vklad-jd', 'Vklad JD', -30000); move('vklad-mz-ucet', 'Vklad MŽ Účet', 30000); move('vklad-do-jd', 'Vklad do JD', -80000); move('olej', 'Olej', -1600);
+  assert.deepEqual(movementDay(report), {date: '2026-10-12', depositsCents: 11000000, withdrawalsCents: 0, outCents: 3000000, otherInCents: 160000});
+  assert.equal(tillDay(report)!.depositsCents, 11000000, 'cash taken to the account is not a deposit');
+  const withdrawal = book('2026-10-14', 0, 0);
+  withdrawal.lines.push({kind: 'movement', key: 'vyber-hotovosti', label: 'Výběr hotovosti', count: null, amountCents: -11000000});
+  const sum = sumMovements([movementDay(report), movementDay(withdrawal), movementDay(book('2026-10-13', 0, 0))]);
+  assert.equal(movementMonthText(sum), 'vklady JD 110 000 Kč · výběry z banky 110 000 Kč · na účet 30 000 Kč');
+  const part = {revenueCents: 40000000, revenueDays: 2, bySection: null};
+  const month = {month: '2026-10', through: '2026-10-14', complete: false, current: part, previous: {...part, revenueDays: 0, revenueCents: 0, month: '2026-09', through: '2026-09-14'},
+    payouts: [], payoutsCents: 0, expenses: [], expensesCents: 0, discounts: [], discountsCents: 0, movements: sum};
+  assert.match(renderMonth(month)[0], / · vklady JD 110 000 Kč · výběry z banky 110 000 Kč · na účet 30 000 Kč$/);
+  const till = {day: tillDay(report)!, debtsWeekAgoCents: null, month: '2026-10', monthDepositsCents: 11000000, monthTipsCents: 0};
+  assert.deepEqual(renderTill({...till, depositForecastCents: 5200000}), ['Kasa: Vklad JD 110 000 Kč (odhad 52 000 Kč; říjen zatím 110 000 Kč)']);
+  assert.deepEqual(renderTill({...till, day: {...till.day, depositsCents: 0, debtsCents: 500000}, depositForecastCents: 5200000}), ['Kasa: Vklad JD žádný, odhad byl 52 000 Kč · dluhy ve výčetce 5 000 Kč']);
 });
