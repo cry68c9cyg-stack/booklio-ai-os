@@ -5,6 +5,7 @@
  */
 import {extractCashBook, extractDailyReport, isJournalBook, JOURNAL_LABEL, type DailyReport} from './daily-report.ts';
 import {readXlsx} from './xlsx.ts';
+import {readDocx} from './docx.ts';
 import {googleFolderId} from './validate.ts';
 
 export type FetchedFile = {name: string; bytes: Uint8Array};
@@ -36,14 +37,19 @@ export function shareId(link: string): string {
   return 'u!' + btoa(binary).replace(/=+$/, '').replace(/\//g, '_').replace(/\+/g, '-');
 }
 
-/** The file names that can hold the day: the daily report carries the date in its name, the cash book is one file for many days. */
-export function pickFiles(names: string[], businessDate: string): {report: string | null; books: string[]} {
+/**
+ * The file names that can hold the day: the daily report carries the date in its name, the cash book is one file for
+ * many days, and "Report dne" may come as its own Word file with the date ("Textový report 17.10.2026.docx").
+ */
+export function pickFiles(names: string[], businessDate: string): {report: string | null; books: string[]; text?: string} {
   const [year, month, day] = businessDate.split('-').map(Number);
   const dated = new RegExp(`(^|[^0-9])0?${day}[._ -]+0?${month}[._ -]+(${year}|${year % 100})([^0-9]|$)`);
   const workbooks = names.filter(name => /\.xlsx$/i.test(name) && !name.startsWith('~$'));
+  const text = names.find(name => /\.docx$/i.test(name) && !name.startsWith('~$') && dated.test(name));
   return {
     report: workbooks.find(name => dated.test(name) && !plain(name).includes('denik')) ?? null,
     books: workbooks.filter(name => plain(name).includes('denik')),
+    ...(text ? {text} : {}),
   };
 }
 
@@ -147,7 +153,7 @@ async function dayFiles(api: Api, root: Item, businessDate: string): Promise<{fi
   // Monthly cash books: the newest few are downloaded; the one with the day's column is used.
   const books = picked.books.sort((a, b) => (files.get(b)!.lastModifiedDateTime ?? '').localeCompare(files.get(a)!.lastModifiedDateTime ?? '')).slice(0, 3);
   const result: FetchedFile[] = [], warnings: string[] = [];
-  for (const name of [picked.report, ...books]) {
+  for (const name of [picked.report, picked.text, ...books]) {
     if (!name) continue;
     const item = files.get(name)!;
     const url = downloadUrl(item);
@@ -210,7 +216,7 @@ export async function googleDayFiles(folderId: string, businessDate: string, acc
   const picked = pickFiles([...files.keys()], businessDate);
   const books = picked.books.sort((a, b) => (files.get(b)!.modifiedTime ?? '').localeCompare(files.get(a)!.modifiedTime ?? '')).slice(0, 3);
   const result: FetchedFile[] = [], warnings: string[] = [];
-  for (const name of [picked.report, ...books]) {
+  for (const name of [picked.report, picked.text, ...books]) {
     if (!name) continue;
     const entry = files.get(name)!, id = encodeURIComponent(entry.id);
     const bytes = await download(entry.mimeType === GOOGLE_SHEET ? `${GOOGLE_API}/files/${id}/export?mimeType=${encodeURIComponent(XLSX)}` : `${GOOGLE_API}/files/${id}?alt=media&supportsAllDrives=true`, headers);
@@ -229,6 +235,11 @@ export async function reportFromFiles(files: FetchedFile[], businessDate: string
   const problems = [...warnings];
   let bookUsed = false;
   for (const file of files) {
+    // "Report dne" as its own Word file: its text is the day's notes.
+    if (/\.docx$/i.test(file.name)) {
+      try { const text = await readDocx(file.bytes); if (text) { notes.push(text); used.push(file.name); } } catch { problems.push(`Soubor ${file.name} není čitelný dokument Wordu.`); }
+      continue;
+    }
     let sheets;
     try { sheets = await readXlsx(file.bytes); } catch { problems.push(`Soubor ${file.name} není čitelný sešit Excelu.`); continue; }
     const day = extractDailyReport(sheets);
