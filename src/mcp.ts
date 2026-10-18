@@ -248,6 +248,13 @@ export function createServer(context: ToolContext): McpServer {
     const month = await context.venue.posMonthResult(den);
     return month ? result(month) : failed('Provozovna není v OKO1 nastavená.');
   });
+  tool('den_a_noc', 'Den proti noci', 'Den (Restaurace den) proti noci (Restaurace noc a Club) za 7 dní do zadaného dne: tržba bez DPH (odhad 12 % / 21 %) minus výplaty z kasy (noční personál noci, ostatní mzdy z kasy podle tržby Restaurace den a noc), ' +
+    'co zbývá, podíl výplat na tržbě proti průměrnému týdnu ze 4 předchozích. Faktury se nedělí.',
+  {den: date}, async ({den}: {den: string}) => {
+    if (!isDate(den)) return failed('Den musí být RRRR-MM-DD.');
+    const parts = await context.venue.posDayNight(den);
+    return parts ? result(parts) : failed('Provozovna není v OKO1 nastavená.');
+  });
   tool('riziko_mank', 'Riziko mank', 'Rizikové skóre mank 0–100 po dnech za období (nejvýš 92 dní), nejrizikovější dny první, s důvody a tím, co prověřit: storna po zaplacení, storna nad obvyklým s rozdílem v kase, ' +
     'opakovaný rozdíl v kase, přepočet kasy proti deníku, report proti deníku, neobvyklé slevy, promo 3 dny nad obvyklým, rostoucí dluhy, nesedící tabulky, záporná hotovost v tržbě.',
   {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
