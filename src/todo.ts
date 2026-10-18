@@ -4,7 +4,7 @@ import {nightShareText, staffGapToday} from './wages.ts';
 import {cashNeedText, debtsRising, debtsText, payoutAlarmText} from './cash.ts';
 import {repeatedText, waitingText} from './mail-insights.ts';
 import {gapsText, hasGaps, shiftSignals, shiftText} from './goals.ts';
-import {conflictText, dueText, missingText, duplicateText, newSupplierText, paymentText, foodCostText, overdueText, riseText, unreadableText, unusualText} from './supplies.ts';
+import {conflictText, dueText, missingText, duplicateText, newSupplierText, paymentText, foodCostText, overdueText, receiptsText, riseText, unreadableText, unusualText} from './supplies.ts';
 import {CASH_DIFFERENCE_CENTS, crowns, menuGapsText, mismatch, mismatchText, noShowAlarm, noShowText, pendingAheadText, themeTodos, reviewDrop, reviewDropText, unusual, weakDays, weakDaysText, webDropText, type Briefing} from './briefing.ts';
 
 export type TodoItem = {level: 'warn' | 'info'; text: string; amountCents: number | null};
@@ -57,6 +57,7 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   // Invoices to pay this week: not late yet, so info, but with their amount so nothing slips past its due date.
   for (const row of briefing.supplies?.newFromMail ?? []) warn(`Faktura z pošty od nového dodavatele, ověřit, než se zaplatí: ${newSupplierText(row)}`, row.grossCents);
   for (const row of briefing.supplies?.missing ?? []) warn(`Nepřišla obvyklá faktura, ověřit u dodavatele: ${missingText(row)}`, row.lastGrossCents);
+  if (briefing.supplies?.receipts) items.push({level: 'info', text: `${receiptsText(briefing.supplies.receipts)}.`, amountCents: null});
   for (const row of briefing.supplies?.conflicts ?? []) warn(`Stejná faktura s jinou částkou, ověřit u dodavatele: ${conflictText(row)}`);
   if (briefing.supplies?.payments) items.push({level: 'info', text: `Připravit hromadnou platbu na ${paymentText(briefing.supplies.payments)}`, amountCents: briefing.supplies.payments.totalCents});
   for (const row of briefing.supplies?.dueSoon ?? []) items.push({level: 'info', text: `Zaplatit: ${dueText(row)}`, amountCents: row.grossCents});
