@@ -4,7 +4,7 @@ import {buildBriefing, renderBriefing} from '../src/briefing.ts';
 import {extractCashBook, extractDailyReport, JOURNAL_LABEL, line, toCents, total, validateDailyReport, type DailyReport} from '../src/daily-report.ts';
 import {parseAnalysis, pseudonymise, restore} from '../src/notes.ts';
 import {allowedUrl, pickFiles, reportFromFiles, shareId} from '../src/onedrive.ts';
-import {InputError, validateConfig, type TenantConfig} from '../src/validate.ts';
+import {googleFolderId, InputError, validateConfig, type TenantConfig} from '../src/validate.ts';
 import {excelDate, readXlsx} from '../src/xlsx.ts';
 import {todoList} from '../src/todo.ts';
 import {unzip} from '../src/zip.ts';
@@ -208,6 +208,15 @@ test('config: only an HTTPS OneDrive or SharePoint link', () => {
   assert.equal(validateConfig({...config, reportsLink: ''}).reportsLink, null);
   assert.throws(() => validateConfig({...config, reportsLink: 'http://1drv.ms/f/s!abc'}), InputError);
   assert.throws(() => validateConfig({...config, reportsLink: 'https://evil.example/1drv.ms'}), InputError);
+});
+
+test('Google Drive: a folder link (shared with OKO1\'s Google account)', () => {
+  const link = 'https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOp_qr-st?usp=sharing';
+  assert.equal(validateConfig({...config, reportsLink: link}).reportsLink, link);
+  assert.equal(googleFolderId(link), '1AbCdEfGhIjKlMnOp_qr-st');
+  assert.equal(googleFolderId('https://drive.google.com/drive/u/0/folders/1AbCdEfGhIjKlMnOp_qr-st'), '1AbCdEfGhIjKlMnOp_qr-st');
+  assert.equal(googleFolderId('https://drive.google.com/file/d/1AbCdEfGhIjKlMnOp_qr-st/view'), null);
+  assert.throws(() => validateConfig({...config, reportsLink: 'https://drive.google.com/file/d/1AbCdEfGhIjKlMnOp_qr-st/view'}), InputError);
 });
 
 test('"Report dne": names, phones and e-mails never leave OKO1', () => {

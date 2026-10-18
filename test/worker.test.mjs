@@ -1,7 +1,7 @@
 // End-to-end test on the real workerd runtime (Miniflare) with synthetic data only.
 import assert from 'node:assert/strict';
 import {mkdtemp, readdir, readFile, rm} from 'node:fs/promises';
-import {createHash} from 'node:crypto';
+import {createHash, generateKeyPairSync, verify} from 'node:crypto';
 import vm from 'node:vm';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -228,9 +228,12 @@ try {
   await mf.dispose();
   const outbound = [];
   let microsoftRenewal = 'renew-1';
+  // A synthetic key of OKO1's Google account, made for the test only.
+  const googleKey = generateKeyPairSync('rsa', {modulusLength: 2048});
   const files = {'https://test.files.1drv.com/report.xlsx': await xlsx(reportSheets()), 'https://test.files.1drv.com/book.xlsx': await xlsx(journalSheets())};
   mf = new Miniflare({...options,
-    bindings: {...options.bindings, ANTHROPIC_API_KEY: 'test-only-anthropic', ONEDRIVE_CLIENT_ID: 'test-client'},
+    bindings: {...options.bindings, ANTHROPIC_API_KEY: 'test-only-anthropic', ONEDRIVE_CLIENT_ID: 'test-client', GOOGLE_SERVICE_ACCOUNT: JSON.stringify({type: 'service_account', client_email: 'oko1@test.iam.gserviceaccount.com',
+      private_key: googleKey.privateKey.export({type: 'pkcs8', format: 'pem'})})},
     outboundService: async request => {
       const url = new URL(request.url);
       outbound.push({url: request.url, body: request.method === 'POST' ? await request.text() : null, key: request.headers.get('x-api-key')});
@@ -251,6 +254,27 @@ try {
           {name: 'Peněžní deník.xlsx', file: {}, size: 5000, '@microsoft.graph.downloadUrl': 'https://test.files.1drv.com/book.xlsx'},
           {name: 'Denní report 9.10.2026.xlsx', file: {}, size: 5000, '@microsoft.graph.downloadUrl': 'https://test.files.1drv.com/report.xlsx'},
         ]});
+      }
+      // Google Drive through OKO1's own Google account: a signed JWT for an access, then the Drive API.
+      if (url.hostname === 'oauth2.googleapis.com') {
+        const assertion = new URLSearchParams(outbound.at(-1).body).get('assertion') ?? '';
+        const [head, claims, signature] = assertion.split('.');
+        const valid = verify('RSA-SHA256', Buffer.from(head + '.' + claims), googleKey.publicKey, Buffer.from(signature ?? '', 'base64url'));
+        const body = JSON.parse(Buffer.from(claims ?? '', 'base64url').toString() || '{}');
+        if (!valid || body.iss !== 'oko1@test.iam.gserviceaccount.com' || body.scope !== 'https://www.googleapis.com/auth/drive.readonly') return Response.json({error: 'invalid_grant'}, {status: 400});
+        return Response.json({access_token: 'google-1'});
+      }
+      if (url.hostname === 'www.googleapis.com') {
+        if (request.headers.get('authorization') !== 'Bearer google-1') return new Response('', {status: 401});
+        const q = url.searchParams.get('q') ?? '';
+        if (url.pathname === '/drive/v3/files' && q.startsWith("'1GoogleRootFolder' in parents")) return Response.json({files: [{id: '1GoogleMonth', name: '2026-10', mimeType: 'application/vnd.google-apps.folder', modifiedTime: '2026-10-11T08:00:00Z'}]});
+        if (url.pathname === '/drive/v3/files' && q.startsWith("'1GoogleMonth' in parents")) return Response.json({files: [
+          {id: '1GoogleReport', name: 'Denní report 9.10.2026.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},
+          {id: '1GoogleBook', name: 'Peněžní deník', mimeType: 'application/vnd.google-apps.spreadsheet'},
+        ]});
+        if (url.pathname === '/drive/v3/files' ) return Response.json({error: {code: 404}}, {status: 404});
+        if (url.pathname === '/drive/v3/files/1GoogleReport' && url.searchParams.get('alt') === 'media') return new Response(files['https://test.files.1drv.com/report.xlsx']);
+        if (url.pathname === '/drive/v3/files/1GoogleBook/export') return new Response(files['https://test.files.1drv.com/book.xlsx']);
       }
       // New personal share links do not open through the public API any more.
       if (url.hostname === 'api.onedrive.com' && url.pathname.includes('u!' + Buffer.from('https://1drv.ms/f/c/synthetic/test').toString('base64url'))) return new Response('', {status: 401});
@@ -337,6 +361,14 @@ try {
   assert.equal(fetchedGraph.found, true, JSON.stringify(fetchedGraph.warnings));
   assert.equal(microsoftRenewal, 'renew-2', 'the rotated renewal is kept');
   assert.deepEqual((await (await call('GET', '/admin/t/excel-graph/report?date=2026-10-09')).json()).report.files, ['Denní report 9.10.2026.xlsx', 'Peněžní deník.xlsx']);
+  // A Google Drive folder shared only with OKO1's Google account (read-only); a folder not shared with it says so.
+  assert.equal((await call('PUT', '/admin/t/excel-google/config', {...excelConfig, reportsLink: 'https://drive.google.com/drive/folders/1GoogleRootFolder?usp=sharing'})).status, 200);
+  const fetchedGoogle = await (await call('POST', '/admin/t/excel-google/fetch', {date: '2026-10-09'})).json();
+  assert.equal(fetchedGoogle.found, true, JSON.stringify(fetchedGoogle.warnings));
+  assert.deepEqual((await (await call('GET', '/admin/t/excel-google/report?date=2026-10-09')).json()).report.files, ['Denní report 9.10.2026.xlsx', 'Peněžní deník.xlsx']);
+  assert.equal((await (await call('POST', '/admin/t/excel-google/fetch', {date: '2026-10-08'})).json()).warnings[0], 'Google Drive: denní report za tento den ve složce není.');
+  assert.equal((await call('PUT', '/admin/t/excel-google/config', {...excelConfig, reportsLink: 'https://drive.google.com/drive/folders/1NotSharedFolder'})).status, 200);
+  assert.match((await (await call('POST', '/admin/t/excel-google/fetch', {date: '2026-10-09'})).json()).warnings[0], /není nasdílená účtu OKO1/);
   // Microsoft refuses the renewal: no access, the warning says to connect again.
   microsoftRenewal = 'revoked';
   const lost = await (await call('POST', '/admin/t/excel-graph/fetch', {date: '2026-10-10'})).json();

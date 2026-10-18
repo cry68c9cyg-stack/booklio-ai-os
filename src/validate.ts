@@ -393,11 +393,21 @@ function phone(item: unknown): string {
 }
 
 /** Only OneDrive / SharePoint share links over HTTPS. */
+/** The folder of a Google Drive link shared with "anyone with the link" (drive.google.com/drive/folders/{id}). */
+export function googleFolderId(link: string): string | null {
+  try {
+    const url = new URL(link.trim());
+    if (url.protocol !== 'https:' || url.hostname !== 'drive.google.com') return null;
+    const id = url.pathname.match(/^\/drive\/(?:u\/\d+\/)?folders\/([A-Za-z0-9_-]{10,100})$/)?.[1] ?? url.searchParams.get('id');
+    return id && /^[A-Za-z0-9_-]{10,100}$/.test(id) ? id : null;
+  } catch { return null; }
+}
+
 function shareLink(value: unknown): string {
   if (typeof value !== 'string' || value.length > 1000) fail();
   let url: URL;
   try { url = new URL((value as string).trim()); } catch { return fail(); }
-  if (url.protocol !== 'https:' || !/(^|\.)(1drv\.ms|onedrive\.live\.com|sharepoint\.com)$/.test(url.hostname)) fail();
+  if (url.protocol !== 'https:' || !/(^|\.)(1drv\.ms|onedrive\.live\.com|sharepoint\.com)$/.test(url.hostname) && !(url.hostname === 'drive.google.com' && googleFolderId(url.toString()))) fail();
   return url.toString();
 }
 
