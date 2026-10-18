@@ -79,13 +79,19 @@ Připojení v Claudovi (každý, kdo smí na dashboard):
 
 ## 6a. Ceny podniků v okolí
 
-Rozhodnutí MC 14. 10. 2026. Claude jednou měsíčně přečte veřejné lístky srovnatelných podniků v centru Prahy a ceny zapíše do `.github/oko1/<tenant>.competitors.json`: datum čtení, košík položek (`basket`, u každé položky naše položka lístku podle názvu, kategorie, případně skupiny a pořadí ceny, u nápojů objem, na který se ceny přepočítají) a podniky s adresou stránky, ze které ceny pochází. Jsou to veřejná data, nic o hostech ani o nás. Nasazení soubor uloží do OKO1 (`npm run admin -- competitors james-dean soubor.json`).
+Rozhodnutí MC 14. 10. 2026: Claude jednou měsíčně přečte veřejné lístky **všech barů a restaurací v ulicích Dlouhá a V Kolkovně** a porovná s nimi **celý náš lístek: jídlo i všechny nápoje, alkoholické i nealkoholické**. Ceny zapíše do `.github/oko1/<tenant>.competitors.json`:
 
-OKO1 porovná naši aktuální cenu z lístku s mediánem podniků. Rozdíl se počítá jen tehdy, když cenu má aspoň 3 podniky; u podniku s více řádky se bere nejlevnější. Nápoj bez uvedeného objemu se do srovnání nepočítá. Výsledek ukazuje:
+- `checkedOn`: datum čtení; `scope`: kde podniky jsou (pro dashboard, např. „Dlouhá a V Kolkovně“);
+- `basket`: srovnávané položky, u každé část lístku (`section`: `food` jídlo, `alcohol` alkohol, `soft` nealko), naše položka lístku podle názvu, kategorie, případně skupiny, objemu a pořadí ceny, a u nápojů objem, na který se ceny přepočítají (`volumeMl`; `perVolume: true` = přepočet po mililitrech ze sklenky 0,75× až 1,5× objemu, např. destiláty 3–6 cl na 4 cl a víno rozlévané; malý panák 2 cl ani lahev se nepřepočítá, protože malá porce stojí víc než svůj díl; jinak jen z objemu do ±20 %); položka, kterou nemáme, má `ours: null` a ukazuje jen okolí;
+- `venues`: každý prohlédnutý podnik s adresou (`area`), druhem (`kind`) a adresou stránky, ze které ceny pochází; podnik bez cen online má prázdné `items` a důvod v `note`.
 
-- karta lístku na dashboardu („Ceny proti okolí“);
+Jsou to veřejná data, nic o hostech ani o nás. Nasazení soubor uloží do OKO1 (`npm run admin -- competitors james-dean soubor.json`, nejvýš 1 MB).
+
+OKO1 porovná naši aktuální cenu z lístku s mediánem podniků. Rozdíl se počítá jen tehdy, když stejnou položku má aspoň 3 podniky; u podniku s více řádky se bere nejlevnější, podobné položky (`approx`) jsou jen pro představu. Nápoj bez uvedeného objemu se do srovnání nepočítá. Výsledek ukazuje:
+
+- karta lístku na dashboardu („Ceny proti okolí“): jídlo, alkoholické a nealkoholické nápoje zvlášť, každá část celkově (medián našich rozdílů) a po položkách;
 - nástroj Clauda `kontrola_cen` (`competitors`);
-- pondělní ranní zpráva v týdnu po přečtení cen: položky o 15 % a víc dražší nebo levnější než medián.
+- pondělní ranní zpráva v týdnu po přečtení cen: části lístku celkově a nejvýš tři položky o 15 % a víc dražší a tři levnější než medián.
 
 ## 7. Ověření
 
