@@ -510,7 +510,8 @@ function suppliesCard(s) {
     s.payments.rows.map(o => '<li>' + esc(short(o.dueDate)) + ' ' + esc(o.supplier) + (o.number ? ' č. ' + esc(o.number) : '') + ': ' + kc(o.grossCents) + (o.source === 'posta' ? ' <span class="muted">(z pošty, zaplacení OKO1 nevidí)</span>' : '') + '</li>').join('') + '</ul>';
   if (s.outlook) h += '<div>Výhled nákupů do konce měsíce: <b>' + kc(s.outlook.estimateCents) + '</b> bez DPH <span class="muted">(zatím ' + kc(s.outlook.purchasesCents) + ', podle odhadu tržeb ' + kc(s.outlook.restRevenueCents) + ' na zbytek měsíce' +
     (s.outlook.dueRest ? '; zaplatit ještě ' + s.outlook.dueRest + '× za ' + kc(s.outlook.dueRestCents) : '') + ')</span></div>';
-  if (s.missing && s.missing.length) h += '<div class="warn">Nepřišla obvyklá faktura: ' + s.missing.map(x => esc(x.supplier) + ' (chodí do ' + x.usualDay + '. dne, naposledy ' + esc(czDate(x.lastDate)) + ' ' + kc(x.lastGrossCents) + ')').join(' · ') + '</div>';
+  if (s.missing && s.missing.length) h += '<div class="warn">Nepřišla obvyklá faktura: ' + s.missing.map(x => esc(x.supplier) + ' (chodí do ' + x.usualDay + '. dne, naposledy ' + esc(czDate(x.lastDate)) + ' ' + kc(x.lastGrossCents) + ')').join(' · ') + '</div>' +
+    s.missing.filter(x => x.draft).map(x => '<details><summary>E-mail dodavateli: ' + esc(x.supplier) + '</summary><div class="muted">Předmět: ' + esc(x.draft.subject) + '</div><div style="white-space:pre-wrap">' + esc(x.draft.text) + '</div></details>').join('');
   if (s.newFromMail && s.newFromMail.length) h += '<div class="warn">Faktura z pošty od nového dodavatele, ověřit před zaplacením: ' + s.newFromMail.map(n => esc(n.supplier) + (n.supplierId ? ' (IČO ' + esc(n.supplierId) + ')' : '') +
     (n.number ? ' č. ' + esc(n.number) : '') + ' ' + kc(n.grossCents) + (n.sender ? ', poslal ' + esc(n.sender) : '')).join(' · ') + '</div>';
   const thisMonth = m.to.slice(0, 7), prevMonth = new Date(Date.parse(m.to.slice(0, 8) + '01T12:00:00Z') - 86400000).toISOString().slice(0, 7);
@@ -569,6 +570,12 @@ function sourcesCard(s) {
   if (s.costs) rows.push('<tr><td>Náklady (iÚčto)</td><td class="n">' + esc(s.costs.at) + (s.costs.ok ? '' : ' · <span class="warn">chyba</span>') + '</td></tr>');
   if (s.mail) rows.push('<tr><td>Faktury z pošty info@</td><td class="n">' + esc(s.mail.at) + (s.mail.error ? ' · <span class="warn">' + esc(s.mail.error) + '</span>' : '') +
     (s.mail.readingHistory ? ' · načítám starší poštu' : '') + ' · ' + s.mail.invoices + ' dokladů' + (s.mail.unreadable ? ', <span class="warn">' + s.mail.unreadable + ' nečitelných</span>' : '') + '</td></tr>');
+  const om = s.officeMails, omText = (x, ok) => !x ? '<span class="muted">zatím ne</span>' : x.status === 'failed' ? '<span class="warn">' + esc(x.error || 'neodesláno') + '</span>' : esc(x.period) + ' · ' + esc(ok[x.status] || x.status) + ' ' + esc(x.at);
+  if (om && s.mail) {
+    rows.push('<tr><td>Soubor ABO pro banku (info@)</td><td class="n">' + (om.aboTemplate ? '' : '<span class="warn">chybí dřívější soubor ABO z Dishboardu, stačí ho jednou poslat na info@</span> · ') + omText(om.abo, {sent: 'odesláno', no_template: 'upozornění odesláno', no_accounts: 'žádný účet dodavatele'}) + '</td></tr>');
+    rows.push('<tr><td>Připomínka účtenek (poslední den měsíce)</td><td class="n">' + omText(om.receipts, {sent: 'odesláno'}) + '</td></tr>');
+    rows.push('<tr><td>Faktury za měsíc účetní (od 3. dne)</td><td class="n">' + omText(om.monthExport, {sent: 'odesláno', empty: 'žádné faktury'}) + '</td></tr>');
+  }
   if (s.paymentMail) rows.push('<tr><td>Faktury k platbě e-mailem</td><td class="n">' + esc(czDate(s.paymentMail.payDay)) + ' · ' + (s.paymentMail.sent ? 'odesláno ' + esc(s.paymentMail.at) + ' (' + s.paymentMail.invoices + ' faktur, ' + kc(s.paymentMail.totalCents) + ')' : '<span class="warn">' + esc(s.paymentMail.error || 'neodesláno') + '</span>') + '</td></tr>');
   return '<div class="card"><h2>Zdroje dat</h2>' + (rows.length ? '<table>' + rows.join('') + '</table>' : '<span class="muted">zatím žádný zdroj neposlal data</span>') + '</div>';
 }

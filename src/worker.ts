@@ -24,7 +24,7 @@ import {fetchDayFiles, googleDayFiles, googleFolderByName, reportFromFiles} from
 import {authorizeUrl, pkce, redeem, renew} from './microsoft.ts';
 import {googleAccess, serviceAccount} from './google.ts';
 import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
-import {amountConflicts, COST_KIND_NAMES, missingInvoices, paymentBatch, paymentMail, PAYMENT_UNKNOWN_SOURCES, costOutlook, counted, drinkMargins, dueSoon, newSuppliersFromMail, nextPaymentBatch, FOOD_COST_LIMIT_PERMILLE, duplicateInvoices, foodCostAlert, monthOverMonth, overdueInvoices, priceRises, supplyBrief, supplySummary, unusualPurchases} from './supplies.ts';
+import {aboMail, amountConflicts, COST_KIND_NAMES, missingDraft, monthExportMail, receiptsMail, missingInvoices, receiptsReminder, paymentBatch, paymentMail, PAYMENT_UNKNOWN_SOURCES, costOutlook, counted, drinkMargins, dueSoon, newSuppliersFromMail, nextPaymentBatch, FOOD_COST_LIMIT_PERMILLE, duplicateInvoices, foodCostAlert, monthOverMonth, overdueInvoices, type PaymentBatch, priceRises, supplyBrief, supplySummary, unusualPurchases} from './supplies.ts';
 import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
 import {DEFAULT_BOTTLE_LOSS_CENTS, googleFolderId, InputError, validateBatch, withoutGuest, validateCompetitorPrices, validateConfig, validateHistory, type Batch, type CompetitorPrices, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
@@ -37,7 +37,9 @@ import {parseMail, type Mail} from './mime.ts';
 import {zip} from './zip.ts';
 import {baseSubject, REPEATED_DAYS, repeatedCauses, signature, DRAFT_SCHEMA, draftPrompt, INCOMING_SCHEMA, incomingPrompt, parseDraft, unanswered, MAIL_TEXT_CHARS, mailInsights, ownText, parseIncomingReading, parseReplyReading, REPLY_SCHEMA, replyPrompt, type MailBrief, type MailRow} from './mail-insights.ts';
 import {asSupplierInvoice, EXTRACTION_SCHEMA, extractionPrompt, invoiceAttachments, isdocSummary, isdocXml, issuedByVenue, looksLikeInvoice, MAIL_HISTORY_FROM,
-  MAIL_SOURCE, mailInvoiceId, MAX_DOCUMENT_CHARS, parseExtraction, parseIsdoc, withKinds, type ExtractedInvoice} from './mail-invoices.ts';
+  MAIL_SOURCE, mailInvoiceId, MAX_DOCUMENT_CHARS, hasPhoto, parseExtraction, parseIsdoc, photosAreDocuments, photoType, withKinds, type ExtractedInvoice} from './mail-invoices.ts';
+import {readDocumentScan} from './vision.ts';
+import {aboPlan, buildAbo, knownAccounts, parseAbo, symbolFromNumber, type AboFile, type PayTo} from './abo.ts';
 
 export type Env = DeliveryEnv & WebEnv & IuctoEnv & {
   TENANTS: DurableObjectNamespace<TenantObject>; REGISTRY: DurableObjectNamespace<Registry>; ADMIN_SECRET: string; DATA_JURISDICTION?: string;
@@ -67,6 +69,9 @@ const MAIL_CRON = '30 * * * *';
 const INVOICE_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 /** How long one visit to the mailbox may take, and how many documents it reads; the rest waits for the next visit a minute later. */
 const MAIL_BUDGET_MS = 120000, MAIL_DOCUMENTS_PER_VISIT = 12;
+const ABO_STRUCTURE = /\.(kpc|abo)"|abo[^"]*\.txt"/i, ABO_NAME = /\.(kpc|abo)$|abo.*\.txt$/i;
+/** The month's invoices go to the accountant from the 3rd (receipts photographed by the 2nd), in e-mails of at most ~12 MB of files. */
+const MONTH_EXPORT_DAY = 3, MONTH_EXPORT_PART_BYTES = 12 * 1024 * 1024;
 // The mailbox read for the analysis of info@: messages fetched (only their start, no attachments) and read by the model per visit.
 const MAIL_MESSAGES_PER_VISIT = 150, MAIL_READINGS_PER_VISIT = 15, MAIL_HEAD_BYTES = 65536, MAIL_DRAFTS_PER_VISIT = 5;
 
@@ -211,6 +216,12 @@ export class TenantObject extends DurableObject<Env> {
       -- The venue's mailbox (read-only): how far each folder has been read, the last visit and its error; what was
       -- done with each message that had a document (an invoice stored, not an invoice, unreadable); which venue this is.
       CREATE TABLE IF NOT EXISTS mail_folders(folder TEXT PRIMARY KEY, uid_validity INTEGER NOT NULL, last_uid INTEGER NOT NULL);
+      -- Where to pay a supplier invoice, exactly from its ISDOC; ABO files the venue e-mailed (the template of the
+      -- batch payment file and the accounts suppliers were paid to); the other messages OKO1 sends (once per period).
+      CREATE TABLE IF NOT EXISTS invoice_payments(invoice_id TEXT PRIMARY KEY, account TEXT NOT NULL, bank_code TEXT NOT NULL, variable_symbol TEXT, constant_symbol TEXT, specific_symbol TEXT);
+      CREATE TABLE IF NOT EXISTS abo_files(key TEXT PRIMARY KEY, at TEXT NOT NULL, json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS abo_scan(folder TEXT PRIMARY KEY, uid_validity INTEGER NOT NULL, last_uid INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS office_mails(kind TEXT NOT NULL, period TEXT NOT NULL, at TEXT NOT NULL, status TEXT NOT NULL, error TEXT, tries INTEGER NOT NULL, PRIMARY KEY(kind, period));
       -- The list of invoices e-mailed for each batch payment day (MC, 18. 10. 2026): sent or why not, no addresses.
       CREATE TABLE IF NOT EXISTS payment_mails(pay_day TEXT PRIMARY KEY, at TEXT NOT NULL, status TEXT NOT NULL, error TEXT, tries INTEGER NOT NULL, invoices INTEGER NOT NULL, total_cents INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS mail_visits(id INTEGER PRIMARY KEY CHECK(id=1), tenant TEXT NOT NULL, at TEXT NOT NULL, error TEXT, backlog INTEGER NOT NULL);
@@ -1242,6 +1253,8 @@ export class TenantObject extends DurableObject<Env> {
       .map(row => [row.invoice_id, row.sender]));
     const newFromMail = newSuppliersFromMail(year, addDays(date, -6), date, senders);
     if (brief && newFromMail.length) brief.newFromMail = newFromMail;
+    const receipts = brief && this.mailStatus(config) ? receiptsReminder(addDays(date, 1), this.receiptMails(addDays(date, 1))) : null;
+    if (brief && receipts) brief.receipts = receipts;
     const unreadable = this.unreadableMail(addDays(date, -6), date);
     return brief && unreadable.length ? {...brief, unreadable} : brief;
   }
@@ -1265,7 +1278,7 @@ export class TenantObject extends DurableObject<Env> {
       mail: this.mailStatus(config), unreadable: this.unreadableMail(addDays(day, -29), day).slice(0, 10),
       payments: nextPaymentBatch([...year, ...unpaid.filter(invoice => !year.some(other => other.id === invoice.id))], day),
       outlook: costOutlook(unpaid, month, day, restRevenueCents),
-      conflicts: amountConflicts(this.invoices(config, addDays(day, -89), day, false, true)).slice(0, 10), missing: missingInvoices(year, day).slice(0, 10),
+      conflicts: amountConflicts(this.invoices(config, addDays(day, -89), day, false, true)).slice(0, 10), missing: missingInvoices(year, day).slice(0, 10).map(row => ({...row, draft: missingDraft(row, config.name, day.slice(0, 7))})),
       newFromMail: newSuppliersFromMail(year, addDays(day, -29), day, new Map(this.sql.exec<{invoice_id: string; sender: string}>(
         'SELECT invoice_id, sender FROM mail_documents WHERE invoice_id IS NOT NULL AND mail_date >= ?', addDays(day, -45)).toArray().map(row => [row.invoice_id, row.sender]))).slice(0, 10)};
   }
@@ -1277,6 +1290,12 @@ export class TenantObject extends DurableObject<Env> {
    * and the documents of those read from the mailbox, from the archive. Supplier data only, nothing about guests.
    */
   async invoiceExport(tenant: string, month: string): Promise<{name: string; bytes: Uint8Array} | null> {
+    const files = await this.invoiceFiles(tenant, month);
+    return files ? {name: files.name + '.zip', bytes: zip(files.files)} : null;
+  }
+
+  /** The files of the month's export: the table first, then the documents; also the documents OKO1 could not read (folder neprectene/). */
+  private async invoiceFiles(tenant: string, month: string): Promise<{name: string; files: {name: string; data: Uint8Array}[]; invoices: number} | null> {
     const config = this.config();
     if (!config || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return null;
     const last = addDays(addDays(month + '-01', 32).slice(0, 8) + '01', -1);
@@ -1302,7 +1321,15 @@ export class TenantObject extends DurableObject<Env> {
     }
     // With a byte order mark, so Excel reads the Czech letters.
     files.unshift({name: `faktury-${month}.csv`, data: new TextEncoder().encode('\ufeff' + rows.join('\r\n') + '\r\n')});
-    return {name: `faktury-${config.name.normalize('NFD').replace(/\p{M}/gu, '').replace(/[^\w]+/g, '-').toLowerCase()}-${month}.zip`, bytes: zip(files)};
+    // Documents that could not be read (a blurred photo, an unknown format) still go to the accountant.
+    if (this.env.ARCHIVE) {
+      const listed = await this.env.ARCHIVE.list({prefix: `t/${tenant}/posta-neprectene/${month}/`, limit: 200});
+      for (const object of listed.objects) {
+        const body = await this.env.ARCHIVE.get(object.key);
+        if (body) files.push({name: `neprectene/${object.key.split('/').pop()}`, data: new Uint8Array(await body.arrayBuffer())});
+      }
+    }
+    return {name: `faktury-${config.name.normalize('NFD').replace(/\p{M}/gu, '').replace(/[^\w]+/g, '-').toLowerCase()}-${month}`, files, invoices: invoices.length};
   }
 
   /** MCP: purchases over any stretch of days (at most 400) with price rises in it, invoices overdue today and the invoices themselves. */
@@ -2061,7 +2088,7 @@ export class TenantObject extends DurableObject<Env> {
       report: report ? {at: at(report.at), found: report.found === 1} : null,
       costs: cost ? {at: at(cost.at), ok: !cost.error} : null,
       onedrive: this.onedriveStatus(config),
-      mail: this.mailStatus(config), paymentMail: this.paymentMailStatus(config),
+      mail: this.mailStatus(config), paymentMail: this.paymentMailStatus(config), officeMails: this.officeMailStatus(config),
     };
   }
 
@@ -2138,9 +2165,11 @@ export class TenantObject extends DurableObject<Env> {
           const chunk = uids.slice(index, index + 50), structures = await session.structures(chunk);
           for (const uid of chunk) {
             if (documents >= MAIL_DOCUMENTS_PER_VISIT || late()) { backlog += uids.filter(other => other > last).length; break; }
-            if (/pdf|isdoc/i.test(structures.get(uid) ?? '')) {
+            // Photos only from about 20 kB (a logo in a signature is smaller); whether they are documents decides the message.
+            if (ABO_STRUCTURE.test(structures.get(uid) ?? '')) await this.storeAboFiles(session, folder.name, box.uidValidity, uid);
+            if (/pdf|isdoc/i.test(structures.get(uid) ?? '') || hasPhoto(structures.get(uid) ?? '')) {
               documents++;
-              await this.readMailDocument(config, tenant, session, folder.name, box.uidValidity, uid);
+              await this.readMailDocument(config, tenant, account.user, session, folder.name, box.uidValidity, uid);
             }
             last = uid;
             this.sql.exec('INSERT INTO mail_folders VALUES(?,?,?) ON CONFLICT(folder) DO UPDATE SET uid_validity=excluded.uid_validity, last_uid=excluded.last_uid',
@@ -2149,6 +2178,7 @@ export class TenantObject extends DurableObject<Env> {
           if (backlog) break invoices;
         }
       }
+      if (sent && !late()) backlog += await this.scanAbo(session, sent, late);
       backlog += await this.scanMail(config, account.user, session, all, sent, started);
     }, MAIL_BUDGET_MS + 30000);
     this.sql.exec(`INSERT INTO mail_visits VALUES(1,?,?,?,?) ON CONFLICT(id) DO UPDATE SET tenant=excluded.tenant, at=excluded.at, error=excluded.error, backlog=excluded.backlog`,
@@ -2164,30 +2194,86 @@ export class TenantObject extends DurableObject<Env> {
   }
 
   /** One message with a document: its invoices are stored; what happened is kept so the message is not read again. */
-  private async readMailDocument(config: TenantConfig, tenant: string, session: ImapSession, folder: string, uidValidity: number, uid: number) {
+  private async readMailDocument(config: TenantConfig, tenant: string, mailbox: string, session: ImapSession, folder: string, uidValidity: number, uid: number) {
     const message = await session.message(uid);
     const mail = message?.bytes.length ? parseMail(message.bytes) : null;
     const note = (status: string, invoiceId: string | null = null) => this.sql.exec('INSERT OR REPLACE INTO mail_documents VALUES(?,?,?,?,?,?,?,?,?)',
       folder, uidValidity, uid, new Date().toISOString(), mail?.date ? businessDate(new Date(mail.date), config.timeZone, 0) : null, status,
       (mail?.from?.name ?? mail?.from?.address ?? '').slice(0, 120), (mail?.subject ?? '').slice(0, 200), invoiceId);
     if (!mail) return note(message ? 'too_big' : 'gone');
-    const {isdoc, pdf} = invoiceAttachments(mail);
+    const {isdoc, pdf, images} = invoiceAttachments(mail);
+    const mailDay = mail.date ? businessDate(new Date(mail.date), config.timeZone, 0) : null;
     const stored: string[] = [];
     let unreadable = false;
+    // A document that could not be read still goes to the accountant with the month (src: invoiceExport).
+    const keep = (attachment: {filename: string; data: Uint8Array}) => this.archive(
+      `t/${tenant}/posta-neprectene/${(mailDay ?? new Date().toISOString()).slice(0, 7)}/${uid}-${attachment.filename.replace(/[^\w.-]+/g, '_').slice(-80)}`, attachment.data);
     for (const attachment of isdoc) {
       const xml = await isdocXml(attachment), exact = xml ? parseIsdoc(xml) : null;
       if (!exact || issuedByVenue(exact, config.name)) continue;
       const model = await this.readInvoice(config, isdocSummary(exact));
       stored.push(this.storeMailInvoice(tenant, withKinds(exact, model ?? null), attachment));
     }
-    // A PDF next to an ISDOC is the same invoice printed.
+    // A PDF next to an ISDOC is the same invoice printed. A scan without text (no text layer) is read as an image.
     for (const attachment of stored.length ? [] : pdf.filter(attachment => looksLikeInvoice(mail, attachment))) {
       const text = await this.pdfText(attachment.filename, attachment.data);
-      const invoice = text === null ? undefined : await this.readInvoice(config, text);
-      if (invoice === undefined) unreadable = true;
+      const invoice = text === null ? await this.readScan(config, 'application/pdf', attachment.data, mailDay) : await this.readInvoice(config, text);
+      if (invoice === undefined) { unreadable = true; keep(attachment); }
+      else if (invoice && !issuedByVenue(invoice, config.name)) stored.push(this.storeMailInvoice(tenant, invoice, attachment));
+    }
+    // Photos of paper invoices and receipts (Nancy's monthly receipts sent to info@), each photo one document.
+    for (const attachment of stored.length || !photosAreDocuments(mail, mailbox) ? [] : images) {
+      const type = photoType(attachment.data);
+      const invoice = type ? await this.readScan(config, type, attachment.data, mailDay) : undefined;
+      if (invoice === undefined) { unreadable = true; keep(attachment); }
       else if (invoice && !issuedByVenue(invoice, config.name)) stored.push(this.storeMailInvoice(tenant, invoice, attachment));
     }
     note(stored.length ? 'invoice' : unreadable ? 'unreadable' : 'other', stored[0] ?? null);
+  }
+
+  /**
+   * The sent folder read for ABO files only (Dishboard's batch payment files the office sent on): the template of the
+   * new file and the accounts suppliers were paid to. Returns how many messages are left for the next visit.
+   */
+  private async scanAbo(session: ImapSession, folder: string, late: () => boolean): Promise<number> {
+    const box = await session.examine(folder);
+    const state = this.sql.exec<{uid_validity: number; last_uid: number}>('SELECT uid_validity, last_uid FROM abo_scan WHERE folder=?', folder).toArray()[0];
+    let last = state && state.uid_validity === box.uidValidity ? state.last_uid : 0;
+    const uids = (await session.since(MAIL_HISTORY_FROM)).filter(uid => uid > last);
+    for (let index = 0; index < uids.length; index += 50) {
+      if (late()) return uids.filter(uid => uid > last).length;
+      const chunk = uids.slice(index, index + 50), structures = await session.structures(chunk);
+      for (const uid of chunk) {
+        if (ABO_STRUCTURE.test(structures.get(uid) ?? '')) await this.storeAboFiles(session, folder, box.uidValidity, uid);
+        last = uid;
+      }
+      this.sql.exec('INSERT INTO abo_scan VALUES(?,?,?) ON CONFLICT(folder) DO UPDATE SET uid_validity=excluded.uid_validity, last_uid=excluded.last_uid', folder, box.uidValidity, last);
+    }
+    return 0;
+  }
+
+  /** The ABO files of one message, kept as read (accounts and amounts, no names of people). */
+  private async storeAboFiles(session: ImapSession, folder: string, uidValidity: number, uid: number) {
+    const message = await session.message(uid);
+    const mail = message?.bytes.length ? parseMail(message.bytes) : null;
+    const at = mail?.date ? new Date(mail.date).toISOString() : new Date().toISOString();
+    for (const [index, attachment] of (mail?.attachments ?? []).entries()) {
+      if (!ABO_NAME.test(attachment.filename)) continue;
+      const file = parseAbo(attachment.data);
+      if (file) this.sql.exec('INSERT OR REPLACE INTO abo_files VALUES(?,?,?)', `${folder}|${uidValidity}|${uid}|${index}`, at, JSON.stringify(file));
+    }
+  }
+
+  /** A photo or a scanned PDF read by Claude (OKO1's own key): the invoice, null when it is none, undefined when unreadable. */
+  private async readScan(config: TenantConfig, mediaType: string, data: Uint8Array, mailDay: string | null): Promise<ExtractedInvoice | null | undefined> {
+    const key = this.env.ANTHROPIC_API_KEY;
+    if (!key) return undefined;
+    try {
+      const answer = await readDocumentScan(key, config.name, mediaType, data);
+      if (!answer || typeof answer !== 'object') return undefined;
+      if ((answer as {isSupplierInvoice?: unknown}).isSupplierInvoice !== true) return null;
+      return parseExtraction(answer, mailDay) ?? undefined;
+    } catch { return undefined; }
   }
 
   /** Text of a PDF (Workers AI document reader); null when there is none (a scan without text, no AI). */
@@ -2220,7 +2306,7 @@ export class TenantObject extends DurableObject<Env> {
 
   /** Stores an invoice from the mailbox once (the same invoice e-mailed again is kept as it was) and archives its document in the EU. */
   private storeMailInvoice(tenant: string, invoice: ExtractedInvoice, attachment: {filename: string; data: Uint8Array}): string {
-    let id = mailInvoiceId(invoice), record = asSupplierInvoice(invoice, id);
+    let id = mailInvoiceId(invoice, attachment.data), record = asSupplierInvoice(invoice, id);
     const now = new Date().toISOString();
     // The same invoice again with another amount (a correction, a mistake): kept aside as cancelled, so it is not counted
     // twice, and reported as a conflict of amounts until someone checks it.
@@ -2232,6 +2318,9 @@ export class TenantObject extends DurableObject<Env> {
     const added = this.sql.exec(`INSERT INTO records(type, id, version, business_date, register_id, json, installation_id, received_at) VALUES(?,?,?,?,?,?,?,?)
       ON CONFLICT(type, id) DO NOTHING`, record.type, record.id, record.version, record.businessDate, '', JSON.stringify(record), MAIL_SOURCE, now).rowsWritten;
     if (added) this.archive(`t/${tenant}/posta/${id}/${attachment.filename.replace(/[^\w.-]+/g, '_').slice(-80)}`, attachment.data);
+    const pay = invoice.payment;
+    if (pay) this.sql.exec('INSERT OR REPLACE INTO invoice_payments VALUES(?,?,?,?,?,?)', id, pay.account, pay.bankCode,
+      pay.variableSymbol ?? symbolFromNumber(invoice.number), pay.constantSymbol, pay.specificSymbol);
     return id;
   }
 
@@ -2381,6 +2470,12 @@ export class TenantObject extends DurableObject<Env> {
       WHERE status='unreadable' AND mail_date BETWEEN ? AND ? ORDER BY mail_date DESC LIMIT 20`, from, to).toArray().map(row => ({...row}));
   }
 
+  /** Messages with photographed receipts that came for the month ending around `today` (subject „Účtenky“, or photos the venue sent itself). */
+  private receiptMails(today: string): number {
+    const from = (Number(today.slice(8)) <= 2 ? addDays(today.slice(0, 8) + '01', -1).slice(0, 8) : today.slice(0, 8)) + '25';
+    return this.sql.exec<{count: number}>("SELECT count(*) AS count FROM mail_documents WHERE mail_date >= ? AND (lower(subject) LIKE '%čtenk%' OR lower(subject) LIKE '%uctenk%')", from).toArray()[0].count;
+  }
+
   /** The last visit to the mailbox and what came of it (dashboard, sources). */
   private mailStatus(config: TenantConfig) {
     const visit = this.sql.exec<{at: string; error: string | null; backlog: number}>('SELECT at, error, backlog FROM mail_visits WHERE id=1').toArray()[0];
@@ -2411,6 +2506,100 @@ export class TenantObject extends DurableObject<Env> {
     payDay, at.toISOString(), result.ok ? 'sent' : 'failed', result.ok ? null : result.error, batch.rows.length, batch.totalCents);
   }
 
+  /** One message OKO1 sends once per period (kind 'abo', 'receipts', 'month-export'); a failed send is tried again (3 tries). */
+  private async officeMail(kind: string, period: string, at: Date, send: () => Promise<{status: string; error?: string | null} | null>) {
+    const done = this.sql.exec<{status: string; tries: number}>('SELECT status, tries FROM office_mails WHERE kind=? AND period=?', kind, period).toArray()[0];
+    if (done && (done.status !== 'failed' || done.tries >= 3)) return;
+    const result = await send();
+    if (!result) return;
+    this.sql.exec(`INSERT INTO office_mails VALUES(?,?,?,?,?,1) ON CONFLICT(kind, period) DO UPDATE SET at=excluded.at, status=excluded.status, error=excluded.error,
+      tries=office_mails.tries + 1`, kind, period, at.toISOString(), result.status, result.error ?? null);
+  }
+
+  /** Where to pay each invoice of a batch: ISDOC accounts, and suppliers' accounts from the ABO files the venue sent before. */
+  private aboFiles(): AboFile[] {
+    return this.sql.exec<{json: string}>('SELECT json FROM abo_files ORDER BY at, key').toArray().map(row => JSON.parse(row.json) as AboFile);
+  }
+  private aboPlanFor(config: TenantConfig, batch: PaymentBatch, history: SupplierInvoice[]) {
+    const files = this.aboFiles(), template = files.at(-1);
+    if (!template) return null;
+    const keys = new Map(history.map(invoice => [invoice.id, invoice.supplierId ?? invoice.supplier.trim().toLocaleLowerCase('cs').replace(/\s+/g, ' ')]));
+    const supplierKey = (id: string) => keys.get(id) ?? id;
+    const exact = new Map<string, PayTo>();
+    for (const row of batch.rows) {
+      const pay = this.sql.exec<{account: string; bank_code: string; variable_symbol: string | null; constant_symbol: string | null; specific_symbol: string | null}>(
+        'SELECT account, bank_code, variable_symbol, constant_symbol, specific_symbol FROM invoice_payments WHERE invoice_id=?', row.id).toArray()[0];
+      if (pay?.variable_symbol) exact.set(row.id, {account: pay.account, bankCode: pay.bank_code, variableSymbol: pay.variable_symbol, constantSymbol: pay.constant_symbol, specificSymbol: pay.specific_symbol, from: 'isdoc'});
+    }
+    const plan = aboPlan(batch.rows.map(row => ({id: row.id, supplier: row.supplier, number: row.number, grossCents: row.grossCents, dueDate: row.dueDate})),
+      exact, knownAccounts(files, history, supplierKey), supplierKey);
+    return {template, plan};
+  }
+
+  /**
+   * The messages for the office (MC, 18. 10. 2026), at the first send hour: on a batch payment morning the ABO file to the
+   * venue's mailbox; on the last day of the month the reminder to photograph the receipts; from the 3rd the month's
+   * invoices and documents to the accountant.
+   */
+  private async officeMailsFor(config: TenantConfig, tenant: string, date: string, at: Date) {
+    const account = smtpAccount(this.env, tenant);
+    if (!account || !config.sendHours.includes(localHour(at, config.timeZone))) return;
+    const today = businessDate(at, config.timeZone, 0), from = {name: `OKO1 – ${config.name}`, address: account.user};
+    const payDay = addDays(date, 1);
+    if (payDay === today) await this.officeMail('abo', payDay, at, async () => {
+      const year = this.invoices(config, addDays(date, -365), date);
+      const unpaid = this.invoices(config, '', '', true).filter(invoice => !year.some(other => other.id === invoice.id));
+      const batch = paymentBatch([...year, ...unpaid], date);
+      if (!batch) return null;
+      const planned = this.aboPlanFor(config, batch, [...year, ...unpaid]);
+      if (planned && !planned.plan.rows.length) return {status: 'no_accounts'};
+      const mailPlan = planned ? {rows: planned.plan.rows.map(row => ({...row, from: row.payTo.from})), missing: planned.plan.missing, totalCents: planned.plan.totalCents} : null;
+      const mail = aboMail(batch, mailPlan, config.name);
+      const attachments = planned ? [{filename: `platby-${payDay}.kpc`, contentType: 'application/octet-stream',
+        data: buildAbo(planned.template, planned.plan, payDay, today, Number(payDay.slice(5).replace('-', '')))}] : [];
+      const result = await sendMail(account, {from, to: [account.user], subject: mail.subject, text: mail.text, attachments}, at);
+      return result.ok ? {status: planned ? 'sent' : 'no_template'} : {status: 'failed', error: result.error};
+    });
+    const receipts = receiptsReminder(today, 0);
+    if (receipts && addDays(today, 1).endsWith('-01')) await this.officeMail('receipts', receipts.month, at, async () => {
+      const mail = receiptsMail(receipts, config.name, account.user);
+      const result = await sendMail(account, {from, to: [account.user], subject: mail.subject, text: mail.text, attachments: []}, at);
+      return result.ok ? {status: 'sent'} : {status: 'failed', error: result.error};
+    });
+    const to = paymentRecipients(this.env, tenant), day = Number(today.slice(8));
+    const month = addDays(today.slice(0, 8) + '01', -1).slice(0, 7);
+    if (to.length && day >= MONTH_EXPORT_DAY && day <= MONTH_EXPORT_DAY + 7) await this.officeMail('month-export', month, at, async () => {
+      const files = await this.invoiceFiles(tenant, month);
+      if (!files || !files.invoices) return {status: 'empty'};
+      const [table, ...documents] = files.files, parts: (typeof files.files)[] = [[table]];
+      let size = table.data.length;
+      for (const file of documents) {
+        if (size + file.data.length > MONTH_EXPORT_PART_BYTES && parts.at(-1)!.length) { parts.push([]); size = 0; }
+        parts.at(-1)!.push(file);
+        size += file.data.length;
+      }
+      const unread = documents.filter(file => file.name.startsWith('neprectene/')).length;
+      for (const [index, part] of parts.entries()) {
+        const mail = monthExportMail(month, config.name, files.invoices, unread, index + 1, parts.length);
+        const name = parts.length > 1 ? `${files.name}-${index + 1}.zip` : `${files.name}.zip`;
+        const bytes = zip(part);
+        const result = await sendMail(account, {from, to, subject: mail.subject, text: mail.text, attachments: [{filename: name, contentType: 'application/zip', data: bytes}]},
+          at, 30000 + Math.ceil(bytes.length / 100000) * 1000);
+        if (!result.ok) return {status: 'failed', error: index ? `${result.error} (odešlo ${index} z ${parts.length})` : result.error};
+      }
+      return {status: 'sent'};
+    });
+  }
+
+  /** The office messages of the last weeks (sources): kind, period, when, and how it went. */
+  private officeMailStatus(config: TenantConfig) {
+    const row = (kind: string) => {
+      const value = this.sql.exec<{period: string; at: string; status: string; error: string | null}>('SELECT period, at, status, error FROM office_mails WHERE kind=? ORDER BY period DESC LIMIT 1', kind).toArray()[0];
+      return value ? {period: value.period, at: stamp(new Date(value.at), config.timeZone), status: value.status, error: value.error} : null;
+    };
+    return {abo: row('abo'), receipts: row('receipts'), monthExport: row('month-export'), aboTemplate: this.aboFiles().length > 0};
+  }
+
   /** The last payment list e-mailed (dashboard, sources). */
   private paymentMailStatus(config: TenantConfig) {
     const row = this.sql.exec<{pay_day: string; at: string; status: string; error: string | null; invoices: number; total_cents: number}>(
@@ -2438,6 +2627,7 @@ export class TenantObject extends DurableObject<Env> {
       })(), PREPARE_BUDGET_MS);
     }
     if (config.sendHours.includes(hour)) await this.paymentMailFor(config, tenant, date, at);
+    await this.officeMailsFor(config, tenant, date, at);
     const decision = briefingDecision({localHour: hour, sendHours: config.sendHours, alreadySent: sent, ready: this.ready(config, date)});
     if (decision !== 'send' && decision !== 'send-incomplete') return {decision, businessDate: date};
     const {briefing, text} = this.briefingFor(config, date, decision === 'send-incomplete', at);

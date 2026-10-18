@@ -57,6 +57,8 @@ export type SupplyBrief = {month: SupplySummary; rises: PriceRise[]; overdue: Ov
   newFromMail?: NewMailSupplier[];
   /** Regular suppliers whose invoice of this month has not come by their usual day. */
   missing?: MissingInvoice[];
+  /** From the last day of a month to the 2nd of the next: the small receipts of the month to photograph and send to the mailbox. */
+  receipts?: ReceiptsReminder | null;
   /** Only in the Monday message (about Sunday): the week's rises per supplier, the drinks with the lowest margin and the categories growing most against the month before. */
   weekly?: {suppliers: SupplierRises[]; lowMargins: DrinkMargin[]; growing?: CategoryChange[]} | null};
 /** An unpaid invoice due soon: `days` until the due date (0 = today). */
@@ -73,8 +75,10 @@ export type CostOutlook = {month: string; purchasesCents: number; estimateCents:
   byKind: {kind: CostKind; name: string; estimateCents: number}[]; dueRestCents: number; dueRest: number};
 /** The month closed: purchases without VAT by kind, food cost, the month before, invoices of the month not paid yet. */
 export type MonthClosing = {month: string; summary: SupplySummary; previousNetCents: number; unpaidCents: number; unpaid: number};
+/** The month whose receipts are to be photographed, by when, and how many messages with receipts came so far. */
+export type ReceiptsReminder = {month: string; by: string; arrived: number};
 /** One batch payment (MC's office pays on Tuesday and Thursday): unpaid invoices due before the next payment day. */
-export type PaymentBatch = {payDay: string; nextPayDay: string; rows: {supplier: string; number: string | null; dueDate: string; grossCents: number; source: string}[]; totalCents: number};
+export type PaymentBatch = {payDay: string; nextPayDay: string; rows: {id: string; supplier: string; supplierId: string | null; number: string | null; dueDate: string; grossCents: number; source: string}[]; totalCents: number};
 /** An invoice from the mailbox by a supplier OKO1 has no earlier invoice of, with who e-mailed it. */
 export type NewMailSupplier = {supplier: string; supplierId: string | null; number: string | null; date: string; grossCents: number; sender: string | null; id: string};
 /** Invoices of one supplier with the same number but different amounts (a corrected invoice, or a mistake). */
@@ -158,7 +162,7 @@ export const PAYMENT_UNKNOWN_SOURCES: readonly string[] = ['posta'];
 /** Unpaid invoices past their due date on `today` (a due date of today is not late yet), the oldest first. */
 export function overdueInvoices(invoices: SupplierInvoice[], today: string): OverdueInvoice[] {
   return invoices.filter(invoice => invoice.dueDate && invoice.dueDate < today && !invoice.paidDate && !PAYMENT_UNKNOWN_SOURCES.includes(invoice.source))
-    .map(invoice => ({supplier: invoice.supplier, number: invoice.number, dueDate: invoice.dueDate!, grossCents: invoice.grossCents,
+    .map(invoice => ({id: invoice.id, supplier: invoice.supplier, supplierId: invoice.supplierId, number: invoice.number, dueDate: invoice.dueDate!, grossCents: invoice.grossCents,
       days: Math.round((Date.parse(today) - Date.parse(invoice.dueDate!)) / 86400000)}))
     .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || b.grossCents - a.grossCents);
 }
@@ -215,7 +219,7 @@ export function paymentBatch(invoices: SupplierInvoice[], date: string): Payment
   while (!PAYMENT_WEEKDAYS.includes(weekday(nextPayDay))) nextPayDay = addDays(nextPayDay, 1);
   // Due before the next payment day; long overdue ones (over 30 days) are left to the overdue list.
   const rows = invoices.filter(invoice => !invoice.paidDate && invoice.dueDate && invoice.grossCents > 0 && invoice.dueDate < nextPayDay && invoice.dueDate >= addDays(payDay, -30))
-    .map(invoice => ({supplier: invoice.supplier, number: invoice.number, dueDate: invoice.dueDate!, grossCents: invoice.grossCents, source: invoice.source}))
+    .map(invoice => ({id: invoice.id, supplier: invoice.supplier, supplierId: invoice.supplierId ?? null, number: invoice.number, dueDate: invoice.dueDate!, grossCents: invoice.grossCents, source: invoice.source}))
     .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || b.grossCents - a.grossCents);
   return rows.length ? {payDay, nextPayDay, rows, totalCents: rows.reduce((sum, row) => sum + row.grossCents, 0)} : null;
 }
@@ -278,6 +282,28 @@ export function missingInvoices(invoices: SupplierInvoice[], date: string): Miss
   }
   return out.sort((a, b) => b.lastGrossCents - a.lastGrossCents);
 }
+/**
+ * Small receipts without a header (MC, 18. 10. 2026): photographed once a month and e-mailed to the venue's mailbox,
+ * where OKO1 reads them and sends them to the accountant with the month. From the last day of the month (`today`) to
+ * the 2nd of the next, while none came; null otherwise.
+ */
+export function receiptsReminder(today: string, arrived: number): ReceiptsReminder | null {
+  const lastDay = addDays(today, 1).slice(8) === '01', day = Number(today.slice(8));
+  if (!lastDay && day > 2) return null;
+  const month = lastDay ? today.slice(0, 7) : addDays(today.slice(0, 8) + '01', -1).slice(0, 7);
+  if (arrived && !lastDay) return null;
+  return {month, by: addDays(month + '-01', 32).slice(0, 8) + '02', arrived};
+}
+export const receiptsText = (row: ReceiptsReminder, mailbox = 'info@') =>
+  `Vyfotit drobné účtenky za ${monthName(row.month)} a poslat je na ${mailbox} s předmětem „Účtenky“ do ${shortDate(row.by)} (OKO1 je přečte a pošle účetní s měsícem)`;
+
+/** A short e-mail to a regular supplier whose invoice has not come (the dashboard shows it to copy). */
+export function missingDraft(row: MissingInvoice, venue: string, month: string): {subject: string; text: string} {
+  return {subject: `${venue}: faktura za ${monthName(month)}`,
+    text: `Dobrý den,\n\nza ${monthName(month)} nám od vás zatím nepřišla faktura (obvykle chodí do ${row.usualDay}. dne v měsíci, poslední jsme dostali ` +
+      `${shortDate(row.lastDate)} na ${crownsTotal(row.lastGrossCents)}). Prosíme o její zaslání na tuto adresu, ideálně jako PDF s ISDOC.\n\nDěkujeme\n${venue}`};
+}
+
 export const missingText = (row: MissingInvoice) => `${row.supplier}${row.supplierId ? ` (IČO ${row.supplierId})` : ''}: faktura za tento měsíc nepřišla, obvykle chodí do ${row.usualDay}. dne, naposledy ${shortDate(row.lastDate)} ${crownsTotal(row.lastGrossCents)}`;
 
 /** The payment list for the office (MC, 18. 10. 2026: e-mailed to the accountant on Tuesday and Thursday morning). */
@@ -295,6 +321,51 @@ export function paymentMail(batch: PaymentBatch, venue: string, mailSources: str
     (row.grossCents / 100).toFixed(2).replace('.', ','), mailSources.includes(row.source) ? 'pošta' : row.source].join(';'))].join('\r\n') + '\r\n';
   return {subject: `Faktury k platbě ${dayName(batch.payDay)} ${shortDate(batch.payDay)}: ${batch.rows.length}× ${crownsTotal(batch.totalCents)}`, text,
     csv: new TextEncoder().encode('\ufeff' + csv)};
+}
+
+/** A planned ABO payment and an invoice to pay by hand, as `aboMail` needs them (src/abo.ts makes the plan). */
+export type AboMailPlan = {rows: {supplier: string; number: string | null; grossCents: number; from: 'isdoc' | 'abo'}[];
+  missing: {supplier: string; number: string | null; grossCents: number; reason: string}[]; totalCents: number};
+
+/**
+ * The batch payment file for the bank, e-mailed to the venue's own mailbox (MC, 18. 10. 2026): the office checks it
+ * and sends it on to the accountant, who imports it into the bank. `plan` null: no earlier ABO file to take the
+ * venue's account from.
+ */
+export function aboMail(batch: PaymentBatch, plan: AboMailPlan | null, venue: string): {subject: string; text: string} {
+  const exact = (cents: number) => unitPrice(cents), when = `${dayName(batch.payDay)} ${shortDate(batch.payDay)}`;
+  const line = (row: {supplier: string; number: string | null; grossCents: number}) => `${row.supplier}${row.number ? `, č. ${row.number}` : ''}  ${exact(row.grossCents)}`;
+  if (!plan) return {subject: `ABO na ${when} zatím nejde připravit`, text: [`Dobrý den,`, ``,
+    `soubor ABO pro hromadnou platbu na ${when} OKO1 zatím nepřipravilo: v poště info@ nenašlo žádný dřívější soubor ABO (z Dishboardu), ` +
+    `ze kterého by vzalo účet podniku a nastavení banky. Stačí jednou poslat kterýkoli dřívější soubor ABO (.kpc nebo .abo) na info@ a od další platby ho OKO1 připraví samo.`, ``,
+    `Faktury k této platbě: ${batch.rows.length}, celkem ${exact(batch.totalCents)} (seznam dostává účetní jako dosud).`, ``,
+    `OKO1, ${venue}`, `(automatická zpráva)`].join('\n')};
+  const text = [`Dobrý den,`, ``,
+    `v příloze je soubor ABO pro banku na hromadnou platbu ${venue} na ${when}: ${plan.rows.length} ${plan.rows.length === 1 ? 'faktura' : plan.rows.length <= 4 ? 'faktury' : 'faktur'}, celkem ${exact(plan.totalCents)}.`,
+    `Prosím zkontrolujte ho a pošlete účetní k importu do banky. OKO1 nic neplatí, jen soubor připraví.`, ``,
+    ...plan.rows.map(row => `${line(row)}  (${row.from === 'isdoc' ? 'účet z faktury ISDOC' : 'účet z dřívější platby'})`), ``,
+    ...(plan.missing.length ? [`Zaplatit ručně (v souboru nejsou):`, ...plan.missing.map(row => `${line(row)}  (${row.reason})`), ``] : []),
+    `U faktur z pošty OKO1 nevidí, jestli už jsou zaplacené; zaplacené prosím ze souboru vyřaďte v bance.`, ``,
+    `OKO1, ${venue}`, `(automatická zpráva)`].join('\n');
+  return {subject: `ABO k hromadné platbě ${when}: ${plan.rows.length}× ${crownsTotal(plan.totalCents)}`, text};
+}
+
+/** On the last day of the month, to the venue's mailbox: photograph the small receipts (MC, 18. 10. 2026). */
+export function receiptsMail(row: ReceiptsReminder, venue: string, mailbox: string): {subject: string; text: string} {
+  return {subject: `Účtenky za ${monthName(row.month)}: vyfotit a poslat do ${shortDate(row.by)}`, text: [`Dobrý den,`, ``,
+    `dnes končí ${monthName(row.month)}. Prosím vyfoťte všechny drobné účtenky a papírové faktury za ${monthName(row.month)} (i ty bez hlavičky) ` +
+    `a pošlete je do ${shortDate(row.by)} na ${mailbox} s předmětem „Účtenky“. Každý doklad na jednu fotku, celý a čitelný, jako JPG (na iPhonu: Nastavení, Fotoaparát, Formáty, Nejkompatibilnější).`, ``,
+    `OKO1 je přečte, započítá do nákladů a pošle je účetní s ostatními fakturami za měsíc.`, ``,
+    `OKO1, ${venue}`, `(automatická zpráva)`].join('\n')};
+}
+
+/** The month's invoices for the accountant (MC, 18. 10. 2026), in `parts` messages when the documents are large. */
+export function monthExportMail(month: string, venue: string, invoices: number, unread: number, part: number, parts: number): {subject: string; text: string} {
+  const of = parts > 1 ? ` (${part}/${parts})` : '';
+  return {subject: `Faktury ${venue} za ${monthName(month)} ${month.slice(0, 4)}${of}`, text: [`Dobrý den,`, ``,
+    `v příloze jsou přijaté faktury a doklady ${venue} za ${monthName(month)} ${month.slice(0, 4)}: ${invoices} v tabulce (CSV pro Excel) a jejich doklady.` +
+    (unread ? ` Doklady, které OKO1 nepřečetlo (${unread}), jsou ve složce neprectene.` : '') + (parts > 1 ? ` Kvůli velikosti je to rozdělené do ${parts} e-mailů.` : ''), ``,
+    `OKO1, ${venue}`, `(automatická zpráva, odpovědi chodí na info@)`].join('\n')};
 }
 
 export const newSupplierText = (row: NewMailSupplier) => `${row.supplier}${row.supplierId ? ` (IČO ${row.supplierId})` : ''}${row.number ? ` č. ${row.number}` : ''}, ${crownsTotal(row.grossCents)}${row.sender ? `, poslal ${row.sender}` : ''}`;
@@ -507,6 +578,7 @@ export function renderSupplies(brief: SupplyBrief | null): string[] {
   // Missing invoices: on the day one is first missed and in the Monday message, not every morning (the to-do list keeps them).
   const missing = (brief.missing ?? []).filter(row => row.since === brief.month.to || weekday(brief.month.to) === 0);
   if (missing.length) lines.push(`⚠ Nepřišla obvyklá faktura: ${missing.slice(0, 3).map(missingText).join(' · ')}${missing.length > 3 ? ` · … a další ${missing.length - 3}` : ''}`);
+  if (brief.receipts) lines.push(`Účtenky: ${receiptsText(brief.receipts)}`);
   if (brief.newFromMail?.length) lines.push(`⚠ Faktura z pošty od dodavatele, kterého ještě neznáme (ověřit, než se zaplatí): ${brief.newFromMail.slice(0, 3).map(newSupplierText).join(' · ')}`);
   if (brief.payments) lines.push(`Hromadná platba ${paymentText(brief.payments)} (splatné do ${shortDate(addDays(brief.payments.nextPayDay, -1))}): ` +
     brief.payments.rows.slice(0, 5).map(row => `${row.supplier} ${crownsTotal(row.grossCents)}`).join(' · ') + (brief.payments.rows.length > 5 ? ` · … a další ${brief.payments.rows.length - 5}` : ''));
