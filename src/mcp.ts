@@ -227,6 +227,14 @@ export function createServer(context: ToolContext): McpServer {
     const list = await context.venue.posIncidents(od, until);
     return list ? result(list) : failed('Provozovna není v OKO1 nastavená.');
   });
+  tool('storna_a_kasa', 'Storna a rozdíly v kase', 'Storna z denních reportů proti tržbě a rozdíly přepočtu kasy proti zůstatku v peněžním deníku za období (nejvýš 400 dní), po dnech; ' +
+    'dny s rozdílem od 100 Kč, opakovaný rozdíl (3× za 7 dní) a den, kdy jsou storna nad obvyklým a zároveň rozdíl v kase (první signál manka).',
+  {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
+    const bad = badRange(od, until);
+    if (bad) return bad;
+    const voids = await context.venue.posVoids(od, until);
+    return voids ? result(voids) : failed('Provozovna není v OKO1 nastavená.');
+  });
   tool('promo_a_odpisy', 'Promo a odpisy', 'Promo a odpisy z denních reportů za období (nejvýš 400 dní) po prostorech (Club, Restaurace den, Restaurace noc, Texaco) s tržbou prostoru, po dnech, ' +
     'a prostory, kde promo nebo odpis drží 3 dny po sobě nad obvyklým (stejný den v týdnu za 4 týdny).',
   {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {

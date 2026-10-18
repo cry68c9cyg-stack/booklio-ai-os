@@ -252,6 +252,20 @@ function eventsCard(ranking) {
 
 // Topics of the managers' "Report dne" over 4 weeks with what to do, and the club's revenue by the DJ of the night.
 // Health incidents and security interventions from the „Report dne“ texts over 90 days (src/incidents.ts).
+function voidsCard(v) {
+  if (!v || (!v.total.reportDays && !v.total.cashDays)) return '';
+  const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.', sign = c => (c > 0 ? '+' : '') + kc(c);
+  const t = v.total;
+  let html = '<div class="card"><h2>Storna a rozdíly v kase (30 dní)</h2>';
+  if (v.voidAndDiff) html += '<p class="warn">' + short(v.voidAndDiff.date) + ': storna ' + kc(v.voidAndDiff.voidCents) + ' (obvykle ' + kc(v.voidAndDiff.usualCents) + ') a zároveň rozdíl v kase ' + sign(v.voidAndDiff.cashDiffCents) + '</p>';
+  if (v.cashDiffRepeat) html += '<p class="warn">Rozdíl v kase ' + v.cashDiffRepeat.length + '× za 7 dní</p>';
+  html += '<table><tr><td>Storna</td><td class="n">' + kc(t.voidCents) + (t.revenueCents ? ' <span class="muted">(' + String(Math.round(t.voidCents / t.revenueCents * 10000) / 100).replace('.', ',') + ' % tržby, ' + t.reportDays + ' dní s reportem)</span>' : '') + '</td></tr>' +
+    '<tr><td>Rozdíly v kase</td><td class="n">' + sign(t.cashDiffCents) + ' <span class="muted">(' + t.cashDays + ' dní z deníku)</span></td></tr></table>';
+  const rows = v.days.filter(d => (d.voidCents || 0) > 0 || (d.cashDiffCents !== null && Math.abs(d.cashDiffCents) >= 10000)).reverse().slice(0, 14);
+  if (rows.length) html += '<table><tr><th></th><th class="n">storna</th><th class="n">rozdíl v kase</th></tr>' + rows.map(d => '<tr><td>' + short(d.date) + '</td><td class="n">' + (d.voidCents === null ? '–' : kc(d.voidCents)) + '</td><td class="n' + (d.cashDiffCents !== null && Math.abs(d.cashDiffCents) >= 10000 ? ' warn' : '') + '">' + (d.cashDiffCents === null ? '–' : sign(d.cashDiffCents)) + '</td></tr>').join('') + '</table>';
+  return html + '<div class="muted">storna z denního reportu; rozdíl v kase = přepočet pokladny proti zůstatku v peněžním deníku, počítá se od 100 Kč</div></div>';
+}
+
 function promoCard(p) {
   if (!p || !p.total.rows.length) return '';
   const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.', pct = (c, r) => r > 0 ? String(Math.round(c / r * 1000) / 10).replace('.', ',') + ' %' : '–';
@@ -607,7 +621,7 @@ function render(data) {
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card" id="todo">' + todoCard(data.todo) + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
-  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast, b.target) + weekCard(data.week) + eventsCard(data.eventRanking) + themesCard(data.themes, data.djRanking) + nightsCard(data.nights, b.cashNeed, b.payoutAlarm) + wagesCard(data.wages, b.nightShare) + promoCard(data.promo) + incidentsCard(data.incidents) + trendsCard(data.trends) + menuInterestCard(data.menuInterest) + monthCard(data.month) + suppliesCard(data.supplies) + mailCard(data.mail) + menuCard(data.menu) + sourcesCard(data.sources);
+  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast, b.target) + weekCard(data.week) + eventsCard(data.eventRanking) + themesCard(data.themes, data.djRanking) + nightsCard(data.nights, b.cashNeed, b.payoutAlarm) + wagesCard(data.wages, b.nightShare) + promoCard(data.promo) + voidsCard(data.voids) + incidentsCard(data.incidents) + trendsCard(data.trends) + menuInterestCard(data.menuInterest) + monthCard(data.month) + suppliesCard(data.supplies) + mailCard(data.mail) + menuCard(data.menu) + sourcesCard(data.sources);
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
   if (r) {
