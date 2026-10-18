@@ -227,6 +227,13 @@ export function createServer(context: ToolContext): McpServer {
     const list = await context.venue.posIncidents(od, until);
     return list ? result(list) : failed('Provozovna není v OKO1 nastavená.');
   });
+  tool('kpi_tydne', 'KPI týdne', 'KPI 7 dní do zadaného dne proti průměrnému týdnu ze 4 předchozích: tržba, storna a promo s odpisy z tržby, výplaty a výdaje z kasy z tržby, nepřišlí hosté z rezervovaných, ' +
+    'rozdíly v kase, dny s denním reportem, e-maily info@ zodpovězené do 24 h, faktury po splatnosti; u každého vlastník, zda se zhoršil a co udělat.',
+  {den: date}, async ({den}: {den: string}) => {
+    if (!isDate(den)) return failed('Den musí být RRRR-MM-DD.');
+    const kpi = await context.venue.posKpi(den);
+    return kpi ? result(kpi) : failed('Provozovna není v OKO1 nastavená.');
+  });
   tool('riziko_mank', 'Riziko mank', 'Rizikové skóre mank 0–100 po dnech za období (nejvýš 92 dní), nejrizikovější dny první, s důvody a tím, co prověřit: storna po zaplacení, storna nad obvyklým s rozdílem v kase, ' +
     'opakovaný rozdíl v kase, přepočet kasy proti deníku, report proti deníku, neobvyklé slevy, promo 3 dny nad obvyklým, rostoucí dluhy, nesedící tabulky, záporná hotovost v tržbě.',
   {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {

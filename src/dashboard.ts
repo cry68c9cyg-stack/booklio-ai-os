@@ -254,6 +254,15 @@ function eventsCard(ranking) {
 // Health incidents and security interventions from the „Report dne“ texts over 90 days (src/incidents.ts).
 // The till over the next 7 days and the Vklad JD it takes, and the cash part of the revenue over 30 days (src/cashflow.ts).
 // The shrinkage risk of the day and of the last 7 days, with what to check (src/risk.ts).
+// The KPIs of the 7 days up to the day against the average week of the 4 before, with owners and reactions (src/kpi.ts).
+function kpiCard(k) {
+  if (!k || !k.rows.length) return '';
+  const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.';
+  let html = '<div class="card"><h2>KPI ' + short(k.from) + '–' + short(k.to) + '</h2>';
+  html += '<table><tr><th></th><th class="n">týden</th><th class="n">4 týdny</th><th>vlastník</th></tr>' + k.rows.map(r => '<tr><td>' + esc(r.name) + (r.worse ? '<div class="muted">' + esc(r.action) + '</div>' : '') + '</td><td class="n' + (r.worse ? ' warn' : '') + '">' + esc(r.now) + '</td><td class="n muted">' + (r.before === null ? '–' : esc(r.before)) + '</td><td>' + esc(r.owner) + '</td></tr>').join('') + '</table>';
+  return html + '<div class="muted">4 týdny = průměrný týden ze 4 předchozích; červeně, co se zhoršilo, pod tím co udělat; útrata na hosta přibude s Pexesem (hosté bez rezervace zatím nejsou v datech)</div></div>';
+}
+
 function riskCard(r, week) {
   if (!r || (!r.score && !(week || []).some(d => d.score))) return '';
   const wd = ['ne', 'po', 'út', 'st', 'čt', 'pá', 'so'], day = d => wd[new Date(d + 'T12:00:00Z').getUTCDay()] + ' ' + Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.';
@@ -657,7 +666,7 @@ function render(data) {
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card" id="todo">' + todoCard(data.todo) + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
-  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast, b.target) + weekCard(data.week) + eventsCard(data.eventRanking) + themesCard(data.themes, data.djRanking) + nightsCard(data.nights, b.cashNeed, b.payoutAlarm) + wagesCard(data.wages, b.nightShare) + promoCard(data.promo) + voidsCard(data.voids) + cashFlowCard(data.cashFlow) + riskCard(data.risk, data.riskWeek) + incidentsCard(data.incidents) + trendsCard(data.trends) + menuInterestCard(data.menuInterest) + monthCard(data.month) + suppliesCard(data.supplies) + mailCard(data.mail) + menuCard(data.menu) + sourcesCard(data.sources);
+  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast, b.target) + weekCard(data.week) + eventsCard(data.eventRanking) + themesCard(data.themes, data.djRanking) + nightsCard(data.nights, b.cashNeed, b.payoutAlarm) + wagesCard(data.wages, b.nightShare) + promoCard(data.promo) + voidsCard(data.voids) + cashFlowCard(data.cashFlow) + kpiCard(data.kpi) + riskCard(data.risk, data.riskWeek) + incidentsCard(data.incidents) + trendsCard(data.trends) + menuInterestCard(data.menuInterest) + monthCard(data.month) + suppliesCard(data.supplies) + mailCard(data.mail) + menuCard(data.menu) + sourcesCard(data.sources);
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
   if (r) {
