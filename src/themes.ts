@@ -8,7 +8,7 @@ type Rule = Theme & {match: RegExp};
 
 /** Words are matched without diacritics and in lower case ("nešli" → "nesli"). */
 const RULES: Rule[] = [
-  {key: 'health', name: 'zdravotní incident', warn: true, match: /omdl|sanitk|zachrank|prvni pomoc|zranen|nevolnost|krvac|upadl/,
+  {key: 'health', name: 'zdravotní incident', warn: true, match: /omdl|sanitk|zachrank|prvni pomoc|zranen|zranil|nevolnost|krvac|upadl/,
     tip: 'zapsat, co se stalo a kdo pomáhal, a zkontrolovat lékárničku'},
   {key: 'security', name: 'konflikt nebo bezpečnost', warn: true, match: /konflikt|rvack|bitk|agresiv|vyhozen|vyveden|polici|kradez|ukradl|ukradli/,
     tip: 'projít se security, kde a kdy se to děje, a zvážit posílení u vstupu'},

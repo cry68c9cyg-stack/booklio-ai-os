@@ -219,6 +219,14 @@ export function createServer(context: ToolContext): McpServer {
     const nights = await context.venue.posNights(od, until);
     return nights ? result(nights) : failed('Provozovna není v OKO1 nastavená.');
   });
+  tool('incidenty', 'Kniha incidentů', 'Zdravotní incidenty a zásahy kvůli bezpečnosti (konflikt, vyvedení, policie, krádež) z textových reportů manažerů za období (nejvýš 400 dní): ' +
+    'den, druh, místo (Texaco, Klub, Bar, Restaurace, Vstup, Terasa, WC), je-li v textu, a věta z reportu. Podklad pro pojišťovnu a kontrolu.',
+  {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
+    const bad = badRange(od, until);
+    if (bad) return bad;
+    const list = await context.venue.posIncidents(od, until);
+    return list ? result(list) : failed('Provozovna není v OKO1 nastavená.');
+  });
   tool('souhrn_obdobi', 'Souhrn za období', 'Součty za libovolné období (nejvýš 400 dní): tržba a dny s tržbou, potvrzené rezervace a hosté, nedorazili, storna, zdroje rezervací, ' +
     'jak dopředu se rezervuje, návštěvy webu a jejich původ, odeslané formuláře, nové recenze a průměr hvězdiček, akce podniku s hosty a tržbou proti obvyklému dni. Jen počty, částky v haléřích.',
   {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {

@@ -3,6 +3,7 @@ import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provid
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
 import {cashDay, cashNeed, nightSummary, payoutAlarm, tillDay, type NightSummary, type Till} from './cash.ts';
 import {tableChecks} from './checks.ts';
+import {foreignWeek, incidents, type ForeignCash, type Incident} from './incidents.ts';
 import {GAP_DAYS, monthBase, monthTarget, shiftSignals, type DataGaps, type MonthTarget, type TargetBase} from './goals.ts';
 import {noteThemes, rankDjs, djOf, summarizeThemes, type DjRank, type ThemeSummary} from './themes.ts';
 import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, type MenuMonth, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, sumMenuInterest, type MenuInterest, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
@@ -394,7 +395,8 @@ export class TenantObject extends DurableObject<Env> {
     const todo = this.todoFor(day, briefing);
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
       week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day, briefing.forecast?.month.month === day.slice(0, 7) ? briefing.forecast.month.restCents : null), mail: this.mailInsightsBetween(new Date(Date.now() - 30 * 86400000).toISOString(), new Date().toISOString(), new Date()),
-      themes: briefing.themes ?? this.themeSummary(day), djRanking: briefing.djRanking ?? this.djRanking(day), nights: this.nightsFor(addDays(day, -27), day)});
+      themes: briefing.themes ?? this.themeSummary(day), djRanking: briefing.djRanking ?? this.djRanking(day), nights: this.nightsFor(addDays(day, -27), day),
+      incidents: this.incidentsBetween(addDays(day, -89), day).reverse(), foreignWeek: briefing.foreignWeek ?? foreignWeek(day, Array.from({length: 15}, (_, i) => this.foreignCash(addDays(day, i - 14))))});
   }
 
   /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
@@ -1471,6 +1473,34 @@ export class TenantObject extends DurableObject<Env> {
     return {rows, totalCents};
   }
 
+  /** The "Personál" discounts of a stretch of days: bills, amount and the revenue of those days. */
+  private staffMeals(from: string, to: string) {
+    const row = this.sql.exec<{bills: number | null; cents: number | null}>(`SELECT SUM(coalesce(count, 0)) AS bills, SUM(amount_cents) AS cents FROM report_lines
+      WHERE kind='discount' AND key LIKE 'personal%' AND amount_cents > 0 AND business_date BETWEEN ? AND ?`, from, to).toArray()[0];
+    let revenueCents = 0;
+    for (let date = from; date <= to; date = addDays(date, 1)) revenueCents += this.dayRevenue(date) ?? 0;
+    return {bills: row?.bills ?? 0, cents: row?.cents ?? 0, revenueCents};
+  }
+
+  /** Incidents of the „Report dne“ texts of a stretch of days (src/incidents.ts). */
+  private incidentsBetween(from: string, to: string): Incident[] {
+    return this.sql.exec<{day: string; notes: string | null}>("SELECT business_date AS day, json_extract(json, '$.notes') AS notes FROM daily_reports WHERE business_date BETWEEN ? AND ? ORDER BY business_date", from, to)
+      .toArray().flatMap(row => incidents(row.day, row.notes));
+  }
+
+  /** Euros, dollars and pounds in the evening count of a day. */
+  private foreignCash(date: string): ForeignCash | null {
+    const lines = (this.report(date)?.lines ?? []).filter(entry => entry.kind === 'cash_count' && /^(euro|dolar|libra)$/.test(entry.key));
+    return lines.length ? {date, byCurrency: Object.fromEntries(lines.map(entry => [entry.key, entry.amountCents]))} : null;
+  }
+
+  /** MCP: the incidents of a stretch of days. */
+  posIncidents(from: string, to: string) {
+    if (!this.config()) return null;
+    const list = this.incidentsBetween(from, to);
+    return {from, to, count: list.length, incidents: list};
+  }
+
   /** The month up to the reported day against the same days of the month before; complete on the month's last day. */
   private month(config: TenantConfig, date: string): Month {
     const from = date.slice(0, 7) + '-01', previousLast = addDays(from, -1), previousMonth = previousLast.slice(0, 7);
@@ -1483,7 +1513,7 @@ export class TenantObject extends DurableObject<Env> {
       current: this.monthPart(config, from, date), previous: {...this.monthPart(config, previousMonth + '-01', previousThrough), month: previousMonth, through: previousThrough},
       lastYear: {...this.monthPart(config, yearBack(from), yearBack(date)), month: yearBack(from).slice(0, 7), through: yearBack(date)},
       payouts, payoutsCents: sum(payouts), expenses, expensesCents: sum(expenses), discounts: discounts.rows, discountsCents: discounts.totalCents,
-      reviews: this.reviewStats(from, date)};
+      staffMeals: this.staffMeals(from, date), reviews: this.reviewStats(from, date)};
   }
 
   /** Discounts by type on the same weekday of the 4 weeks before, counting only days whose managers' report has the discount block. */
@@ -1966,6 +1996,8 @@ export class TenantObject extends DurableObject<Env> {
       menuByLanguage: weekday(date) === 0 ? sumMenuInterest(this.webDays(addDays(date, -27), date), addDays(date, -27), date) : null,
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
       lastYearRevenueCents: this.dayRevenue(addDays(date, -364)), target: this.monthTargetFor(date), dataGaps: this.dataGaps(config, date, now),
+      incidents: addDays(date, 1).endsWith('-01') ? this.incidentsBetween(date.slice(0, 8) + '01', date) : null,
+      foreignWeek: weekday(date) === 0 ? foreignWeek(date, Array.from({length: 15}, (_, i) => this.foreignCash(addDays(date, i - 14)))) : null,
       cashNeed: this.cashNeedFor(date), payoutAlarm: this.payoutAlarmFor(date), till: this.tillFor(date), nights: weekday(date) === 0 ? this.nightsFor(addDays(date, -27), date) : null,
       tableChecks: tableChecks(this.report(date), this.report(addDays(date, -1))), noteThemes: noteThemes(this.report(date)?.notes),
       themes: weekday(date) === 0 ? this.themeSummary(date) : null, djRanking: weekday(date) === 0 ? this.djRanking(date) : null,
