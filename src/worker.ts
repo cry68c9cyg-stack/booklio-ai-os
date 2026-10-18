@@ -2682,7 +2682,7 @@ export class TenantObject extends DurableObject<Env> {
 
   /** The accountant's address from the messages of the mailbox (src/accountant.ts). */
   private accountant(mailbox: string): Accountant | null {
-    const like = ['%infotax%', '%dvorak%', '%dvořák%', '%Dvořák%', '%DVOŘÁK%', '%dvořak%', '%dvorák%'];
+    const like = ['%infotax%', '%dvorak%', '%dvořák%', '%Dvořák%', '%DVOŘÁK%', '%dvořak%', '%dvorák%', '%safrank%', '%šafránk%', '%Šafránk%', '%ŠAFRÁNK%', '%šafrank%', '%safránk%'];
     const where = like.map(() => '(sender LIKE ? OR sender_name LIKE ? OR recipients LIKE ?)').join(' OR ');
     const rows = this.sql.exec<{direction: 'in' | 'out'; sender: string; sender_name: string | null; recipients: string}>(
       `SELECT direction, sender, sender_name, recipients FROM mail_messages WHERE ${where}`, ...like.flatMap(pattern => [pattern, pattern, pattern])).toArray();

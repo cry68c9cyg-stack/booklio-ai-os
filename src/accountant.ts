@@ -1,6 +1,6 @@
 /**
- * The venue's accountant, found in its own mailbox (MC, 18. 10. 2026: the accountant is Dvořák of Infotax, Klára is an
- * assistant): the address the month's invoices and receipts go to until iÚčto takes over the accounting. The address
+ * The venue's accountant, found in its own mailbox (MC, 18. 10. 2026: the accountant is Šafránková, Dvořák or Infotax,
+ * Klára is an assistant): the address the month's invoices and receipts go to until iÚčto takes over the accounting. The address
  * stays in the venue's database; nothing of it is in Git.
  */
 
@@ -8,8 +8,8 @@ export type AccountantMail = {direction: 'in' | 'out'; sender: string; senderNam
 export type Accountant = {address: string; messages: number};
 
 const plain = (value: string) => value.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
-/** The firm's name or the accountant's surname, in an address or a sender's name. */
-export const ACCOUNTANT_WORDS = /infotax|dvorak/;
+/** The firm's name or the accountant's surnames, in an address or a sender's name. */
+export const ACCOUNTANT_WORDS = /infotax|dvorak|safrank/;
 
 /**
  * The address the venue writes with most about its accounts: one of the firm (infotax) first, else one with the

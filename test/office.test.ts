@@ -144,4 +144,5 @@ test('accountant: the firm address first, then the name; never the venue itself'
   assert.deepEqual(findAccountant(rows, 'podnik.test'), {address: 'ucetni@infotax.test', messages: 1});
   assert.deepEqual(findAccountant(rows.filter(row => row.direction === 'in'), 'podnik.test'), {address: 'p.dvorak@example.net', messages: 2});
   assert.equal(findAccountant(rows.slice(4), 'podnik.test'), null);
+  assert.deepEqual(findAccountant([{direction: 'in', sender: 'jana@ucetni.test', senderName: 'Jana Šafránková', recipients: []}], 'podnik.test'), {address: 'jana@ucetni.test', messages: 1});
 });
