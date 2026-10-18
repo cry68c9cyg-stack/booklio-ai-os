@@ -757,7 +757,7 @@ try {
   const kpi = await mcp('kpi_tydne', {den: '2026-10-18'});
   assert.ok(!kpi.error && Array.isArray(kpi.data.rows) && kpi.data.rows.some(row => row.key === 'reports' && row.owner === 'Matěj'), 'the KPIs of a week');
   const week = await mcp('vysledek_tydne', {den: '2026-10-18'});
-  assert.ok(!week.error && week.data.from === '2026-10-12' && typeof week.data.resultCents === 'number', 'the result of a week');
+  assert.ok(!week.error && week.data.from === '2026-10-12' && typeof week.data.resultCents === 'number' && week.data.week.revenueNetCents <= week.data.week.revenueCents, 'the result of a week, revenue without VAT');
   const riskList = await mcp('riziko_mank', {od: '2026-10-01', do: '2026-10-31'});
   assert.ok(!riskList.error && Array.isArray(riskList.data.days) && typeof riskList.data.daysWithoutRisk === 'number', 'the shrinkage risk over a period');
   const cashList = await mcp('vyhled_hotovosti', {od: '2026-10-01', do: '2026-10-31'});

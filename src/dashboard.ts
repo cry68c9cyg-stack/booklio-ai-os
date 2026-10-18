@@ -263,7 +263,7 @@ function kpiCard(k) {
   return html + '<div class="muted">4 týdny = průměrný týden ze 4 předchozích; červeně, co se zhoršilo, pod tím co udělat; útrata na hosta přibude s Pexesem (hosté bez rezervace zatím nejsou v datech)</div></div>';
 }
 
-// The operating result of the 7 days up to the day: revenue − supplier invoices − cash wages, against the average week of the 4 before (src/weekresult.ts).
+// The operating result of the 7 days up to the day: revenue − supplier invoices (both without VAT) − cash wages, against the average week of the 4 before (src/weekresult.ts).
 function weekResultCard(w) {
   if (!w || w.week.revenueDays < 5 || !w.week.invoices) return '';
   const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.', pct = p => p === null ? '–' : String(Math.round(p) / 10).replace('.', ',') + ' %', b = w.before, avg = c => kc(Math.round(c / 4));
@@ -271,12 +271,12 @@ function weekResultCard(w) {
   let html = '<div class="card"><h2>Výsledek týdne ' + short(w.from) + '–' + short(w.to) + '</h2>';
   html += '<p><b class="' + (full && w.resultCents < w.beforeCents * 0.8 ? 'warn' : '') + '">' + kc(w.resultCents) + '</b>' + (full ? ' · průměrný týden ze 4 předchozích ' + kc(w.beforeCents) : '') + '</p>';
   html += '<table><tr><th></th><th class="n">týden</th><th class="n">4 týdny</th></tr>'
-    + '<tr><td>Tržba s DPH</td><td class="n">' + kc(w.week.revenueCents) + '</td><td class="n muted">' + (full ? avg(b.revenueCents) : '–') + '</td></tr>'
+    + '<tr><td>Tržba bez DPH (s DPH ' + kc(w.week.revenueCents) + ')</td><td class="n">' + kc(w.week.revenueNetCents) + '</td><td class="n muted">' + (full ? avg(b.revenueNetCents) : '–') + '</td></tr>'
     + '<tr><td>− nákup z faktur bez DPH</td><td class="n">' + kc(w.week.purchasesCents) + '</td><td class="n muted">' + (full ? avg(b.purchasesCents) : '–') + '</td></tr>'
     + '<tr><td>− výplaty z kasy</td><td class="n">' + kc(w.week.payoutsCents) + '</td><td class="n muted">' + (full ? avg(b.payoutsCents) : '–') + '</td></tr>'
-    + '<tr><td>jídlo a nápoje z tržby</td><td class="n">' + pct(w.foodCostPermille) + '</td><td class="n muted">' + pct(w.beforeFoodCostPermille) + '</td></tr>'
+    + '<tr><td>jídlo a nápoje z tržby bez DPH</td><td class="n">' + pct(w.foodCostPermille) + '</td><td class="n muted">' + pct(w.beforeFoodCostPermille) + '</td></tr>'
     + '<tr><td class="muted">výdaje z kasy (neodečtené)</td><td class="n muted">' + kc(w.week.expensesCents) + '</td><td class="n muted">' + (full ? avg(b.expensesCents) : '–') + '</td></tr></table>';
-  return html + '<div class="muted">hrubý odhad: bez nájmu, energií a mezd placených z účtu (ty přijdou s účetnictvím); výdaje z kasy se neodečítají, část z nich jsou zaplacené faktury; jídlo a nápoje = nákup jídla a nápojů z faktur bez DPH z tržby s DPH</div></div>';
+  return html + '<div class="muted">hrubý odhad, vše bez DPH: DPH z tržby podle sazeb pokladny, jinak odhadem (Restaurace den 12 %, noc a Club 21 %); bez nájmu, energií a mezd placených z účtu (ty přijdou s účetnictvím); výdaje z kasy se neodečítají, část z nich jsou zaplacené faktury; jídlo a nápoje = nákup jídla a nápojů z faktur z tržby, obojí bez DPH</div></div>';
 }
 
 function riskCard(r, week) {

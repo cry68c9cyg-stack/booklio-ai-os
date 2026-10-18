@@ -5,7 +5,7 @@ import {cashDay, cashNeed, nightSummary, payoutAlarm, tillDay, type NightSummary
 import {tableChecks} from './checks.ts';
 import {riskScore, type Risk} from './risk.ts';
 import {kpiRows, type KpiInput, type KpiPart} from './kpi.ts';
-import {weekResultFigures, type ResultPart, type WeekResult} from './weekresult.ts';
+import {DEFAULT_VAT, SECTION_VAT, weekResultFigures, withoutVat, type ResultPart, type WeekResult} from './weekresult.ts';
 import {cashFlowDay, cashForecast, cashShare, movementDay, sumMovements, type CashFlowDay} from './cashflow.ts';
 import {cashDiffRepeat, sumVoids, voidAndDiff, voidDay, voidPastDates, type VoidDay} from './voids.ts';
 import {promoDay, promoStreaks, sumPromo, type PromoDay} from './promo.ts';
@@ -2057,9 +2057,26 @@ export class TenantObject extends DurableObject<Env> {
   private resultPart(invoices: SupplierInvoice[], from: string, to: string): ResultPart {
     const revenue = this.revenueBetween(from, to), summary = supplySummary(invoices, from, to, revenue);
     const total = (kind: 'payout' | 'expense') => this.reportSums(kind, from, to).reduce((sum, row) => sum + row.amountCents, 0);
-    return {revenueCents: revenue.revenueCents, revenueDays: revenue.revenueDays, invoices: summary.invoices, purchasesCents: summary.netCents,
+    let revenueNetCents = 0;
+    for (let day = from; day <= to; day = addDays(day, 1)) revenueNetCents += this.dayRevenueNet(day) ?? 0;
+    return {revenueCents: revenue.revenueCents, revenueNetCents, revenueDays: revenue.revenueDays, invoices: summary.invoices, purchasesCents: summary.netCents,
       foodDrinkCents: summary.byKind.filter(row => row.kind === 'food' || row.kind === 'beverage').reduce((sum, row) => sum + row.netCents, 0),
       payoutsCents: total('payout'), expensesCents: total('expense')};
+  }
+  /** A day's revenue without VAT, from the same source as `dayRevenue`: the POS rate of each item, else the section's (src/weekresult.ts). */
+  private dayRevenueNet(date: string): number | null {
+    const bills = this.day<Bill>('bill', date).filter(bill => bill.status === 'closed');
+    if (bills.length) return bills.reduce((sum, bill) => {
+      const itemized = bill.items.reduce((total, item) => total + item.totalCents, 0);
+      // Items before the bill's discount: the bill's total is shared out over their rates.
+      const scale = itemized > 0 ? bill.totalCents / itemized : 0;
+      const net = bill.items.reduce((total, item) => total + withoutVat(item.totalCents * scale, item.vatRate ?? SECTION_VAT[bill.section ?? ''] ?? DEFAULT_VAT), 0);
+      return sum + (itemized > 0 ? net : withoutVat(bill.totalCents, SECTION_VAT[bill.section ?? ''] ?? DEFAULT_VAT));
+    }, 0);
+    const sections = this.sql.exec<{key: string; total: number}>("SELECT key, SUM(amount_cents) AS total FROM report_lines WHERE business_date=? AND kind='revenue_section' GROUP BY key", date).toArray();
+    if (sections.length) return sections.reduce((sum, row) => sum + withoutVat(row.total, SECTION_VAT[row.key] ?? DEFAULT_VAT), 0);
+    const total = this.dayRevenue(date);
+    return total === null ? null : withoutVat(total, DEFAULT_VAT);
   }
   /** The week up to `date` against the 4 weeks before. */
   private weekResultFor(config: TenantConfig, date: string): WeekResult {
