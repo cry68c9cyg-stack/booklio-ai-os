@@ -444,6 +444,10 @@ function suppliesCard(s) {
     s.payments.rows.map(o => '<li>' + esc(short(o.dueDate)) + ' ' + esc(o.supplier) + (o.number ? ' č. ' + esc(o.number) : '') + ': ' + kc(o.grossCents) + (o.source === 'posta' ? ' <span class="muted">(z pošty, zaplacení OKO1 nevidí)</span>' : '') + '</li>').join('') + '</ul>';
   if (s.outlook) h += '<div>Výhled nákupů do konce měsíce: <b>' + kc(s.outlook.estimateCents) + '</b> bez DPH <span class="muted">(zatím ' + kc(s.outlook.purchasesCents) + ', podle odhadu tržeb ' + kc(s.outlook.restRevenueCents) + ' na zbytek měsíce' +
     (s.outlook.dueRest ? '; zaplatit ještě ' + s.outlook.dueRest + '× za ' + kc(s.outlook.dueRestCents) : '') + ')</span></div>';
+  if (s.newFromMail && s.newFromMail.length) h += '<div class="warn">Faktura z pošty od nového dodavatele, ověřit před zaplacením: ' + s.newFromMail.map(n => esc(n.supplier) + (n.supplierId ? ' (IČO ' + esc(n.supplierId) + ')' : '') +
+    (n.number ? ' č. ' + esc(n.number) : '') + ' ' + kc(n.grossCents) + (n.sender ? ', poslal ' + esc(n.sender) : '')).join(' · ') + '</div>';
+  const thisMonth = m.to.slice(0, 7), prevMonth = new Date(Date.parse(m.to.slice(0, 8) + '01T12:00:00Z') - 86400000).toISOString().slice(0, 7);
+  h += '<div>Faktury pro účetnictví (tabulka a doklady z pošty): <a href="' + esc(location.pathname) + '/faktury?mesic=' + prevMonth + '">' + esc(prevMonth) + '</a> · <a href="' + esc(location.pathname) + '/faktury?mesic=' + thisMonth + '">' + esc(thisMonth) + '</a></div>';
   if (s.conflicts && s.conflicts.length) h += '<div class="warn">Stejná faktura s jinou částkou: ' + s.conflicts.map(c => esc(c.supplier) + ' č. ' + esc(c.number) + ' ' + c.amounts.map(kc).join(' / ')).join(' · ') + '</div>';
   if (s.unreadable && s.unreadable.length) h += '<h3>Doklady z pošty, které nešly přečíst</h3><ul>' + s.unreadable.map(u => '<li class="warn">' + esc(short(u.date)) + ' ' + esc(u.sender) + (u.subject ? ': ' + esc(u.subject) : '') + '</li>').join('') + '</ul>';
   if (s.duplicates && s.duplicates.length) h += '<div class="warn">Možná duplicitní faktury: ' + s.duplicates.map(d => esc(d.supplier) + ' ' + d.count + '× ' + kc(d.grossCents) + ' (' + esc(short(d.date)) + ')').join(' · ') + '</div>';
@@ -469,7 +473,9 @@ function mailCard(m) {
     (m.qualityTenths !== null ? ' · odpovědi obsluhy <b>' + num(m.qualityTenths / 10) + '/5</b> (' + m.graded + ')' : '') + '</div>';
   if (m.outOfControl.length) h += '<h3>Co nemáme v řízení</h3><ul>' + m.outOfControl.map(t => '<li class="warn">' + esc(t) + '</li>').join('') + '</ul>';
   h += '<h3>Čeká na odpověď přes 24 h</h3>' + (m.waiting.length ? '<ul>' + m.waiting.map(w => '<li' + (w.complaint ? ' class="warn"' : '') + '>' + esc(when(w.at)) + ' <b>' + esc(w.fromName || w.from) + '</b>: ' + esc(w.subject || 'bez předmětu') +
-    ' <span class="muted">(' + ago(w.hours) + (w.summary ? ' · ' + esc(w.summary) : '') + ')</span></li>').join('') + '</ul>' : '<span class="muted">nic nečeká</span>');
+    ' <span class="muted">(' + ago(w.hours) + (w.summary ? ' · ' + esc(w.summary) : '') + ')</span>' +
+    (w.draft ? '<details><summary>Návrh odpovědi</summary><div style="white-space:pre-wrap">' + esc(w.draft) + '</div></details>' : '') + '</li>').join('') + '</ul>' : '<span class="muted">nic nečeká</span>');
+  if (m.causes && m.causes.length) h += '<h3>Stížnosti podle příčin</h3><table>' + m.causes.map(c => '<tr><td>' + esc(c.name) + '</td><td class="n">' + c.count + '</td><td class="muted">' + esc(c.action || '') + '</td></tr>').join('') + '</table>';
   if (m.topics.length) h += '<h3>Témata</h3><table>' + m.topics.map(t => '<tr><td>' + esc(t.name) + '</td><td class="n">' + t.count + '</td><td class="n muted">předtím ' + t.previous + '</td></tr>').join('') + '</table>';
   if (m.complaints.length) h += '<h3>Stížnosti</h3><ul>' + m.complaints.map(c => '<li>' + esc(when(c.at)) + ' <b>' + esc(c.fromName || c.from) + '</b>: ' + esc(c.summary || c.subject) + ' <span class="' + (c.answeredHours === null ? 'warn' : 'muted') + '">(' +
     (c.answeredHours === null ? 'bez odpovědi' : 'odpověď za ' + num(c.answeredHours) + ' h' + (c.quality ? ', ' + c.quality + '/5' : '')) + ')</span>' +

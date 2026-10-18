@@ -2,7 +2,7 @@ import {weekday} from './time.ts';
 import {cashNeedText, debtsRising, debtsText, payoutAlarmText} from './cash.ts';
 import {waitingText} from './mail-insights.ts';
 import {gapsText, hasGaps, shiftSignals, shiftText} from './goals.ts';
-import {conflictText, dueText, duplicateText, paymentText, foodCostText, overdueText, riseText, unreadableText, unusualText} from './supplies.ts';
+import {conflictText, dueText, duplicateText, newSupplierText, paymentText, foodCostText, overdueText, riseText, unreadableText, unusualText} from './supplies.ts';
 import {CASH_DIFFERENCE_CENTS, crowns, menuGapsText, mismatch, mismatchText, noShowAlarm, noShowText, pendingAheadText, themeTodos, reviewDrop, reviewDropText, unusual, weakDays, weakDaysText, webDropText, type Briefing} from './briefing.ts';
 
 export type TodoItem = {level: 'warn' | 'info'; text: string; amountCents: number | null};
@@ -49,6 +49,7 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   for (const row of briefing.supplies?.unusual ?? []) warn(`Neobvyklý nákup: ${unusualText(row)}`, row.netCents);
   if (briefing.supplies?.foodCostAlert) warn(`${foodCostText(briefing.supplies.foodCostAlert)}.`);
   // Invoices to pay this week: not late yet, so info, but with their amount so nothing slips past its due date.
+  for (const row of briefing.supplies?.newFromMail ?? []) warn(`Faktura z pošty od nového dodavatele, ověřit, než se zaplatí: ${newSupplierText(row)}`, row.grossCents);
   for (const row of briefing.supplies?.conflicts ?? []) warn(`Stejná faktura s jinou částkou, ověřit u dodavatele: ${conflictText(row)}`);
   if (briefing.supplies?.payments) items.push({level: 'info', text: `Připravit hromadnou platbu na ${paymentText(briefing.supplies.payments)}`, amountCents: briefing.supplies.payments.totalCents});
   for (const row of briefing.supplies?.dueSoon ?? []) items.push({level: 'info', text: `Zaplatit: ${dueText(row)}`, amountCents: row.grossCents});

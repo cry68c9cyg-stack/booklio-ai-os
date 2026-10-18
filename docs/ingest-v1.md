@@ -264,6 +264,8 @@ OKO1 z faktur počítá:
 - **hromadná platba** (doplněno 18. 10. 2026; kancelář platí v úterý a čtvrtek): ráno před platebním dnem nezaplacené faktury se splatností před dalším platebním dnem (nejvýš 30 dní po splatnosti, starší zůstávají v „po splatnosti“); faktury z pošty s poznámkou, že zaplacení OKO1 nevidí;
 - **výhled nákupů do konce měsíce**: od 7. dne a od 7 dní s tržbou nákupy zatím + stejný podíl z odhadu tržeb na zbytek měsíce (ranní odhad), a kolik faktur je ještě splatných do konce měsíce;
 - **uzávěrka měsíce** v poslední den měsíce: nákupy bez DPH po druzích, food cost, rozdíl proti minulému měsíci, nezaplacené faktury měsíce;
+- **nový dodavatel z pošty**: faktura z pošty za 7 dní (dashboard 30 dní) od dodavatele, od kterého OKO1 nemá dřívější fakturu z žádného zdroje (stejné IČO, jinak první dvě slova názvu), s adresou odesílatele: ověřit, než se zaplatí;
+- **faktury pro účetnictví**: tlačítko na dashboardu stáhne ZIP za měsíc (tabulka všech započítaných faktur ve formátu CSV pro Excel a doklady faktur z pošty z archivu);
 - **stejná faktura s jinou částkou**: stejný dodavatel (IČO, jinak název) a číslo faktury (bez mezer, lomítek a pomlček) s různou částkou s DPH za 35 dní (dashboard 90 dní); faktura z pošty, která přijde znovu s jinou částkou, se uloží jako zrušená kopie (`status: cancelled`, nepočítá se dvakrát) a hlásí se, dokud ji někdo neověří;
 - **náklad na kus pro výdělek po položkách lístku**: nápoj s objemem dostane náklad nalitého objemu podle posledního spárovaného nákupu (stejně jako marže nápojů); jídlo zatím bez nákladu, chybí receptury.
 
@@ -290,6 +292,8 @@ Při téže návštěvě OKO1 uloží každou zprávu doručené a odeslané po�
 - **Co nemáme v řízení**: člověk píše znovu bez odpovědi, stížnost bez odpovědi, odpovědi po víc než 48 h, zprávy čekající přes 3 dny.
 - **V pondělí** ranní zpráva shrne týden: zprávy k odpovědi, odpovězené, medián hodin do odpovědi, průměrná známka a témata proti týdnu předtím.
 - Dashboard: karta „Pošta info@ (30 dní)“; MCP: nástroj `posta_info(od, do)`.
+- **Návrhy odpovědí** (doplněno 18. 10. 2026): zpráva bez odpovědi starší než hodina (za 14 dní) dostane návrh odpovědi v jazyce pisatele; co OKO1 neví, nechá v [hranatých závorkách]. Nic se neodesílá, návrh je na dashboardu u čekající zprávy.
+- **Stížnosti podle příčin**: jídlo, obsluha, čekání, účet a ceny, rezervace, ochranka a vstup, hluk a hudba, čistota, ostatní; karta s doporučeným opatřením, poslední den v měsíci řádek v ranní zprávě.
 
 ## Kdy posílat
 
