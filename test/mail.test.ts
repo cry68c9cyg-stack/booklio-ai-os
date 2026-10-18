@@ -226,7 +226,7 @@ test('replies pair by In-Reply-To or by subject and address; waiting, speed, top
 });
 
 test('the model readings of mail are checked', () => {
-  assert.deepEqual(parseIncomingReading({topic: 'group', needsReply: true, complaint: false, summary: '  Oslava   pro 20 lidí '}), {topic: 'group', needsReply: true, complaint: false, summary: 'Oslava pro 20 lidí'});
+  assert.deepEqual(parseIncomingReading({topic: 'group', needsReply: true, complaint: false, summary: '  Oslava   pro 20 lidí '}), {topic: 'group', needsReply: true, complaint: false, summary: 'Oslava pro 20 lidí', cause: null});
   assert.equal(parseIncomingReading({topic: 'neznámé', needsReply: true, complaint: false, summary: ''}), null);
   assert.deepEqual(parseReplyReading({quality: 4.4, issues: '', better: null}), {quality: 4, issues: null, better: null});
   assert.equal(parseReplyReading({quality: 7}), null);
@@ -235,4 +235,21 @@ test('the model readings of mail are checked', () => {
 test('local midnight of a day in Prague, in summer and winter time', () => {
   assert.equal(zonedMidnight('2026-10-18', 'Europe/Prague'), '2026-10-17T22:00:00.000Z');
   assert.equal(zonedMidnight('2026-12-01', 'Europe/Prague'), '2026-11-30T23:00:00.000Z');
+});
+
+import {complaintCauses, parseDraft, unanswered} from '../src/mail-insights.ts';
+
+test('complaints by cause with what to do; drafts only for messages still without an answer', () => {
+  const complaint = (key: string, cause: string | undefined) => row(key, {reading: {topic: 'complaint', needsReply: true, complaint: true, summary: '', ...(cause ? {cause} : {})} as never});
+  assert.deepEqual(complaintCauses([complaint('a', 'waiting'), complaint('b', 'waiting'), complaint('c', 'food'), complaint('d', undefined)]).map(row => [row.name, row.count, !!row.action]),
+    [['čekání', 2, true], ['jídlo', 1, true], ['nezařazené', 1, false]]);
+  assert.equal(parseIncomingReading({topic: 'complaint', needsReply: true, complaint: true, summary: 'x', cause: 'nesmysl'})!.cause, 'other');
+  assert.equal(parseIncomingReading({topic: 'question', needsReply: true, complaint: false, summary: 'x', cause: 'food'})!.cause, null);
+  const now = new Date('2026-10-18T12:00:00Z');
+  const rows = [row('q1', {at: '2026-10-18T09:00:00.000Z', subject: 'Dotaz na parkování'}), row('q2', {at: '2026-10-18T11:30:00.000Z', subject: 'Jiný dotaz', from: 'b@example.cz'}),
+    row('q3', {at: '2026-10-18T08:00:00.000Z', subject: 'Rezervace', from: 'c@example.cz'}),
+    row('q3-re', {direction: 'out', at: '2026-10-18T08:30:00.000Z', from: 'info@example.cz', to: ['c@example.cz'], subject: 'Re: Rezervace', messageId: null})];
+  assert.deepEqual(unanswered(rows, now, 1).map(r => r.key), ['q1']);
+  assert.equal(parseDraft({draft: '  Dobrý den, děkujeme za zprávu. [ověřit] Tým Testovací podnik  '}), 'Dobrý den, děkujeme za zprávu. [ověřit] Tým Testovací podnik');
+  assert.equal(parseDraft({draft: 'ok'}), null);
 });

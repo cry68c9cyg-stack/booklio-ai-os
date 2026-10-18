@@ -58,3 +58,48 @@ export async function unzip(bytes: Uint8Array, wanted: (name: string) => boolean
   }
   return result;
 }
+
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < 256; index++) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit++) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    table[index] = value >>> 0;
+  }
+  return table;
+})();
+
+export function crc32(data: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of data) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+/** A ZIP of `files` stored without compression (PDFs barely compress), names in UTF-8. */
+export function zip(files: {name: string; data: Uint8Array}[]): Uint8Array {
+  const encoder = new TextEncoder(), local: Uint8Array[] = [], central: Uint8Array[] = [];
+  let offset = 0;
+  for (const file of files) {
+    const name = encoder.encode(file.name), crc = crc32(file.data);
+    const header = new Uint8Array(30 + name.length), view = new DataView(header.buffer);
+    view.setUint32(0, 0x04034b50, true); view.setUint16(4, 20, true); view.setUint16(6, 0x0800, true);
+    view.setUint32(14, crc, true); view.setUint32(18, file.data.length, true); view.setUint32(22, file.data.length, true); view.setUint16(26, name.length, true);
+    header.set(name, 30);
+    const entry = new Uint8Array(46 + name.length), entryView = new DataView(entry.buffer);
+    entryView.setUint32(0, 0x02014b50, true); entryView.setUint16(4, 20, true); entryView.setUint16(6, 20, true); entryView.setUint16(8, 0x0800, true);
+    entryView.setUint32(16, crc, true); entryView.setUint32(20, file.data.length, true); entryView.setUint32(24, file.data.length, true);
+    entryView.setUint16(28, name.length, true); entryView.setUint32(42, offset, true);
+    entry.set(name, 46);
+    local.push(header, file.data);
+    central.push(entry);
+    offset += header.length + file.data.length;
+  }
+  const centralSize = central.reduce((sum, part) => sum + part.length, 0);
+  const end = new Uint8Array(22), endView = new DataView(end.buffer);
+  endView.setUint32(0, 0x06054b50, true); endView.setUint16(8, files.length, true); endView.setUint16(10, files.length, true);
+  endView.setUint32(12, centralSize, true); endView.setUint32(16, offset, true);
+  const out = new Uint8Array(offset + centralSize + 22);
+  let at = 0;
+  for (const part of [...local, ...central, end]) { out.set(part, at); at += part.length; }
+  return out;
+}

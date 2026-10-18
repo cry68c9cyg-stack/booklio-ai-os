@@ -53,6 +53,8 @@ export type SupplyBrief = {month: SupplySummary; rises: PriceRise[]; overdue: Ov
   payments?: PaymentBatch | null;
   /** The same invoice (supplier and number) arrived with different amounts. */
   conflicts?: AmountConflict[];
+  /** Invoices from the mailbox of the 7 days up to the day from a supplier never invoiced before (check before paying). */
+  newFromMail?: NewMailSupplier[];
   /** Only in the Monday message (about Sunday): the week's rises per supplier, the drinks with the lowest margin and the categories growing most against the month before. */
   weekly?: {suppliers: SupplierRises[]; lowMargins: DrinkMargin[]; growing?: CategoryChange[]} | null};
 /** An unpaid invoice due soon: `days` until the due date (0 = today). */
@@ -71,6 +73,8 @@ export type CostOutlook = {month: string; purchasesCents: number; estimateCents:
 export type MonthClosing = {month: string; summary: SupplySummary; previousNetCents: number; unpaidCents: number; unpaid: number};
 /** One batch payment (MC's office pays on Tuesday and Thursday): unpaid invoices due before the next payment day. */
 export type PaymentBatch = {payDay: string; nextPayDay: string; rows: {supplier: string; number: string | null; dueDate: string; grossCents: number; source: string}[]; totalCents: number};
+/** An invoice from the mailbox by a supplier OKO1 has no earlier invoice of, with who e-mailed it. */
+export type NewMailSupplier = {supplier: string; supplierId: string | null; number: string | null; date: string; grossCents: number; sender: string | null; id: string};
 /** Invoices of one supplier with the same number but different amounts (a corrected invoice, or a mistake). */
 export type AmountConflict = {supplier: string; number: string; amounts: number[]; dates: string[]};
 
@@ -223,6 +227,22 @@ export function nextPaymentBatch(invoices: SupplierInvoice[], date: string): Pay
   }
   return null;
 }
+
+const supplierName = (invoice: SupplierInvoice) => invoice.supplier.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/[^a-z0-9]+/g, ' ').trim().split(' ').slice(0, 2).join(' ');
+/** The same supplier: the same IČO, or (one of them without it) the same first two words of the name. */
+const sameSupplier = (a: SupplierInvoice, b: SupplierInvoice) => a.supplierId && b.supplierId ? a.supplierId === b.supplierId : supplierName(a) === supplierName(b);
+
+/** Invoices from the mailbox issued `from`–`to` by suppliers with no earlier invoice from any source. */
+export function newSuppliersFromMail(invoices: SupplierInvoice[], from: string, to: string, senders: Map<string, string> = new Map()): NewMailSupplier[] {
+  return invoices.filter(invoice => invoice.source === 'posta' && invoice.businessDate >= from && invoice.businessDate <= to)
+    .filter(invoice => !invoices.some(other => other.id !== invoice.id && sameSupplier(other, invoice)
+      && (other.businessDate < invoice.businessDate || other.businessDate === invoice.businessDate && other.id < invoice.id)))
+    .map(invoice => ({supplier: invoice.supplier, supplierId: invoice.supplierId, number: invoice.number, date: invoice.businessDate, grossCents: invoice.grossCents,
+      sender: senders.get(invoice.id) ?? null, id: invoice.id}))
+    .sort((a, b) => b.date.localeCompare(a.date));
+}
+
+export const newSupplierText = (row: NewMailSupplier) => `${row.supplier}${row.supplierId ? ` (IČO ${row.supplierId})` : ''}${row.number ? ` č. ${row.number}` : ''}, ${crownsTotal(row.grossCents)}${row.sender ? `, poslal ${row.sender}` : ''}`;
 
 /** Invoices with the same supplier and number but different amounts with VAT (from any source, cancelled copies included). */
 export function amountConflicts(invoices: SupplierInvoice[]): AmountConflict[] {
@@ -429,6 +449,7 @@ export function renderSupplies(brief: SupplyBrief | null): string[] {
   if (brief.unreadable?.length) lines.push(`Z pošty nešlo přečíst ${brief.unreadable.length === 1 ? '1 doklad' : `${brief.unreadable.length} ${brief.unreadable.length <= 4 ? 'doklady' : 'dokladů'}`}: ${brief.unreadable.slice(0, 3).map(unreadableText).join(' · ')}`);
   if (brief.duplicates?.length) lines.push(`⚠ Možná duplicitní faktury: ${brief.duplicates.slice(0, 3).map(duplicateText).join(' · ')}`);
   if (brief.conflicts?.length) lines.push(`⚠ Stejná faktura s jinou částkou: ${brief.conflicts.slice(0, 3).map(conflictText).join(' · ')}`);
+  if (brief.newFromMail?.length) lines.push(`⚠ Faktura z pošty od dodavatele, kterého ještě neznáme (ověřit, než se zaplatí): ${brief.newFromMail.slice(0, 3).map(newSupplierText).join(' · ')}`);
   if (brief.payments) lines.push(`Hromadná platba ${paymentText(brief.payments)} (splatné do ${shortDate(addDays(brief.payments.nextPayDay, -1))}): ` +
     brief.payments.rows.slice(0, 5).map(row => `${row.supplier} ${crownsTotal(row.grossCents)}`).join(' · ') + (brief.payments.rows.length > 5 ? ` · … a další ${brief.payments.rows.length - 5}` : ''));
   if (brief.outlook) {
