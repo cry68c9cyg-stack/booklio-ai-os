@@ -17,7 +17,7 @@ import {fetchDayFiles, googleDayFiles, googleFolderByName, reportFromFiles} from
 import {authorizeUrl, pkce, redeem, renew} from './microsoft.ts';
 import {googleAccess, serviceAccount} from './google.ts';
 import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
-import {counted, drinkMargins, duplicateInvoices, overdueInvoices, priceRises, supplyBrief, supplySummary} from './supplies.ts';
+import {counted, drinkMargins, dueSoon, FOOD_COST_LIMIT_PERMILLE, duplicateInvoices, foodCostAlert, monthOverMonth, overdueInvoices, priceRises, supplyBrief, supplySummary, unusualPurchases} from './supplies.ts';
 import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
 import {DEFAULT_BOTTLE_LOSS_CENTS, googleFolderId, InputError, validateBatch, withoutGuest, validateCompetitorPrices, validateConfig, validateHistory, type Batch, type CompetitorPrices, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
@@ -165,7 +165,7 @@ export class TenantObject extends DurableObject<Env> {
   private config(): TenantConfig | null {
     const row = this.sql.exec<{json: string}>('SELECT json FROM config WHERE id=1').toArray()[0];
     // Configs saved before the bottle check have no `bottleCheck` key.
-    return row ? {bottleCheck: null, reportsLink: null, dashboardPhones: null, web: null, disabledSources: [], ...JSON.parse(row.json)} as TenantConfig : null;
+    return row ? {bottleCheck: null, reportsLink: null, dashboardPhones: null, web: null, disabledSources: [], foodCostLimitPermille: null, ...JSON.parse(row.json)} as TenantConfig : null;
   }
 
   async handle(tenant: string, route: string, method: string, body: unknown, token: string | null, query: Record<string, string>): Promise<Result> {
@@ -778,7 +778,7 @@ export class TenantObject extends DurableObject<Env> {
     const received = this.sql.exec<{at: string}>("SELECT max(received_at) AS at FROM records WHERE type='menu'").toArray()[0].at;
     const changes = this.menuChangesBetween(addDays(day, -29), addDays(day, 1), 30);
     const findings = priceCheck(menu), sales = this.itemSales(addDays(day, -29), day);
-    const profit = sales.length ? itemProfit(menu, sales, this.menuItemCosts()) : null;
+    const profit = sales.length ? itemProfit(menu, sales, this.menuItemCosts(menu, day)) : null;
     return {...menuOverview(menu), received: stamp(new Date(received), config.timeZone), changes: changes.rows, changesTotal: changes.total,
       priceCheck: {findings: [...findings].sort((a, b) => FINDING_RANK[a.kind] - FINDING_RANK[b.kind]).slice(0, 10), total: findings.length},
       gaps: (gaps => ({items: gaps.slice(0, 20), total: gaps.length}))(menuGaps(menu)), competitors: this.competitorCard(), trend: this.menuTrend(), problems: this.menuProblems(new Date()),
@@ -811,11 +811,14 @@ export class TenantObject extends DurableObject<Env> {
   }
 
   /**
-   * Food cost per piece of a menu item without VAT in haléře, by menu item id. Empty until the purchase prices and
-   * recipes are joined to the menu (the batch „Zisk a marže“ of the Dishboard work fills it); profit by item uses it as is.
+   * Cost per piece of a menu item without VAT in haléře, by menu item id, as of `date`. Drinks with a poured volume get the
+   * cost of that volume at their latest paired purchase (supplier invoices of the year before, as `drinkMargins` pairs them);
+   * food needs recipes, which OKO1 does not have yet, so it stays without a cost.
    */
-  private menuItemCosts(): Map<string, number> {
-    return new Map();
+  private menuItemCosts(menu: Menu, date: string): Map<string, number> {
+    const config = this.config();
+    if (!config) return new Map();
+    return new Map(drinkMargins(menu, this.invoices(config, addDays(date, -365), date), date).margins.map(row => [row.itemId, row.costCents]));
   }
 
   /** MCP: profit by menu item over some days (POS bills paired to the menu); null without a venue or a menu. */
@@ -823,7 +826,7 @@ export class TenantObject extends DurableObject<Env> {
     const menu = this.menu();
     if (!this.config() || !menu) return null;
     const sales = this.itemSales(from, to);
-    return {from, to, bills: sales.length > 0, ...itemProfit(menu, sales, this.menuItemCosts())};
+    return {from, to, bills: sales.length > 0, ...itemProfit(menu, sales, this.menuItemCosts(menu, to))};
   }
 
   /** MCP: virtual repricing of the menu, with the revenue of the last 30 days at the same pieces sold. */
@@ -1100,7 +1103,7 @@ export class TenantObject extends DurableObject<Env> {
     const menu = this.menu();
     if (!this.config() || !menu) return null;
     const sales = this.itemSales(from, to);
-    return {from, to, bills: sales.length > 0, matrix: sales.length ? menuMatrix(menu, itemProfit(menu, sales, this.menuItemCosts()), this.newMenuItems(from, to)) : [],
+    return {from, to, bills: sales.length > 0, matrix: sales.length ? menuMatrix(menu, itemProfit(menu, sales, this.menuItemCosts(menu, to)), this.newMenuItems(from, to)) : [],
       experiments: this.priceExperiments(to, 50)};
   }
 
@@ -1146,13 +1149,13 @@ export class TenantObject extends DurableObject<Env> {
     const year = this.invoices(config, addDays(date, -365), date);
     const unpaid = this.invoices(config, '', '', true).filter(invoice => !year.some(other => other.id === invoice.id));
     const payoutsCents = this.reportSums('payout', date.slice(0, 8) + '01', date).reduce((sum, row) => sum + row.amountCents, 0);
-    return supplyBrief([...year, ...unpaid], date, this.revenueBetween(date.slice(0, 8) + '01', date), {payoutsCents, menu: this.menu()});
+    return supplyBrief([...year, ...unpaid], date, this.revenueBetween(date.slice(0, 8) + '01', date), {payoutsCents, menu: this.menu(), foodCostLimitPermille: config.foodCostLimitPermille});
   }
 
   /** Dashboard: the month up to the shown day, rises over its 30 days, invoices overdue the day after, and which senders are off. */
   private suppliesCard(config: TenantConfig, day: string) {
     const year = this.invoices(config, addDays(day, -365), day);
-    const overdue = overdueInvoices(this.invoices(config, '', '', true), addDays(day, 1));
+    const unpaid = this.invoices(config, '', '', true), overdue = overdueInvoices(unpaid, addDays(day, 1)), due = dueSoon(unpaid, addDays(day, 1));
     if (!year.length && !overdue.length) return null;
     const revenue = this.revenueBetween(day.slice(0, 8) + '01', day), month = supplySummary(year, day.slice(0, 8) + '01', day, revenue);
     const payoutsCents = this.reportSums('payout', day.slice(0, 8) + '01', day).reduce((sum, row) => sum + row.amountCents, 0);
@@ -1161,7 +1164,10 @@ export class TenantObject extends DurableObject<Env> {
       overdueCents: overdue.reduce((sum, row) => sum + row.grossCents, 0), disabled: config.disabledSources,
       duplicates: duplicateInvoices(year.filter(invoice => invoice.businessDate >= addDays(day, -34))).slice(0, 10),
       result: revenue.revenueDays ? {revenueCents: revenue.revenueCents, purchasesCents: month.netCents, payoutsCents, resultCents: revenue.revenueCents - month.netCents - payoutsCents} : null,
-      margins: margins ? {rows: margins.margins.slice(0, 30), paired: margins.margins.length, unpaired: margins.unpaired} : null};
+      margins: margins ? {rows: margins.margins.slice(0, 30), paired: margins.margins.length, unpaired: margins.unpaired} : null,
+      dueSoon: due.slice(0, 15), dueSoonCount: due.length, dueSoonCents: due.reduce((sum, row) => sum + row.grossCents, 0),
+      foodCostAlert: foodCostAlert(month, config.foodCostLimitPermille), foodCostLimitPermille: config.foodCostLimitPermille ?? FOOD_COST_LIMIT_PERMILLE,
+      monthCompare: monthOverMonth(year, day).slice(0, 15), unusual: unusualPurchases(year, addDays(day, -29), day).slice(0, 10)};
   }
 
   /** MCP: purchases over any stretch of days (at most 400) with price rises in it, invoices overdue today and the invoices themselves. */
@@ -1171,9 +1177,11 @@ export class TenantObject extends DurableObject<Env> {
     const history = this.invoices(config, addDays(from, -365), to), invoices = history.filter(invoice => invoice.businessDate >= from);
     const today = businessDate(new Date(), config.timeZone, config.businessDayCutoffHour);
     const menu = this.menu();
+    const unpaid = this.invoices(config, '', '', true);
     return {summary: supplySummary(invoices, from, to, this.revenueBetween(from, to)), rises: priceRises(history, from, to),
       duplicates: duplicateInvoices(invoices), drinkMargins: menu ? drinkMargins(menu, history, to) : null,
-      overdue: overdueInvoices(this.invoices(config, '', '', true), today), disabledSources: config.disabledSources,
+      overdue: overdueInvoices(unpaid, today), dueSoon: dueSoon(unpaid, today), unusual: unusualPurchases(history, from, to),
+      monthCompare: monthOverMonth(history, to), foodCostLimitPermille: config.foodCostLimitPermille ?? FOOD_COST_LIMIT_PERMILLE, disabledSources: config.disabledSources,
       invoices: invoices.sort((a, b) => b.businessDate.localeCompare(a.businessDate)).slice(0, 1000), truncated: invoices.length > 1000};
   }
 

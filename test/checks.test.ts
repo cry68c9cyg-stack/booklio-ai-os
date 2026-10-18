@@ -11,7 +11,7 @@ import {xlsx} from './xlsx-fixture.ts';
 
 const config: TenantConfig = {
   name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9],
-  registers: ['diner', 'bar', 'klub'], sections: {diner: 'Diner', bar: 'Bar', club: 'Klub'}, recipients: [], bottleCheck: null, reportsLink: null, dashboardPhones: null, web: null, location: null, disabledSources: [],
+  registers: ['diner', 'bar', 'klub'], sections: {diner: 'Diner', bar: 'Bar', club: 'Klub'}, recipients: [], bottleCheck: null, reportsLink: null, dashboardPhones: null, web: null, location: null, disabledSources: [], foodCostLimitPermille: null,
 };
 const report = (lines: ReportLine[], notes: string | null = null): DailyReport => ({businessDate: '2026-10-16', source: 'admin', files: [], lines, notes, warnings: []});
 const entry = (kind: ReportLine['kind'], key: string, label: string, crowns: number, count: number | null = null): ReportLine => ({kind, key, label, count, amountCents: crowns * 100});
