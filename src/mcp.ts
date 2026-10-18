@@ -227,6 +227,15 @@ export function createServer(context: ToolContext): McpServer {
     const list = await context.venue.posIncidents(od, until);
     return list ? result(list) : failed('Provozovna není v OKO1 nastavená.');
   });
+  tool('mzdy_a_smeny', 'Mzdy z kasy a směny', 'Výplaty v hotovosti z peněžního deníku za období (nejvýš 400 dní) po dnech a druzích: noc (security, tanečnice, DJ, popelář, hosteska, animátorky), ' +
+    'mzdy mimo noc (kuchyň, barman, uklízečka, výpomoc, brigády) a zkušební směny; výplaty noci jako podíl tržby klubu po nocích; dny v týdnu, kdy texty reportů hlásí chybějící personál. ' +
+    'Celé mzdy a odpracované hodiny OKO1 zatím nemá (přijdou s docházkou v Pexesu), jde jen o hotovost z kasy.',
+  {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
+    const bad = badRange(od, until);
+    if (bad) return bad;
+    const wages = await context.venue.posWages(od, until);
+    return wages ? result(wages) : failed('Provozovna není v OKO1 nastavená.');
+  });
   tool('souhrn_obdobi', 'Souhrn za období', 'Součty za libovolné období (nejvýš 400 dní): tržba a dny s tržbou, potvrzené rezervace a hosté, nedorazili, storna, zdroje rezervací, ' +
     'jak dopředu se rezervuje, návštěvy webu a jejich původ, odeslané formuláře, nové recenze a průměr hvězdiček, akce podniku s hosty a tržbou proti obvyklému dni. Jen počty, částky v haléřích.',
   {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
