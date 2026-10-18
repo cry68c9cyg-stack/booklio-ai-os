@@ -25,6 +25,10 @@ import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-cli
 import {dashboardWeb} from './web-views.ts';
 import {WEATHER_AGENT, WEATHER_URL, weatherDays, type WeatherDay} from './weather.ts';
 import {MCP_PATH, oauthOptions, type Venues} from './oauth.ts';
+import {sentFolder, withMailbox, type ImapAccount, type ImapSession} from './imap.ts';
+import {parseMail, type Mail} from './mime.ts';
+import {asSupplierInvoice, EXTRACTION_SCHEMA, extractionPrompt, invoiceAttachments, isdocSummary, isdocXml, issuedByVenue, looksLikeInvoice, MAIL_HISTORY_FROM,
+  MAIL_SOURCE, mailInvoiceId, MAX_DOCUMENT_CHARS, parseExtraction, parseIsdoc, withKinds, type ExtractedInvoice} from './mail-invoices.ts';
 
 export type Env = DeliveryEnv & WebEnv & IuctoEnv & {
   TENANTS: DurableObjectNamespace<TenantObject>; REGISTRY: DurableObjectNamespace<Registry>; ADMIN_SECRET: string; DATA_JURISDICTION?: string;
@@ -40,7 +44,31 @@ export type Env = DeliveryEnv & WebEnv & IuctoEnv & {
   ONEDRIVE_CLIENT_ID?: string;
   /** OKO1's own Google account (service account JSON key) for a Google Drive folder shared with it. Optional. */
   GOOGLE_SERVICE_ACCOUNT?: string;
+  /** Workers AI (production): reading PDF invoices from the venue's mailbox. Optional: without it only ISDOC is read. */
+  AI?: MailAi;
+} & {[name: `MAIL_ACCOUNT_${string}`]: string | undefined};
+/** The two Workers AI calls OKO1 makes, typed narrowly so no model list is needed. */
+type MailAi = {
+  run(model: string, input: unknown): Promise<unknown>;
+  toMarkdown(file: {name: string; blob: Blob}): Promise<{format: string; data?: string; error?: string}>;
 };
+/** The language model that turns an invoice's text into fields (structured JSON output). */
+/** The hourly visit to the mailbox (wrangler.jsonc). */
+const MAIL_CRON = '30 * * * *';
+const INVOICE_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+/** How long one visit to the mailbox may take, and how many documents it reads; the rest waits for the next visit a minute later. */
+const MAIL_BUDGET_MS = 120000, MAIL_DOCUMENTS_PER_VISIT = 12;
+
+/** The venue's mailbox: Worker secret MAIL_ACCOUNT_<TENANT> = {"host", "port", "user", "password"} (set by the deploy). */
+export function mailAccount(env: Env, tenant: string): ImapAccount | null {
+  const raw = env[`MAIL_ACCOUNT_${tenant.toUpperCase().replace(/-/g, '_')}` as `MAIL_ACCOUNT_${string}`];
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as Partial<ImapAccount>;
+    if (typeof value.host !== 'string' || !/^[a-z0-9.-]+$/i.test(value.host) || typeof value.user !== 'string' || typeof value.password !== 'string' || !value.password) return null;
+    return {host: value.host, port: typeof value.port === 'number' ? value.port : 993, user: value.user, password: value.password};
+  } catch { return null; }
+}
 type Result = {status: number; body: unknown};
 export type VenueSetup = {name: string; timeZone: string; businessDayCutoffHour: number; web: {url: string} | null; today: string; reportDay: string};
 
@@ -156,6 +184,12 @@ export class TenantObject extends DurableObject<Env> {
       -- sign-ins in progress (PKCE verifier, at most 10 minutes).
       CREATE TABLE IF NOT EXISTS onedrive_access(id INTEGER PRIMARY KEY CHECK(id=1), refresh_token TEXT, connected_at TEXT NOT NULL, error TEXT);
       CREATE TABLE IF NOT EXISTS onedrive_signins(state TEXT PRIMARY KEY, verifier TEXT NOT NULL, created_at INTEGER NOT NULL);
+      -- The venue's mailbox (read-only): how far each folder has been read, the last visit and its error; what was
+      -- done with each message that had a document (an invoice stored, not an invoice, unreadable); which venue this is.
+      CREATE TABLE IF NOT EXISTS mail_folders(folder TEXT PRIMARY KEY, uid_validity INTEGER NOT NULL, last_uid INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS mail_visits(id INTEGER PRIMARY KEY CHECK(id=1), tenant TEXT NOT NULL, at TEXT NOT NULL, error TEXT, backlog INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS mail_documents(folder TEXT NOT NULL, uid_validity INTEGER NOT NULL, uid INTEGER NOT NULL, at TEXT NOT NULL, mail_date TEXT,
+        status TEXT NOT NULL, sender TEXT NOT NULL, subject TEXT NOT NULL, invoice_id TEXT, PRIMARY KEY(folder, uid_validity, uid));
     `));
     // Wrong codes for unknown venues are counted per venue name in the shared stand-in (see `loginStub`).
     if (!this.sql.exec<{name: string}>('PRAGMA table_info(login_failures)').toArray().some(column => column.name === 'scope')) {
@@ -1151,7 +1185,9 @@ export class TenantObject extends DurableObject<Env> {
     const year = this.invoices(config, addDays(date, -365), date);
     const unpaid = this.invoices(config, '', '', true).filter(invoice => !year.some(other => other.id === invoice.id));
     const payoutsCents = this.reportSums('payout', date.slice(0, 8) + '01', date).reduce((sum, row) => sum + row.amountCents, 0);
-    return supplyBrief([...year, ...unpaid], date, this.revenueBetween(date.slice(0, 8) + '01', date), {payoutsCents, menu: this.menu(), foodCostLimitPermille: config.foodCostLimitPermille});
+    const brief = supplyBrief([...year, ...unpaid], date, this.revenueBetween(date.slice(0, 8) + '01', date), {payoutsCents, menu: this.menu(), foodCostLimitPermille: config.foodCostLimitPermille});
+    const unreadable = this.unreadableMail(addDays(date, -6), date);
+    return brief && unreadable.length ? {...brief, unreadable} : brief;
   }
 
   /** Dashboard: the month up to the shown day, rises over its 30 days, invoices overdue the day after, and which senders are off. */
@@ -1169,7 +1205,8 @@ export class TenantObject extends DurableObject<Env> {
       margins: margins ? {rows: margins.margins.slice(0, 30), paired: margins.margins.length, unpaired: margins.unpaired} : null,
       dueSoon: due.slice(0, 15), dueSoonCount: due.length, dueSoonCents: due.reduce((sum, row) => sum + row.grossCents, 0),
       foodCostAlert: foodCostAlert(month, config.foodCostLimitPermille), foodCostLimitPermille: config.foodCostLimitPermille ?? FOOD_COST_LIMIT_PERMILLE,
-      monthCompare: monthOverMonth(year, day).slice(0, 15), unusual: unusualPurchases(year, addDays(day, -29), day).slice(0, 10)};
+      monthCompare: monthOverMonth(year, day).slice(0, 15), unusual: unusualPurchases(year, addDays(day, -29), day).slice(0, 10),
+      mail: this.mailStatus(config), unreadable: this.unreadableMail(addDays(day, -29), day).slice(0, 10)};
   }
 
   /** MCP: purchases over any stretch of days (at most 400) with price rises in it, invoices overdue today and the invoices themselves. */
@@ -1785,6 +1822,7 @@ export class TenantObject extends DurableObject<Env> {
       report: report ? {at: at(report.at), found: report.found === 1} : null,
       costs: cost ? {at: at(cost.at), ok: !cost.error} : null,
       onedrive: this.onedriveStatus(config),
+      mail: this.mailStatus(config),
     };
   }
 
@@ -1826,6 +1864,132 @@ export class TenantObject extends DurableObject<Env> {
     if (!config) return failure('NOT_CONFIGURED', 409);
     if (!isDate(date)) return failure('INVALID_REQUEST', 400);
     return ok(this.briefingFor(config, date, !this.ready(config, date)));
+  }
+
+  /**
+   * One visit to the venue's mailbox (every hour, and every minute while the history is still being read): messages
+   * from MAIL_HISTORY_FROM on with a PDF or ISDOC attachment, in every folder but sent, drafts, spam and trash.
+   * Read-only; each folder is read on from the last message seen, so every message is looked at once.
+   */
+  async mailVisit(tenant: string, now = new Date()) {
+    const config = this.config(), account = mailAccount(this.env, tenant);
+    if (!config || !account) return {visited: false};
+    const started = Date.now(), late = () => Date.now() - started > MAIL_BUDGET_MS * 0.8;
+    let documents = 0, backlog = 0;
+    const result = await withMailbox(account, async session => {
+      const all = await session.folders(), sent = sentFolder(all);
+      const skipped = ['\\noselect', '\\nonexistent', '\\sent', '\\drafts', '\\junk', '\\trash', '\\all'];
+      const folders = all.filter(folder => folder.name !== sent && !folder.flags.some(flag => skipped.includes(flag))
+        && !/(^|[./])(sent|drafts?|spam|junk|trash|deleted|ko[sš]|odeslan|koncept|nevy[zž][aá]dan)/i.test(folder.name));
+      for (const folder of folders) {
+        const box = await session.examine(folder.name);
+        const state = this.sql.exec<{uid_validity: number; last_uid: number}>('SELECT uid_validity, last_uid FROM mail_folders WHERE folder=?', folder.name).toArray()[0];
+        let last = state && state.uid_validity === box.uidValidity ? state.last_uid : 0;
+        const uids = (await session.since(MAIL_HISTORY_FROM)).filter(uid => uid > last);
+        for (let index = 0; index < uids.length; index += 50) {
+          const chunk = uids.slice(index, index + 50), structures = await session.structures(chunk);
+          for (const uid of chunk) {
+            if (documents >= MAIL_DOCUMENTS_PER_VISIT || late()) { backlog += uids.filter(other => other > last).length; break; }
+            if (/pdf|isdoc/i.test(structures.get(uid) ?? '')) {
+              documents++;
+              await this.readMailDocument(config, tenant, session, folder.name, box.uidValidity, uid);
+            }
+            last = uid;
+            this.sql.exec('INSERT INTO mail_folders VALUES(?,?,?) ON CONFLICT(folder) DO UPDATE SET uid_validity=excluded.uid_validity, last_uid=excluded.last_uid',
+              folder.name, box.uidValidity, last);
+          }
+          if (backlog) return;
+        }
+      }
+    }, MAIL_BUDGET_MS + 30000);
+    this.sql.exec(`INSERT INTO mail_visits VALUES(1,?,?,?,?) ON CONFLICT(id) DO UPDATE SET tenant=excluded.tenant, at=excluded.at, error=excluded.error, backlog=excluded.backlog`,
+      tenant, now.toISOString(), result.ok ? null : result.error, backlog);
+    // The history since April is read in short visits a minute apart; afterwards only the hourly visit.
+    if (backlog) await this.ctx.storage.setAlarm(Date.now() + 60000);
+    return {visited: true, ok: result.ok, documents, backlog};
+  }
+
+  async alarm() {
+    const visit = this.sql.exec<{tenant: string}>('SELECT tenant FROM mail_visits WHERE id=1').toArray()[0];
+    if (visit) await this.mailVisit(visit.tenant);
+  }
+
+  /** One message with a document: its invoices are stored; what happened is kept so the message is not read again. */
+  private async readMailDocument(config: TenantConfig, tenant: string, session: ImapSession, folder: string, uidValidity: number, uid: number) {
+    const message = await session.message(uid);
+    const mail = message?.bytes.length ? parseMail(message.bytes) : null;
+    const note = (status: string, invoiceId: string | null = null) => this.sql.exec('INSERT OR REPLACE INTO mail_documents VALUES(?,?,?,?,?,?,?,?,?)',
+      folder, uidValidity, uid, new Date().toISOString(), mail?.date ? businessDate(new Date(mail.date), config.timeZone, 0) : null, status,
+      (mail?.from?.name ?? mail?.from?.address ?? '').slice(0, 120), (mail?.subject ?? '').slice(0, 200), invoiceId);
+    if (!mail) return note(message ? 'too_big' : 'gone');
+    const {isdoc, pdf} = invoiceAttachments(mail);
+    const stored: string[] = [];
+    let unreadable = false;
+    for (const attachment of isdoc) {
+      const xml = await isdocXml(attachment), exact = xml ? parseIsdoc(xml) : null;
+      if (!exact || issuedByVenue(exact, config.name)) continue;
+      const model = await this.readInvoice(config, isdocSummary(exact));
+      stored.push(this.storeMailInvoice(tenant, withKinds(exact, model ?? null), attachment));
+    }
+    // A PDF next to an ISDOC is the same invoice printed.
+    for (const attachment of stored.length ? [] : pdf.filter(attachment => looksLikeInvoice(mail, attachment))) {
+      const text = await this.pdfText(attachment.filename, attachment.data);
+      const invoice = text === null ? undefined : await this.readInvoice(config, text);
+      if (invoice === undefined) unreadable = true;
+      else if (invoice && !issuedByVenue(invoice, config.name)) stored.push(this.storeMailInvoice(tenant, invoice, attachment));
+    }
+    note(stored.length ? 'invoice' : unreadable ? 'unreadable' : 'other', stored[0] ?? null);
+  }
+
+  /** Text of a PDF (Workers AI document reader); null when there is none (a scan without text, no AI). */
+  private async pdfText(name: string, data: Uint8Array): Promise<string | null> {
+    if (!this.env.AI) return null;
+    try {
+      const result = await this.env.AI.toMarkdown({name: name.replace(/[^\w.-]+/g, '_').slice(-80) || 'doklad.pdf', blob: new Blob([data], {type: 'application/pdf'})});
+      const text = result.format !== 'error' ? (result.data ?? '').trim() : '';
+      return text.replace(/\s+/g, '').length >= 40 ? text.slice(0, MAX_DOCUMENT_CHARS) : null;
+    } catch { return null; }
+  }
+
+  /**
+   * The model's reading of a document: the invoice, null when it is not a supplier invoice, undefined when it could
+   * not be read (no AI, the model failed or answered nonsense).
+   */
+  private async readInvoice(config: TenantConfig, text: string): Promise<ExtractedInvoice | null | undefined> {
+    if (!this.env.AI) return undefined;
+    try {
+      const output = await this.env.AI.run(INVOICE_MODEL, {
+        messages: [{role: 'system', content: extractionPrompt(config.name)}, {role: 'user', content: `Doklad:\n<doklad>\n${text.slice(0, MAX_DOCUMENT_CHARS)}\n</doklad>`}],
+        response_format: {type: 'json_schema', json_schema: EXTRACTION_SCHEMA}, max_tokens: 4096, temperature: 0,
+      }) as {response?: unknown};
+      const answer = typeof output?.response === 'string' ? JSON.parse(output.response.match(/\{[\s\S]*\}/)?.[0] ?? 'null') : output?.response;
+      if (!answer || typeof answer !== 'object') return undefined;
+      if ((answer as {isSupplierInvoice?: unknown}).isSupplierInvoice !== true) return null;
+      return parseExtraction(answer) ?? undefined;
+    } catch { return undefined; }
+  }
+
+  /** Stores an invoice from the mailbox once (the same invoice e-mailed again is kept as it was) and archives its document in the EU. */
+  private storeMailInvoice(tenant: string, invoice: ExtractedInvoice, attachment: {filename: string; data: Uint8Array}): string {
+    const id = mailInvoiceId(invoice), record = asSupplierInvoice(invoice, id), now = new Date().toISOString();
+    const added = this.sql.exec(`INSERT INTO records(type, id, version, business_date, register_id, json, installation_id, received_at) VALUES(?,?,?,?,?,?,?,?)
+      ON CONFLICT(type, id) DO NOTHING`, record.type, record.id, record.version, record.businessDate, '', JSON.stringify(record), MAIL_SOURCE, now).rowsWritten;
+    if (added) this.archive(`t/${tenant}/posta/${id}/${attachment.filename.replace(/[^\w.-]+/g, '_').slice(-80)}`, attachment.data);
+    return id;
+  }
+
+  /** Documents from the mailbox of `from`–`to` (the day of the message) that OKO1 could not read. */
+  private unreadableMail(from: string, to: string) {
+    return this.sql.exec<{date: string; sender: string; subject: string}>(`SELECT mail_date AS date, sender, subject FROM mail_documents
+      WHERE status='unreadable' AND mail_date BETWEEN ? AND ? ORDER BY mail_date DESC LIMIT 20`, from, to).toArray().map(row => ({...row}));
+  }
+
+  /** The last visit to the mailbox and what came of it (dashboard, sources). */
+  private mailStatus(config: TenantConfig) {
+    const visit = this.sql.exec<{at: string; error: string | null; backlog: number}>('SELECT at, error, backlog FROM mail_visits WHERE id=1').toArray()[0];
+    if (!visit) return null;
+    const count = (status: string) => this.sql.exec<{count: number}>('SELECT count(*) AS count FROM mail_documents WHERE status=?', status).toArray()[0].count;
+    return {at: stamp(new Date(visit.at), config.timeZone), error: visit.error, readingHistory: visit.backlog > 0, invoices: count('invoice'), unreadable: count('unreadable')};
   }
 
   /** Called by the morning cron trigger. Decides whether this morning's briefing goes out now. */
@@ -2062,6 +2226,11 @@ export default {
 
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     const tenants = await registry(env).list();
+    // The hourly cron visits the venues' mailboxes; the morning ones prepare and send the briefing.
+    if (event.cron === MAIL_CRON) {
+      for (const tenant of tenants) if (mailAccount(env, tenant)) ctx.waitUntil(tenantStub(env, tenant).mailVisit(tenant, new Date(event.scheduledTime)));
+      return;
+    }
     for (const tenant of tenants) ctx.waitUntil(tenantStub(env, tenant).tick(new Date(event.scheduledTime), tenant));
   },
 };
