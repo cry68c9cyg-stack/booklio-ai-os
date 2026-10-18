@@ -169,7 +169,7 @@ test('OneDrive: a report with the date in its header is the report, not a cash b
   assert.match(renderBriefing('Testovací podnik', briefing), /\n⚠ Přepočet pokladny nesedí se zůstatkem v deníku: přebývá 29 199 Kč\n/);
   assert.ok(todoList(briefing).some(item => item.text === 'Přepočet pokladny nesedí s deníkem: +29 199 Kč'));
   assert.deepEqual(briefing.report!.paymentMismatches.map(row => [row.section, row.reportCents, row.journalCents]), [['cash', 2000000, 500000], ['card', 28000000, 29500000]]);
-  assert.match(renderBriefing('Testovací podnik', briefing), /\n⚠ Platby v reportu nesedí s deníkem: hotovost: report 20 000 Kč, deník 5 000 Kč, karta: report 280 000 Kč, deník 295 000 Kč$/);
+  assert.match(renderBriefing('Testovací podnik', briefing), /\n⚠ Platby v reportu nesedí s deníkem: hotovost: report 20 000 Kč, deník 5 000 Kč, karta: report 280 000 Kč, deník 295 000 Kč(\n|$)/);
   assert.ok(todoList(briefing).some(item => item.text.startsWith('Platba nesedí s deníkem, hotovost: report 20 000 Kč')));
 });
 
