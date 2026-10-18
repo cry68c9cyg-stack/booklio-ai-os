@@ -5,6 +5,7 @@ import type {NotePoint, NotesAnalysis} from './notes.ts';
 import {weatherText, type WeatherDay} from './weather.ts';
 import type {TableCheck} from './checks.ts';
 import {renderThemes, THEMES, type DjRank, type ThemeSummary} from './themes.ts';
+import {gapsText, hasGaps, shiftSignals, shiftText, type DataGaps, type MonthTarget} from './goals.ts';
 import {renderSupplies, type SupplyBrief} from './supplies.ts';
 import {pricesOfText, type CompetitorRow, type CompetitorSection, type MenuGap, type PriceExperiment, type PriceFinding, type PriceMismatch} from './menu.ts';
 
@@ -105,6 +106,12 @@ export type Briefing = {
   silent: {name: string; since: string}[];
   /** What the managers' tables do not add up in (src/checks.ts); a briefing stored before has none. */
   tableChecks?: TableCheck[];
+  /** Revenue of the same weekday 52 weeks before (364 days), `null` = no data; a briefing stored before has none. */
+  lastYearRevenueCents?: number | null;
+  /** The target of the month the starting day is in (src/goals.ts). */
+  target?: MonthTarget | null;
+  /** Days of the 14 before without revenue or with the cash book only; only for this morning's message. */
+  dataGaps?: DataGaps | null;
   /** Topics of the day's "Report dne" text (src/themes.ts) and, on Monday, how often each came up over 4 weeks. */
   noteThemes?: string[];
   themes?: ThemeSummary | null;
@@ -135,6 +142,8 @@ export type MonthPart = {revenueCents: number; revenueDays: number; bySection: {
 /** Revenue of one month up to a day against the same days of the month before, and the cash the cash book paid out. */
 export type Month = {
   month: string; through: string; complete: boolean; current: MonthPart; previous: MonthPart & {month: string; through: string};
+  /** The same days of the month a year before; a month stored before has none. */
+  lastYear?: MonthPart & {month: string; through: string};
   payouts: {label: string; amountCents: number}[]; payoutsCents: number;
   expenses: {label: string; amountCents: number}[]; expensesCents: number;
   discounts: {label: string; amountCents: number}[]; discountsCents: number;
@@ -386,7 +395,7 @@ export const dayPart = (hour: number): DayPart => hour >= 6 && hour < 17 ? 'day'
  * the same weekday of the 8 weeks before, how many guests were booked after the same moment; at least 2 such days, else unknown).
  */
 /** `usual` = guests the same weekday usually had booked by the same moment (median of the past days), for spotting a weak day early. */
-export type GuestOutlookDay = {date: string; booked: number; expected: number | null; usual: number | null; weak: boolean; parts: {key: DayPart; booked: number; expected: number | null}[]};
+export type GuestOutlookDay = {date: string; booked: number; expected: number | null; usual: number | null; weak: boolean; parts: {key: DayPart; booked: number; expected: number | null; usual?: number | null}[]};
 export type GuestOutlook = {days: GuestOutlookDay[]; noShowGuests: number | null};
 /** The median of whole numbers, rounded. */
 export const median = (values: number[]) => {
@@ -396,8 +405,10 @@ export const median = (values: number[]) => {
 /** One day of the outlook from guests booked now and past days' {final, booked by the same moment}, per part of the day. */
 export function guestOutlookDay(date: string, now: Record<DayPart, number>, past: {final: Record<DayPart, number>; early: Record<DayPart, number>}[]): GuestOutlookDay {
   // Bookings cancelled after the moment count as booked then, so late cancellations can take guests away again (never below zero).
+  // `usual` = guests the same weekday finally had booked in this part of the day (median), for the shifts.
   const parts = DAY_PARTS.map(({key}) => ({key, booked: now[key],
-    expected: past.length >= 2 ? Math.max(0, now[key] + median(past.map(day => day.final[key] - day.early[key]))) : null}));
+    expected: past.length >= 2 ? Math.max(0, now[key] + median(past.map(day => day.final[key] - day.early[key]))) : null,
+    usual: past.length >= 2 ? median(past.map(day => day.final[key])) : null}));
   const booked = parts.reduce((sum, part) => sum + part.booked, 0);
   const total = (parts: Record<DayPart, number>) => DAY_PARTS.reduce((sum, {key}) => sum + parts[key], 0);
   const usual = past.length >= 2 ? median(past.map(day => total(day.early))) : null;
@@ -707,6 +718,7 @@ export function buildBriefing(input: {
   noShowHistory?: {confirmedGuests: number; noShowGuests: number};
   discountHistory?: DiscountHistory;
   tableChecks?: TableCheck[]; noteThemes?: string[]; themes?: ThemeSummary | null; djRanking?: DjRank[] | null;
+  lastYearRevenueCents?: number | null; target?: MonthTarget | null; dataGaps?: DataGaps | null;
 }): Briefing {
   const closed = input.bills.filter(bill => bill.status === 'closed');
   const add = <K>(map: Map<K, number>, key: K, value: number) => map.set(key, (map.get(key) ?? 0) + value);
@@ -795,6 +807,7 @@ export function buildBriefing(input: {
     noShows: noShowRate(input.reservations ?? [], input.noShowHistory ?? null),
     unusualDiscounts: report ? unusualDiscounts(report, input.discountHistory ?? {days: 0, totals: {}}) : [],
     silent: input.silent ?? [],
+    lastYearRevenueCents: input.lastYearRevenueCents ?? null, target: input.target ?? null, dataGaps: input.dataGaps ?? null,
     tableChecks: input.tableChecks ?? [], noteThemes: input.noteThemes ?? [], themes: input.themes ?? null, djRanking: input.djRanking ?? null,
     incomplete: input.incomplete,
   };
@@ -820,12 +833,14 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   const lines = [`${name} · ${czechDate(briefing.businessDate)}`];
   if (briefing.incomplete) lines.push(`⚠ Report chybí${briefing.missingClosings.length ? ': ' + briefing.missingClosings.join(', ') : ''}. Čísla nemusí být konečná.`);
   for (const source of briefing.silent) lines.push(`⚠ ${source.name} neposílá data od ${source.since}.`);
+  if (hasGaps(briefing.dataGaps)) lines.push(`⚠ Chybí data za 14 dní: ${gapsText(briefing.dataGaps!)}`);
   let revenue = `Tržba: ${crowns(briefing.revenueCents)}`;
   if (briefing.plan) {
     const delta = briefing.plan.revenueCents ? Math.round((briefing.revenueCents / briefing.plan.revenueCents - 1) * 100) : 0;
     revenue += ` (plán ${crowns(briefing.plan.revenueCents)}, ${delta >= 0 ? '+' : '−'}${Math.abs(delta)} %)`;
   }
   if (briefing.lastWeekRevenueCents && briefing.revenueCents && !briefing.incomplete) revenue += ` · před týdnem ${crowns(briefing.lastWeekRevenueCents)}${change(briefing.revenueCents, briefing.lastWeekRevenueCents)}`;
+  if (briefing.lastYearRevenueCents && briefing.revenueCents && !briefing.incomplete) revenue += ` · loni ${crowns(briefing.lastYearRevenueCents)}${change(briefing.revenueCents, briefing.lastYearRevenueCents)}`;
   lines.push(revenue);
   if (briefing.bySection.length > 1) lines.push(briefing.bySection.map(row => `${row.label} ${crowns(row.revenueCents)}`).join(' · '));
   if (briefing.source !== 'report') lines.push(`Účty ${briefing.bills} · hosté ${briefing.guests}${briefing.averageBillCents === null ? '' : ` · průměrný účet ${crowns(briefing.averageBillCents)}`}`);
@@ -848,9 +863,12 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderGuestOutlook(briefing.guestOutlook));
   const weak = weakDays(briefing.guestOutlook);
   if (weak.length) lines.push(`⚠ Slabší výhled: ${weakDaysText(weak, briefing.eventRanking)}`);
+  const shifts = shiftSignals(briefing.guestOutlook?.days);
+  if (shifts.length) lines.push(`Směny na 7 dní: ${shifts.slice(0, SHIFT_LINES).map(shiftText).join(' · ')}${shifts.length > SHIFT_LINES ? ` a další ${shifts.length - SHIFT_LINES}` : ''}`);
   if (briefing.pendingAhead) lines.push(`Na příštích 7 dní ${pendingAheadText(briefing.pendingAhead)}`);
   if (noShowAlarm(briefing.noShows)) lines.push(`⚠ No-show: ${noShowText(briefing.noShows!)}`);
   lines.push(...renderForecast(briefing.forecast));
+  lines.push(...renderTarget(briefing.target));
   lines.push(...renderWeb(briefing.web));
   if (briefing.webDrop) lines.push(`⚠ Web: ${webDropText(briefing.webDrop)}.`);
   lines.push(...renderReviews(briefing.reviews));
@@ -1095,6 +1113,20 @@ export function renderForecast(forecast: Briefing['forecast']): string[] {
   return parts.length ? [`Odhad tržby: ${parts.join(' · ')}`] : [];
 }
 
+const SHIFT_LINES = 5;
+/** "Cíl na říjen 3 150 000 Kč (loni 3 000 000 Kč +5 %): zatím 1 200 000 Kč (38 %) · odhad za měsíc 3 050 000 Kč (−3 % pod cílem) · potřeba 150 000 Kč denně (13 dní)" */
+export function renderTarget(target: MonthTarget | null | undefined): string[] {
+  if (!target) return [];
+  const base = target.base.basis === 'last_year' ? `loni ${crowns(target.base.cents)}` : `${monthName(target.base.month)} ${crowns(target.base.cents)}`;
+  const parts = [`zatím ${crowns(target.actualCents)} (${Math.round(target.actualCents / target.targetCents * 100)} %)`];
+  if (target.forecastCents !== null) {
+    const delta = Math.round((target.forecastCents / target.targetCents - 1) * 100);
+    parts.push(`odhad za měsíc ${thousands(target.forecastCents)} (${delta >= 0 ? `+${delta} % nad cílem` : `−${-delta} % pod cílem`})`);
+  }
+  parts.push(target.actualCents >= target.targetCents ? 'cíl je splněný' : `potřeba ${crowns(target.perDayCents ?? 0)} denně (${daysWord(target.daysLeft)} do konce měsíce)`);
+  return [`Cíl na ${monthName(target.month)} ${crowns(target.targetCents)} (${base} +5 %): ${parts.join(' · ')}`];
+}
+
 /** "Říjen: tržba … (+4 % proti září) · Diner … · výplaty v hotovosti … · výdaje z kasy …" */
 export function renderMonth(month: Briefing['month']): string[] {
   if (!month || !month.current.revenueDays) return [];
@@ -1104,7 +1136,10 @@ export function renderMonth(month: Briefing['month']): string[] {
   const full = (part: MonthPart, through: string) => part.revenueDays === Number(through.slice(8));
   const comparable = before.revenueCents > 0 && (before.revenueDays === now.revenueDays || (full(now, month.through) && full(before, before.through)));
   const against = month.complete ? monthName(before.month) : `${shortDate(before.month + '-01')}–${shortDate(before.through)}`;
+  // Last year's same days only when as many of them have data.
+  const year = month.lastYear, againstYear = year && year.revenueCents > 0 && year.revenueDays === now.revenueDays;
   const notes = [comparable ? `${change(now.revenueCents, before.revenueCents).slice(2, -1)} proti ${against}` : '',
+    againstYear ? `${change(now.revenueCents, year!.revenueCents).slice(2, -1)} proti loňsku` : '',
     now.revenueDays < Number(month.through.slice(8)) ? `${daysWord(now.revenueDays)} s daty` : ''].filter(Boolean);
   const parts = [`tržba ${crowns(now.revenueCents)}${notes.length ? ` (${notes.join(', ')})` : ''}`];
   if (now.bySection && now.bySection.length > 1) parts.push(now.bySection.map(row => `${row.label} ${crowns(row.revenueCents)}`).join(' · '));

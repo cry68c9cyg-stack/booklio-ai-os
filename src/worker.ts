@@ -2,6 +2,7 @@ import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
 import {tableChecks} from './checks.ts';
+import {GAP_DAYS, monthBase, monthTarget, shiftSignals, type DataGaps, type MonthTarget, type TargetBase} from './goals.ts';
 import {noteThemes, rankDjs, djOf, summarizeThemes, type DjRank, type ThemeSummary} from './themes.ts';
 import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, type MenuMonth, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, sumMenuInterest, type MenuInterest, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
@@ -409,7 +410,8 @@ export class TenantObject extends DurableObject<Env> {
     if (!config) return null;
     const {briefing} = this.briefingFor(config, date, !this.ready(config, date));
     return {businessDate: date, forecast: briefing.forecast, today: briefing.outlook, events: briefing.events,
-      guests: briefing.guestOutlook, pendingAhead: briefing.pendingAhead};
+      guests: briefing.guestOutlook, pendingAhead: briefing.pendingAhead,
+      target: briefing.target ?? null, shifts: shiftSignals(briefing.guestOutlook?.days), dataGaps: briefing.dataGaps ?? null};
   }
 
   /** MCP: the 7 days up to a day against the 7 before, the month so far and twelve weeks of trends with the forecast's error. */
@@ -1362,6 +1364,7 @@ export class TenantObject extends DurableObject<Env> {
     const payouts = this.reportSums('payout', from, date), expenses = this.reportSums('expense', from, date), discounts = this.discountSums(from, date);
     return {month: date.slice(0, 7), through: date, complete,
       current: this.monthPart(config, from, date), previous: {...this.monthPart(config, previousMonth + '-01', previousThrough), month: previousMonth, through: previousThrough},
+      lastYear: {...this.monthPart(config, yearBack(from), yearBack(date)), month: yearBack(from).slice(0, 7), through: yearBack(date)},
       payouts, payoutsCents: sum(payouts), expenses, expensesCents: sum(expenses), discounts: discounts.rows, discountsCents: discounts.totalCents,
       reviews: this.reviewStats(from, date)};
   }
@@ -1675,6 +1678,38 @@ export class TenantObject extends DurableObject<Env> {
     return days.some(day => day.booked || day.expected) ? {days} : null;
   }
 
+  /**
+   * The target of the month the starting day is in: last year's same month + 5 %, else the month before + 5 %
+   * (each whole month with at most 2 days missing), against the revenue so far and the forecast.
+   */
+  private monthTargetFor(date: string): MonthTarget | null {
+    const today = addDays(date, 1), month = today.slice(0, 7);
+    const revenue = (day: string) => this.dayRevenue(day);
+    const lastYear = `${Number(month.slice(0, 4)) - 1}${month.slice(4)}`, previous = addDays(month + '-01', -1).slice(0, 7);
+    const yearBase = monthBase(lastYear, revenue), previousBase = yearBase ? null : monthBase(previous, revenue);
+    const base: TargetBase | null = yearBase ? {basis: 'last_year', month: lastYear, cents: yearBase.cents}
+      : previousBase ? {basis: 'previous_month', month: previous, cents: previousBase.cents} : null;
+    return base ? monthTarget(today, base, this.forecast(date).month) : null;
+  }
+
+  /**
+   * Days of the 14 before the reported one without revenue, on a weekday that had revenue in one of the 4 weeks before (else it counts as closed),
+   * and days known only from the cash book. Only for this morning's message, and only from the first day OKO1 has data for.
+   */
+  private dataGaps(config: TenantConfig, date: string, now: Date): DataGaps | null {
+    if (date !== reportDate(now, config.timeZone, config.businessDayCutoffHour)) return null;
+    const first = this.sql.exec<{first: string | null}>(`SELECT min(day) AS first FROM (SELECT min(business_date) AS day FROM daily_reports
+      UNION ALL SELECT min(business_date) FROM history UNION ALL SELECT min(business_date) FROM records WHERE type='bill')`).toArray()[0]?.first;
+    if (!first) return null;
+    const from = addDays(date, -GAP_DAYS), to = addDays(date, -1), gaps: DataGaps = {from, to, noRevenue: [], journalOnly: []};
+    for (let day = from < first ? first : from; day <= to; day = addDays(day, 1)) {
+      if (this.dayRevenue(day) === null) {
+        if ([7, 14, 21, 28].some(back => this.dayRevenue(addDays(day, -back)) !== null)) gaps.noRevenue.push(day);
+      } else if (this.report(day) && !this.hasReport(day) && !this.day<Bill>('bill', day).length) gaps.journalOnly.push(day);
+    }
+    return gaps;
+  }
+
   /** Topics of "Report dne" over the 28 days up to a day, counting only days whose text is more than the DJ line. */
   private themeSummary(date: string): ThemeSummary {
     const from = addDays(date, -27);
@@ -1770,6 +1805,7 @@ export class TenantObject extends DurableObject<Env> {
       competitors: weekday(date) === 0 ? this.competitorSummary(date) : null,
       menuByLanguage: weekday(date) === 0 ? sumMenuInterest(this.webDays(addDays(date, -27), date), addDays(date, -27), date) : null,
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
+      lastYearRevenueCents: this.dayRevenue(addDays(date, -364)), target: this.monthTargetFor(date), dataGaps: this.dataGaps(config, date, now),
       tableChecks: tableChecks(this.report(date), this.report(addDays(date, -1))), noteThemes: noteThemes(this.report(date)?.notes),
       themes: weekday(date) === 0 ? this.themeSummary(date) : null, djRanking: weekday(date) === 0 ? this.djRanking(date) : null,
       supplies: this.supplyBriefFor(config, date),
@@ -1913,6 +1949,9 @@ function cookie(request: Request): string | null {
   const value = (request.headers.get('cookie') ?? '').split(/;\s*/).find(part => part.startsWith(SESSION_COOKIE + '='))?.slice(SESSION_COOKIE.length + 1);
   return value && /^[a-f0-9]{64}$/.test(value) ? value : null;
 }
+
+/** The same date a year before (29. 2. → 28. 2.). */
+const yearBack = (date: string): string => { const value = `${Number(date.slice(0, 4)) - 1}${date.slice(4)}`; return date.slice(5) === '02-29' ? value.slice(0, 8) + '28' : value; };
 
 /** Dashboard routes under /d/{tenant}: the page, login by SMS code, logout and the day's data. */
 async function dashboard(request: Request, env: Env, tenant: string, action: string | undefined): Promise<Response> {

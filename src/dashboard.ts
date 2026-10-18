@@ -284,16 +284,19 @@ function monthCard(m) {
 // Guests to expect over the 7 days from today by part of the day: expected, with those booked now in brackets.
 function guestsCard(g) {
   if (!g || !(g.days || []).length) return '';
+  // Same rule as src/goals.ts shiftSignals: 30 % and 15 guests over or under the usual of that part of the day.
+  const shift = p => p.expected === null || p.usual == null ? '' : p.expected - p.usual >= 15 && p.expected >= p.usual * 1.3 ? '<div class="warn">posílit (obvykle ' + p.usual + ')</div>' :
+    p.usual - p.expected >= 15 && p.expected <= p.usual * 0.7 ? '<div class="muted">ubrat (obvykle ' + p.usual + ')</div>' : '';
   const cell = (expected, booked) => '<b>' + (expected === null ? booked : expected) + '</b>' + (expected !== null ? ' <span class="muted">(' + booked + ')</span>' : '');
   const rows = g.days.map(d => '<tr' + (d.weak ? ' class="warn"' : '') + '><td>' + esc(czDate(d.date).slice(0, -5)) + (d.weak ? '<div class="muted">obvykle touhle dobou ' + d.usual + ' potvrzených</div>' : '') + '</td>' +
-    d.parts.map(p => '<td class="n">' + cell(p.expected, p.booked) + '</td>').join('') + '<td class="n">' + cell(d.expected, d.booked) + '</td></tr>').join('');
+    d.parts.map(p => '<td class="n">' + cell(p.expected, p.booked) + shift(p) + '</td>').join('') + '<td class="n">' + cell(d.expected, d.booked) + '</td></tr>').join('');
   return '<div class="card"><h2>Hosté na 7 dní</h2><table><tr><th></th><th class="n">přes den</th><th class="n">večer</th><th class="n">noc</th><th class="n">celkem</th></tr>' + rows + '</table>' +
-    '<div class="muted">tučně kolik hostů čekat, v závorce kolik jich je zatím potvrzeno v rezervacích; kolik ještě přibude nebo ubude stornem, se počítá ze stejného dne v týdnu za posledních 8 týdnů; červeně den, kdy je potvrzeno aspoň o 40 % méně hostů než obvykle touhle dobou' +
+    '<div class="muted">tučně kolik hostů čekat, v závorce kolik jich je zatím potvrzeno v rezervacích; kolik ještě přibude nebo ubude stornem, se počítá ze stejného dne v týdnu za posledních 8 týdnů; červeně den, kdy je potvrzeno aspoň o 40 % méně hostů než obvykle touhle dobou; „posílit“ nebo „ubrat“ u části dne, kde čekáme aspoň o 30 % a 15 hostů víc nebo míň, než kolik jich ten den v týdnu obvykle nakonec měl v rezervacích' +
     (g.noShowGuests ? ' · dnes obvykle nedorazí asi ' + g.noShowGuests : '') + '</div></div>';
 }
 
 // Revenue forecast from the day after the shown one: the next 7 days with bookings and weather, the month, the next month, how well it hit.
-function forecastCard(f) {
+function forecastCard(f, t) {
   if (!f) return '';
   const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.';
   const name = mo => monthNames[Number(mo.slice(5, 7)) - 1];
@@ -313,6 +316,9 @@ function forecastCard(f) {
   rows.push('<tr><td>7 dní od dneška <span class="muted">(' + short(f.week.from) + '–' + short(f.week.to) + ')</span></td><td class="n">' + kc(round(f.week.cents)) + '</td></tr>');
   rows.push('<tr><td>' + big(m.month) + ' celkem' + (m.elapsedDays ? ' <span class="muted">(zatím ' + kc(m.actualCents) + (missing > 0 ? ', ' + missing + (missing === 1 ? ' den' : missing <= 4 ? ' dny' : ' dní') + ' bez dat odhadnuto' : '') + ')</span>' : '') + '</td><td class="n">' + kc(round(m.totalCents)) + '</td></tr>');
   rows.push('<tr><td>' + big(f.nextMonth.month) + '</td><td class="n">' + kc(round(f.nextMonth.cents)) + '</td></tr>');
+  if (t) rows.push('<tr><td>Cíl na ' + esc(name(t.month)) + ' <span class="muted">(' + (t.base.basis === 'last_year' ? 'loni' : esc(name(t.base.month))) + ' ' + kc(t.base.cents) + ' +5 %)</span>' +
+    '<div class="muted">zatím ' + kc(t.actualCents) + ' (' + Math.round(t.actualCents / t.targetCents * 100) + ' %)' + (t.actualCents >= t.targetCents ? ' · cíl je splněný' : ' · potřeba ' + kc(t.perDayCents) + ' denně, ' + t.daysLeft + (t.daysLeft === 1 ? ' den' : t.daysLeft <= 4 ? ' dny' : ' dní') + ' do konce měsíce') + '</div></td>' +
+    '<td class="n' + (t.forecastCents !== null && t.forecastCents < t.targetCents ? ' warn' : '') + '">' + kc(t.targetCents) + (t.forecastCents !== null ? '<div class="muted">odhad ' + signed(pct(t.forecastCents, t.targetCents)) + '</div>' : '') + '</td></tr>');
   const seasons = Object.keys(f.seasonal).sort().map(k => name(k) + ' ×' + String(f.seasonal[k]).replace('.', ','));
   return '<div class="card"><h2>Odhad tržby od ' + short(f.today) + '</h2>' +
     (week ? '<table><tr><th></th><th class="n">odhad</th><th class="n">hosté rez. / obvykle</th><th>počasí</th></tr>' + week + '</table>' : '') +
@@ -495,7 +501,7 @@ function render(data) {
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card" id="todo">' + todoCard(data.todo) + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
-  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast) + weekCard(data.week) + eventsCard(data.eventRanking) + themesCard(data.themes, data.djRanking) + trendsCard(data.trends) + menuInterestCard(data.menuInterest) + monthCard(data.month) + suppliesCard(data.supplies) + menuCard(data.menu) + sourcesCard(data.sources);
+  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast, b.target) + weekCard(data.week) + eventsCard(data.eventRanking) + themesCard(data.themes, data.djRanking) + trendsCard(data.trends) + menuInterestCard(data.menuInterest) + monthCard(data.month) + suppliesCard(data.supplies) + menuCard(data.menu) + sourcesCard(data.sources);
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
   if (r) {

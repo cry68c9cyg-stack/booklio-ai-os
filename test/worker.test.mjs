@@ -1128,7 +1128,9 @@ try {
   assert.deepEqual(await (await call('POST', '/admin/t/closed-venue/history', {rows: historyRows.filter(row => row.businessDate >= '2026-09-16' && new Date(row.businessDate + 'T12:00:00Z').getUTCDay() !== 1)})).json(), {imported: 24});
   const mondaysClosed = (await (await call('GET', '/admin/t/closed-venue/briefing?date=2026-10-13')).json()).briefing.forecast;
   assert.deepEqual([mondaysClosed.week.cents, mondaysClosed.nextMonth.cents], [800000, 21 * 100000 + 4 * 300000 + 5 * 0], 'no Monday revenue; November without last year');
-  assert.match(forecastDay.text, /\nOdhad tržby: zítra \(čt 15\. 10\.\) 1 000 Kč · 7 dní od dneška 9 000 Kč · říjen celkem 41 000 Kč \(zatím 17 000 Kč\) · listopad 57 000 Kč$/);
+  assert.match(forecastDay.text, /\nOdhad tržby: zítra \(čt 15\. 10\.\) 1 000 Kč · 7 dní od dneška 9 000 Kč · říjen celkem 41 000 Kč \(zatím 17 000 Kč\) · listopad 57 000 Kč\n/);
+  // The month's target from last October (31 days of 1 000 Kč) + 5 %, what the 18 days from 14. 10. still need.
+  assert.match(forecastDay.text, /\nCíl na říjen 32 550 Kč \(loni 31 000 Kč \+5 %\): zatím 17 000 Kč \(52 %\) · odhad za měsíc 41 000 Kč \(\+26 % nad cílem\) · potřeba 864 Kč denně \(18 dní do konce měsíce\)$/);
 
   // Weather (MET Norway, identified by User-Agent) and bookings in the forecast; the forecast of a message that went out is kept and checked the next day.
   await mf.dispose();

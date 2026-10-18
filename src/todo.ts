@@ -1,4 +1,5 @@
 import {weekday} from './time.ts';
+import {gapsText, hasGaps, shiftSignals, shiftText} from './goals.ts';
 import {duplicateText, overdueText, riseText} from './supplies.ts';
 import {CASH_DIFFERENCE_CENTS, crowns, menuGapsText, mismatch, mismatchText, noShowAlarm, noShowText, pendingAheadText, themeTodos, reviewDrop, reviewDropText, unusual, weakDays, weakDaysText, webDropText, type Briefing} from './briefing.ts';
 
@@ -24,10 +25,13 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   if (noShowAlarm(briefing.noShows)) warn(`No-show: ${noShowText(briefing.noShows!)}`);
   if (briefing.week && weekday(briefing.businessDate) === 0 && reviewDrop(briefing.week)) warn(`Recenze klesají: ${reviewDropText(briefing.week)}`);
   for (const source of briefing.silent) warn(`${source.name} neposílá data od ${source.since}`);
+  if (hasGaps(briefing.dataGaps)) warn(`Doplnit chybějící data za 14 dní: ${gapsText(briefing.dataGaps!)}`);
   if (briefing.reservations?.today.pending) warn(`Rezervace na dnešek čekající na potvrzení: ${briefing.reservations.today.pending}`);
   if (briefing.pendingAhead) warn(`Na příštích 7 dní ${pendingAheadText(briefing.pendingAhead)}`);
   const weak = weakDays(briefing.guestOutlook);
   if (weak.length) warn(`Slabší výhled, zvaž akci nebo kampaň: ${weakDaysText(weak, briefing.eventRanking)}`);
+  // Shifts to strengthen or thin from the guests to expect (src/goals.ts): for planning, so info.
+  for (const signal of shiftSignals(briefing.guestOutlook?.days)) items.push({level: 'info', text: `Směna: ${shiftText(signal)}`, amountCents: null});
   if (briefing.webDrop) warn(`Web: ${webDropText(briefing.webDrop)}`);
   const reviews = briefing.reviews;
   if (reviews?.low) warn(`Slabé recenze (3 ★ a méně): ${reviews.low}`);

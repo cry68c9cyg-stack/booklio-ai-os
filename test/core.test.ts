@@ -546,7 +546,7 @@ test('guests by part of the day: booked now + the usual later bookings, no-shows
   const parts = (day: number, evening: number, night: number) => ({day, evening, night});
   const past = [{final: parts(10, 40, 20), early: parts(6, 30, 20)}, {final: parts(8, 50, 30), early: parts(8, 30, 10)}, {final: parts(4, 20, 5), early: parts(6, 18, 5)}];
   assert.deepEqual(guestOutlookDay('2026-10-14', parts(5, 40, 30), past), {date: '2026-10-14', booked: 75, expected: 85, usual: 48, weak: false,
-    parts: [{key: 'day', booked: 5, expected: 5}, {key: 'evening', booked: 40, expected: 50}, {key: 'night', booked: 30, expected: 30}]}, 'medians 0, 10, 0; fewer guests later counts as 0');
+    parts: [{key: 'day', booked: 5, expected: 5, usual: 8}, {key: 'evening', booked: 40, expected: 50, usual: 40}, {key: 'night', booked: 30, expected: 30, usual: 20}]}, 'medians 0, 10, 0; fewer guests later counts as 0; usual = median of the final guests');
   assert.deepEqual(guestOutlookDay('2026-10-14', parts(5, 40, 30), past.slice(0, 1)).expected, null, 'one past day is not usual');
   const days = [guestOutlookDay('2026-10-14', parts(5, 40, 30), past), guestOutlookDay('2026-10-15', parts(0, 0, 0), [])];
   const briefing = buildBriefing({businessDate: '2026-10-13', config, bills: [], closings: [], planHistory: [], incomplete: false,
