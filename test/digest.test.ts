@@ -41,3 +41,18 @@ test('Monday: the week\'s money in one line', () => {
   assert.equal(renderDigest('Test · po\nTržba: 1 Kč\n' + 'x'.repeat(700), monday, null).split('\n')[2], 'Týden: výsledek 400 000 Kč (obvykle 500 000 Kč) · jídlo 12 %, nápoje 15 % tržby');
   assert.equal(weekMoneyLine(buildBriefing({businessDate: '2026-10-17', ...empty})), null, 'only on Monday');
 });
+
+test('Priorita podle peněz: warnings by money at stake, the first three with who handles them, as in K vyřízení', () => {
+  const text = ['Test · ne 18. 10. 2026', 'Tržba: 250 000 Kč', ...Array.from({length: 12}, (_, i) => `⚠ Řádek zprávy ${i} ${'x'.repeat(60)}`)].join('\n');
+  const briefing = buildBriefing({businessDate: '2026-10-17', ...empty});
+  const todos = [
+    {level: 'warn' as const, text: 'Report za den chybí.', amountCents: null, owner: 'Matěj'},
+    {level: 'warn' as const, text: 'Faktura po splatnosti: Maso 40 000 Kč', amountCents: 4000000, owner: 'Nancy'},
+    {level: 'warn' as const, text: 'Rozdíl v hotovosti bar: −2 000 Kč', amountCents: -200000, owner: 'Matěj'},
+    {level: 'warn' as const, text: 'Odpovědět na e-mail: Novák', amountCents: null, owner: 'Matěj'},
+    {level: 'info' as const, text: 'Zaplatit: Pivovar 90 000 Kč', amountCents: 9000000, owner: 'Nancy'},
+  ];
+  const lines = renderDigest(text, briefing, link, todos).split('\n');
+  assert.deepEqual(lines.slice(2, 6), ['1. Report za den chybí. – Matěj', '2. Faktura po splatnosti: Maso 40 000 Kč – Nancy', '3. Rozdíl v hotovosti bar: −2 000 Kč – Matěj', '⚠ Odpovědět na e-mail: Novák']);
+  assert.ok(!lines.some(line => line.includes('Řádek zprávy') || line.includes('Pivovar')), 'only the warnings of K vyřízení, not the message lines or info items');
+});
