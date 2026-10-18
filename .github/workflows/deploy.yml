@@ -289,6 +289,16 @@ jobs:
           echo "::add-mask::$k"
           printf '%s' "$k" | npx wrangler secret put PAYMENTS_MAIL_TO_JAMES_DEAN --env production > /dev/null
           echo "Příjemce seznamu faktur k platbě uložen."
+      - name: Kam chodí lidem jejich K vyřízení (STAFF_MAIL, v OKO1 jako STAFF_MAIL_JAMES_DEAN), jen když je vyplněné
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          KEY: ${{ secrets.STAFF_MAIL }}
+        run: |
+          k=$(printf '%s' "$KEY" | tr '\r\n' ';;')
+          if [ -z "$k" ]; then echo "STAFF_MAIL není vyplněné, K vyřízení lidem chodí do schránky info@."; exit 0; fi
+          echo "::add-mask::$k"
+          printf '%s' "$k" | npx wrangler secret put STAFF_MAIL_JAMES_DEAN --env production > /dev/null
+          echo "Adresy pro K vyřízení uloženy."
       - name: První návštěva schránky info@ (jen zda se OKO1 přihlásilo, bez obsahu a počtů)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
