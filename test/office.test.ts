@@ -131,3 +131,17 @@ test('office mails: ABO for checking, the month for the accountant, a draft to a
   const draft = missingDraft({supplier: 'Mlékárna Test', supplierId: null, usualDay: 5, lastDate: '2026-09-04', lastGrossCents: 120000, since: '2026-10-10'}, 'Testovací podnik', '2026-10');
   assert.match(draft.text, /za říjen nám od vás zatím nepřišla faktura/);
 });
+
+test('accountant: the firm address first, then the name; never the venue itself', async () => {
+  const {findAccountant} = await import('../src/accountant.ts');
+  const rows = [
+    {direction: 'in' as const, sender: 'p.dvorak@example.net', senderName: 'Petr Dvořák', recipients: []},
+    {direction: 'out' as const, sender: 'info@podnik.test', senderName: null, recipients: ['ucetni@infotax.test', 'host@example.com']},
+    {direction: 'in' as const, sender: 'p.dvorak@example.net', senderName: 'Petr Dvořák', recipients: []},
+    {direction: 'in' as const, sender: 'dvorak@podnik.test', senderName: 'Dvořák', recipients: []},
+    {direction: 'in' as const, sender: 'host@example.com', senderName: 'Jana Nováková', recipients: []},
+  ];
+  assert.deepEqual(findAccountant(rows, 'podnik.test'), {address: 'ucetni@infotax.test', messages: 1});
+  assert.deepEqual(findAccountant(rows.filter(row => row.direction === 'in'), 'podnik.test'), {address: 'p.dvorak@example.net', messages: 2});
+  assert.equal(findAccountant(rows.slice(4), 'podnik.test'), null);
+});

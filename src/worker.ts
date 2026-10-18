@@ -40,6 +40,7 @@ import {baseSubject, REPEATED_DAYS, repeatedCauses, signature, DRAFT_SCHEMA, dra
 import {asSupplierInvoice, EXTRACTION_SCHEMA, extractionPrompt, invoiceAttachments, isdocSummary, isdocXml, issuedByVenue, looksLikeInvoice, MAIL_HISTORY_FROM,
   MAIL_SOURCE, mailInvoiceId, MAX_DOCUMENT_CHARS, hasPhoto, parseExtraction, parseIsdoc, photosAreDocuments, photoType, withKinds, type ExtractedInvoice} from './mail-invoices.ts';
 import {readDocumentScan} from './vision.ts';
+import {findAccountant, type Accountant} from './accountant.ts';
 import {aboPlan, buildAbo, knownAccounts, parseAbo, symbolFromNumber, type AboFile, type PayTo} from './abo.ts';
 
 export type Env = DeliveryEnv & WebEnv & IuctoEnv & {
@@ -289,7 +290,10 @@ export class TenantObject extends DurableObject<Env> {
         // Sending (the payment list): only a login and logout, no message; null while nobody is to get the list.
         const smtp = paymentRecipients(this.env, tenant).length ? smtpAccount(this.env, tenant) : null;
         const sending = smtp ? await sendMail(smtp, null) : null;
-        return ok({...visit, error, sending: sending ? (sending.ok ? 'ok' : sending.error) : null});
+        // Whether the accountant was found in the mailbox and how (the firm's address or the name), never the address itself.
+        const mailbox = mailAccount(this.env, tenant), accountant = mailbox ? this.accountant(mailbox.user) : null;
+        return ok({...visit, error, sending: sending ? (sending.ok ? 'ok' : sending.error) : null,
+          accountant: mailbox ? (accountant ? (accountant.address.includes('infotax') ? 'firm' : 'name') : 'none') : null});
       }
       if (route === 'admin/tick' && method === 'POST') {
         const at = (body as {at?: unknown})?.at;
@@ -2605,7 +2609,8 @@ export class TenantObject extends DurableObject<Env> {
       const result = await sendMail(account, {from, to: [account.user], subject: mail.subject, text: mail.text, attachments: []}, at);
       return result.ok ? {status: 'sent'} : {status: 'failed', error: result.error};
     });
-    const to = paymentRecipients(this.env, tenant), day = Number(today.slice(8));
+    // Until iÚčto does the accounting, the month goes to the accountant found in the mailbox (not to the payment list's addresses).
+    const accountant = this.accountant(account.user), to = accountant ? [accountant.address] : [], day = Number(today.slice(8));
     const month = addDays(today.slice(0, 8) + '01', -1).slice(0, 7);
     if (to.length && day >= MONTH_EXPORT_DAY && day <= MONTH_EXPORT_DAY + 7) await this.officeMail('month-export', month, at, async () => {
       const files = await this.invoiceFiles(tenant, month);
@@ -2636,7 +2641,19 @@ export class TenantObject extends DurableObject<Env> {
       const value = this.sql.exec<{period: string; at: string; status: string; error: string | null}>('SELECT period, at, status, error FROM office_mails WHERE kind=? ORDER BY period DESC LIMIT 1', kind).toArray()[0];
       return value ? {period: value.period, at: stamp(new Date(value.at), config.timeZone), status: value.status, error: value.error} : null;
     };
-    return {abo: row('abo'), receipts: row('receipts'), monthExport: row('month-export'), aboTemplate: this.aboFiles().length > 0};
+    const account = mailAccount(this.env, this.sql.exec<{tenant: string}>('SELECT tenant FROM mail_visits WHERE id=1').toArray()[0]?.tenant ?? '');
+    return {abo: row('abo'), receipts: row('receipts'), monthExport: row('month-export'), aboTemplate: this.aboFiles().length > 0,
+      accountant: account ? this.accountant(account.user) : null};
+  }
+
+  /** The accountant's address from the messages of the mailbox (src/accountant.ts). */
+  private accountant(mailbox: string): Accountant | null {
+    const like = ['%infotax%', '%dvorak%', '%dvořák%', '%Dvořák%', '%DVOŘÁK%', '%dvořak%', '%dvorák%'];
+    const where = like.map(() => '(sender LIKE ? OR sender_name LIKE ? OR recipients LIKE ?)').join(' OR ');
+    const rows = this.sql.exec<{direction: 'in' | 'out'; sender: string; sender_name: string | null; recipients: string}>(
+      `SELECT direction, sender, sender_name, recipients FROM mail_messages WHERE ${where}`, ...like.flatMap(pattern => [pattern, pattern, pattern])).toArray();
+    return findAccountant(rows.map(row => ({direction: row.direction, sender: row.sender, senderName: row.sender_name, recipients: JSON.parse(row.recipients) as string[]})),
+      mailbox.split('@')[1] ?? '');
   }
 
   /** The last payment list e-mailed (dashboard, sources). */

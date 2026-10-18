@@ -588,7 +588,7 @@ function sourcesCard(s) {
   if (om && s.mail) {
     rows.push('<tr><td>Soubor ABO pro banku (info@)</td><td class="n">' + (om.aboTemplate ? '' : '<span class="warn">chybí dřívější soubor ABO z Dishboardu, stačí ho jednou poslat na info@</span> · ') + omText(om.abo, {sent: 'odesláno', no_template: 'upozornění odesláno', no_accounts: 'žádný účet dodavatele'}) + '</td></tr>');
     rows.push('<tr><td>Připomínka účtenek (poslední den měsíce)</td><td class="n">' + omText(om.receipts, {sent: 'odesláno'}) + '</td></tr>');
-    rows.push('<tr><td>Faktury za měsíc účetní (od 3. dne)</td><td class="n">' + omText(om.monthExport, {sent: 'odesláno', empty: 'žádné faktury'}) + '</td></tr>');
+    rows.push('<tr><td>Faktury za měsíc účetní (od 3. dne)</td><td class="n">' + (om.accountant ? 'na ' + esc(om.accountant.address) + ' · ' : '<span class="warn">adresa účetní v poště nenalezena</span> · ') + omText(om.monthExport, {sent: 'odesláno', empty: 'žádné faktury'}) + '</td></tr>');
   }
   if (s.paymentMail) rows.push('<tr><td>Faktury k platbě e-mailem</td><td class="n">' + esc(czDate(s.paymentMail.payDay)) + ' · ' + (s.paymentMail.sent ? 'odesláno ' + esc(s.paymentMail.at) + ' (' + s.paymentMail.invoices + ' faktur, ' + kc(s.paymentMail.totalCents) + ')' : '<span class="warn">' + esc(s.paymentMail.error || 'neodesláno') + '</span>') + '</td></tr>');
   return '<div class="card"><h2>Zdroje dat</h2>' + (rows.length ? '<table>' + rows.join('') + '</table>' : '<span class="muted">zatím žádný zdroj neposlal data</span>') + '</div>';

@@ -298,7 +298,8 @@ jobs:
           if [ -z "$KEY" ]; then exit 0; fi
           export AI_OS_ADMIN_SECRET=$(printf '%s' oko1-admin | openssl dgst -sha256 -hmac "$CLOUDFLARE_API_TOKEN" -r | cut -d' ' -f1)
           node scripts/admin.ts mail james-dean 2> /dev/null | jq -r '(if .ok then "Schránka: přihlášení v pořádku" + (if .backlog > 0 then ", starší pošta se dál načítá po minutách." else "." end) else "::warning::Schránka: " + (.error // "nenavštívena") end),
-            (if .sending == null then empty elif .sending == "ok" then "Odesílání seznamu faktur k platbě: přihlášení v pořádku." else "::warning::Odesílání: " + .sending end)' \
+            (if .sending == null then empty elif .sending == "ok" then "Odesílání seznamu faktur k platbě: přihlášení v pořádku." else "::warning::Odesílání: " + .sending end),
+            (if .accountant == null then empty elif .accountant == "firm" then "Účetní v poště: nalezena adresa Infotax." elif .accountant == "name" then "Účetní v poště: nalezena adresa se jménem účetního." else "::warning::Účetní v poště: adresa zatím nenalezena." end)' \
             || echo "::warning::Schránku nejde navštívit."
       - name: Zkušební SMS (jen když commit obsahuje [test-sms])
         if: contains(github.event.head_commit.message, '[test-sms]')
