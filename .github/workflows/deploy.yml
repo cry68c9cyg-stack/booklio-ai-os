@@ -13,6 +13,10 @@ on:
       fetch_to:
         description: 'do (YYYY-MM-DD)'
         required: false
+      fetch_replace:
+        description: 'Načíst znovu i dny, které denní report už mají (po opravě souborů)'
+        type: boolean
+        default: false
 
 concurrency: deploy-production
 
@@ -131,15 +135,17 @@ jobs:
           AI_OS_URL: https://oko1.rr7whdyyhf.workers.dev
           FROM: ${{ inputs.fetch_from }}
           TO: ${{ inputs.fetch_to }}
+          REPLACE: ${{ inputs.fetch_replace }}
         run: |
           export AI_OS_ADMIN_SECRET=$(printf '%s' oko1-admin | openssl dgst -sha256 -hmac "$CLOUDFLARE_API_TOKEN" -r | cut -d' ' -f1)
           to=${TO:-$FROM}
           [[ "$FROM" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && "$to" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && ! "$FROM" > "$to" ]] || { echo "::error::Rozsah dnů musí být YYYY-MM-DD a „od“ nejpozději „do“."; exit 1; }
           (( ($(date -u -d "$to" +%s) - $(date -u -d "$FROM" +%s)) / 86400 < 62 )) || { echo "::error::Najednou nejvýš 62 dnů."; exit 1; }
+          keep=--keep; [ "$REPLACE" = true ] && keep=
           d="$FROM"; n=0
           while [[ ! "$d" > "$to" ]] && (( n < 62 )); do
-            # Days that already have the managers' daily report stay as they are; a failed day does not stop the others.
-            node scripts/admin.ts fetch james-dean "$d" --keep | jq -c --arg d "$d" '{den: $d, nalezeno: .found, ponechano: (.kept // false), upozorneni: .warnings}' || echo "::warning::Den $d se nenačetl."
+            # Days that already have the managers' daily report stay as they are (unless replaced); a failed day does not stop the others.
+            node scripts/admin.ts fetch james-dean "$d" $keep | jq -c --arg d "$d" '{den: $d, nalezeno: .found, ponechano: (.kept // false), upozorneni: .warnings}' || echo "::warning::Den $d se nenačetl."
             d=$(date -u -d "$d + 1 day" +%F); n=$((n + 1))
           done
       - name: Spárování rezervačního systému (web James Dean posílá rezervace, jen poprvé)

@@ -3,6 +3,8 @@ import {addDays, localTime, weekday} from './time.ts';
 import {line, total, type DailyReport} from './daily-report.ts';
 import type {NotePoint, NotesAnalysis} from './notes.ts';
 import {weatherText, type WeatherDay} from './weather.ts';
+import type {TableCheck} from './checks.ts';
+import {renderThemes, THEMES, type DjRank, type ThemeSummary} from './themes.ts';
 import {renderSupplies, type SupplyBrief} from './supplies.ts';
 import {pricesOfText, type CompetitorRow, type CompetitorSection, type MenuGap, type PriceExperiment, type PriceFinding, type PriceMismatch} from './menu.ts';
 
@@ -101,6 +103,13 @@ export type Briefing = {
   unusualDiscounts: UnusualDiscount[];
   /** Sources that sent data before but have been silent too long (e.g. the website's hourly push). */
   silent: {name: string; since: string}[];
+  /** What the managers' tables do not add up in (src/checks.ts); a briefing stored before has none. */
+  tableChecks?: TableCheck[];
+  /** Topics of the day's "Report dne" text (src/themes.ts) and, on Monday, how often each came up over 4 weeks. */
+  noteThemes?: string[];
+  themes?: ThemeSummary | null;
+  /** Monday: club revenue by the DJ of the night over 12 weeks. */
+  djRanking?: DjRank[] | null;
   /** Posted costs from accounting (iÚčto) against OKO1's revenue: this month so far, and the month before in its first half. */
   costs: MonthResult | null;
   costsPrevious: MonthResult | null;
@@ -697,6 +706,7 @@ export function buildBriefing(input: {
   /** Confirmed and no-show guests over the 28 days before the reported day. */
   noShowHistory?: {confirmedGuests: number; noShowGuests: number};
   discountHistory?: DiscountHistory;
+  tableChecks?: TableCheck[]; noteThemes?: string[]; themes?: ThemeSummary | null; djRanking?: DjRank[] | null;
 }): Briefing {
   const closed = input.bills.filter(bill => bill.status === 'closed');
   const add = <K>(map: Map<K, number>, key: K, value: number) => map.set(key, (map.get(key) ?? 0) + value);
@@ -785,6 +795,7 @@ export function buildBriefing(input: {
     noShows: noShowRate(input.reservations ?? [], input.noShowHistory ?? null),
     unusualDiscounts: report ? unusualDiscounts(report, input.discountHistory ?? {days: 0, totals: {}}) : [],
     silent: input.silent ?? [],
+    tableChecks: input.tableChecks ?? [], noteThemes: input.noteThemes ?? [], themes: input.themes ?? null, djRanking: input.djRanking ?? null,
     incomplete: input.incomplete,
   };
 }
@@ -830,6 +841,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   else if (briefing.cash.length) lines.push('Hotovost v pokladnách sedí.');
   if (briefing.topItems.length) lines.push('Nejvíc tržeb: ' + briefing.topItems.slice(0, 3).map(row => `${row.name} ${row.quantity}×`).join(', '));
   lines.push(...renderReport(briefing));
+  lines.push(...renderTableChecks(briefing.tableChecks));
   lines.push(...renderBottles(briefing));
   lines.push(...renderReservations(briefing.reservations, briefing.outlook));
   lines.push(...renderEvents(briefing.events));
@@ -848,7 +860,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderMenuWeek(briefing.menuDay, 'Lístek se změnil'), ...(briefing.menuProblems ?? []).map(text => `⚠ ${text}`));
   lines.push(...renderNotes(briefing));
   // The week in a few numbers once a week, in the message about Sunday (Monday morning).
-  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceResults(briefing.priceResults), ...renderPriceCheck(briefing.priceCheck), ...renderMenuGaps(briefing.menuGaps), ...renderMenuInterest(briefing.menuInterest), ...renderMenuByLanguage(briefing.menuByLanguage), ...renderCompetitors(briefing.competitors));
+  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceResults(briefing.priceResults), ...renderPriceCheck(briefing.priceCheck), ...renderMenuGaps(briefing.menuGaps), ...renderMenuInterest(briefing.menuInterest), ...renderMenuByLanguage(briefing.menuByLanguage), ...renderCompetitors(briefing.competitors), ...renderThemes(briefing.themes), ...renderDjs(briefing.djRanking));
   // The month so far once a week, and the whole month in the message about its last day (the 1st in the morning).
   lines.push(...renderMonth(briefing.month));
   // Which events draw guests, once a month in the message about its last day.
@@ -888,6 +900,23 @@ export function renderReport(briefing: Pick<Briefing, 'report' | 'unusualDiscoun
   if (report.paymentMismatches.length) lines.push('⚠ Platby v reportu nesedí s deníkem: ' + report.paymentMismatches.map(mismatch).join(', '));
   if (briefing.unusualDiscounts.length) lines.push('⚠ Neobvyklé slevy: ' + briefing.unusualDiscounts.map(unusual).join(', '));
   return lines;
+}
+
+/** "⚠ Tabulky: Promo v denním reportu 3 200 Kč nesedí se součtem promo slev 4 680 Kč" (one line each, warnings first). */
+export function renderTableChecks(checks: TableCheck[] | undefined): string[] {
+  const ordered = [...(checks ?? [])].sort((a, b) => (a.level === 'warn' ? 0 : 1) - (b.level === 'warn' ? 0 : 1));
+  return ordered.map(check => `${check.level === 'warn' ? '⚠ ' : ''}Tabulky: ${check.text}.`);
+}
+
+/** Topics of the day's text that need someone (for the to-do list), with what to do. */
+export const themeTodos = (keys: string[] | undefined) => THEMES.filter(theme => theme.warn && keys?.includes(theme.key)).map(theme => `Report dne: ${theme.name} – ${theme.tip}`);
+
+/** "DJ za 12 týdnů (klub): Vašek 6 nocí, průměr 220 000 Kč, +8 % proti obvyklému dni · Pavel 4 noci, 180 000 Kč, −6 %" */
+export function renderDjs(ranking: DjRank[] | null | undefined): string[] {
+  if (!ranking || ranking.length < 2) return [];
+  const nights = (count: number) => `${count} ${count === 1 ? 'noc' : count <= 4 ? 'noci' : 'nocí'}`;
+  return [`DJ za 12 týdnů (tržba klubu): ${ranking.map(row => `${row.dj} ${nights(row.nights)}, průměr ${crowns(row.averageCents)}${row.changePermille === null ? ''
+    : `, ${row.changePermille >= 0 ? '+' : '−'}${Math.round(Math.abs(row.changePermille) / 10)} % proti obvyklému dni`}`).join(' · ')}`];
 }
 
 /** "Diner: report 45 200 Kč, deník 44 900 Kč" */

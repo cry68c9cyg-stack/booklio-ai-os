@@ -1,6 +1,8 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
+import {tableChecks} from './checks.ts';
+import {noteThemes, rankDjs, djOf, summarizeThemes, type DjRank, type ThemeSummary} from './themes.ts';
 import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, type MenuMonth, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, sumMenuInterest, type MenuInterest, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
@@ -331,7 +333,8 @@ export class TenantObject extends DurableObject<Env> {
     const stored = this.sql.exec<{text: string}>('SELECT text FROM briefings WHERE business_date=?', day).toArray()[0];
     const todo = this.todoFor(day, briefing);
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
-      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day)});
+      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day),
+      themes: briefing.themes ?? this.themeSummary(day), djRanking: briefing.djRanking ?? this.djRanking(day)});
   }
 
   /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
@@ -1672,6 +1675,41 @@ export class TenantObject extends DurableObject<Env> {
     return days.some(day => day.booked || day.expected) ? {days} : null;
   }
 
+  /** Topics of "Report dne" over the 28 days up to a day, counting only days whose text is more than the DJ line. */
+  private themeSummary(date: string): ThemeSummary {
+    const from = addDays(date, -27);
+    return summarizeThemes(from, date, this.noteDays(from, date).filter(day => day.text).map(day => ({date: day.date, themes: day.themes})));
+  }
+
+  /** Each day's "Report dne" with its topics, its DJ and the club's revenue (report lines), oldest first. */
+  private noteDays(from: string, to: string) {
+    return this.sql.exec<{day: string; notes: string | null; club: number | null}>(`SELECT d.business_date AS day, json_extract(d.json, '$.notes') AS notes,
+        (SELECT SUM(amount_cents) FROM report_lines l WHERE l.business_date = d.business_date AND l.kind = 'revenue_section' AND l.key = 'club') AS club
+      FROM daily_reports d WHERE d.business_date BETWEEN ? AND ? ORDER BY d.business_date`, from, to).toArray().map(row => {
+      const text = (row.notes ?? '').split('\n').filter(entry => !/^DJ:/.test(entry)).join('\n').trim();
+      return {date: row.day, text: text || null, themes: noteThemes(text), dj: djOf(row.notes), clubCents: row.club};
+    });
+  }
+
+  /** Club revenue by the DJ named in the daily report over 12 weeks, each night against the median of the other same weekdays (at least 2). */
+  private djRanking(date: string): DjRank[] {
+    const days = this.noteDays(addDays(date, -83), date).filter(day => day.clubCents !== null);
+    const usual = (day: string) => {
+      const others = days.filter(entry => entry.date !== day && weekday(entry.date) === weekday(day)).map(entry => entry.clubCents!).sort((a, b) => a - b);
+      if (others.length < 2) return null;
+      const middle = Math.floor(others.length / 2);
+      return others.length % 2 ? others[middle] : Math.round((others[middle - 1] + others[middle]) / 2);
+    };
+    return rankDjs(days.filter(day => day.dj).map(day => ({date: day.date, dj: day.dj!, clubCents: day.clubCents!, usualCents: usual(day.date)})));
+  }
+
+  /** MCP: the managers' "Report dne" texts of a stretch of days with their topics and DJ, how often each topic came up, and the DJs' club revenue. */
+  posNotes(from: string, to: string) {
+    const days = this.noteDays(from, to);
+    return {from, to, days: days.map(day => ({...day, analysis: this.notes(day.date)})),
+      themes: summarizeThemes(from, to, days.filter(day => day.text).map(day => ({date: day.date, themes: day.themes}))), djs: this.djRanking(to)};
+  }
+
   private senders(now: Date) {
     return sendersFrom(this.sql.exec<{installation_id: string; last_seen_at: string | null}>('SELECT installation_id, last_seen_at FROM installations').toArray(), now);
   }
@@ -1732,6 +1770,8 @@ export class TenantObject extends DurableObject<Env> {
       competitors: weekday(date) === 0 ? this.competitorSummary(date) : null,
       menuByLanguage: weekday(date) === 0 ? sumMenuInterest(this.webDays(addDays(date, -27), date), addDays(date, -27), date) : null,
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
+      tableChecks: tableChecks(this.report(date), this.report(addDays(date, -1))), noteThemes: noteThemes(this.report(date)?.notes),
+      themes: weekday(date) === 0 ? this.themeSummary(date) : null, djRanking: weekday(date) === 0 ? this.djRanking(date) : null,
       supplies: this.supplyBriefFor(config, date),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};

@@ -29,7 +29,7 @@ Podle popisků v řádcích. **Ověřeno na skutečných souborech za 9. 10. 202
 | `discount` | denní report | Odpisy…, Promo…, Personál, Sleva N %, MŽ, IG, Cosmo…: počet a Kč |
 | `void` | denní report | Storno: počet a Kč |
 | `revenue_section`, `revenue_register`, `payment` | deník (záloha) | řádky „Tržba …“ se sloupci Karty, Zákaznické karty (ZK), Tržba celkem: den → `diner`, noc → `bar`, Club + Texaco → `club`, Texaco → `texaco`; řádek „Tržba hotovost + karty …“ → `cash`, `card`, `customer_card` a `total`/`payments`. Popisek začíná `Deník: ` |
-| `total` | oba | Celkem podle výjezdů → `payments`; „Celkem“ v bloku „Slevy“ / „Slevy a odpisy“ → `discounts`; řádky „Tržba …“ v deníku (hotovostní část tržby, jen pro kontrolu); `cash-difference` = přepočet Celkem − Zůstatek (kladné = v kase je víc) |
+| `total` | oba | Celkem podle výjezdů → `payments`; samotné „Promo“ nad blokem slev → `promo` (promo celkem podle reportu, není to další sleva); „Celkem bez Promo“ → `without-promo`; „Celkem“ v bloku „Slevy“ / „Slevy a odpisy“ → `discounts`; řádky „Tržba …“ v deníku (hotovostní část tržby, jen pro kontrolu); `cash-difference` = přepočet Celkem − Zůstatek (kladné = v kase je víc) |
 | `balance` | deník | Počáteční stav → `register-start`, Zůstatek → `register`, Trezor z přepočtu → `safe` (starší rozvržení: Banka → `bank`, Trezor → `safe`, Pokladna → `register`) |
 | `movement` | deník | Vklad…, Odvod…, Záloha… a každý záporný řádek (peníze do kasy, nejsou to výdaje) |
 | `expense` | deník | ostatní kladné řádky bloku dne (název nákupu a částka) |
@@ -50,7 +50,7 @@ Text řádku „Report dne“ (také „Poznámky“, „Události“) a jméno 
 
 Stejný tvar přijímá `PUT /admin/t/{tenant}/report` (oprava dne, import historie). Neznámá pole se odmítnou (400).
 
-**Historie:** starší dny se načtou z peněžního deníku na OneDrive ručním spuštěním nasazení (Actions → Nasazení OKO1 → Run workflow, pole „od“ a „do“). Excely ani jejich výtahy se do Gitu nedávají, ani šifrovaně. Pro soubory, které už máte u sebe, je `node scripts/admin.ts import <tenant> <složka> <od> <do> [--dry-run]`.
+**Historie:** starší dny se načtou z peněžního deníku na OneDrive ručním spuštěním nasazení (Actions → Nasazení OKO1 → Run workflow, pole „od“ a „do“; dny, které denní report už mají, zůstanou, pokud není zaškrtnuté „Načíst znovu“, např. po opravě souborů). Excely ani jejich výtahy se do Gitu nedávají, ani šifrovaně. Pro soubory, které už máte u sebe, je `node scripts/admin.ts import <tenant> <složka> <od> <do> [--dry-run]`.
 
 ## Ranní zpráva z reportu
 
@@ -59,3 +59,22 @@ Dokud nejsou účty z pokladny, je zdrojem tržby report: tržba a plán, část
 ## „Report dne“
 
 S klíčem `ANTHROPIC_API_KEY` (vlastní klíč OKO1) pošle OKO1 text Claudovi a dostane zpět shrnutí a nejvýš deset bodů: incident, problém, úkol, informace. Před odesláním nahradí jména (slova s velkým písmenem mimo seznam běžných slov), telefony (devět číslic, i s +420) a e-maily značkami `[X1]`, `[telefon]`, `[e-mail]`. Jména se vrátí jen do výsledku uloženého v OKO1. Jména napsaná malým písmenem (přezdívky) se nepoznají; patří to do posouzení DPIA (specifikace §9). Úspěšný rozbor se dělá jednou, změněný text znovu, nepovedený se zkusí v další hodině ranního okna. Do té doby, bez klíče nebo při chybě jde do zprávy zkrácený původní text.
+
+**Témata textu** (src/themes.ts): OKO1 v textu dne (bez řádku DJ) hledá podle slov bez diakritiky témata: zdravotní incident, konflikt nebo bezpečnost, chybí hotovost na výplaty, porucha, chybí personál, došlo zboží, stížnost hosta, položka se neprodává, slabý provoz, plno, akce ve městě. Téma popřené v téže větě („bez problémů a konfliktů“, „žádná stížnost“) se nepočítá. Text se nikam neposílá, ukládá se jen v databázi provozovny s reportem dne. Témata, která potřebují člověka (prvních sedm), jdou do seznamu k vyřízení s tipem, co udělat. V pondělí ranní zpráva ukáže „Report dne za 4 týdny“ (na kolika dnech s textem se které téma objevilo) a „Co řešit“ (nejvýš tři témata, která potřebují člověka nebo se vrátila aspoň dvakrát). Dashboard má kartu „Z textových reportů“ a Claude nástroj `report_dne_texty` (texty, témata, DJ a tržba klubu za období) pro hlubší rozbor.
+
+**DJ a tržba klubu:** jméno z řádku „DJ:“ denního reportu. V pondělí řádek „DJ za 12 týdnů (tržba klubu)“: u DJe aspoň se 2 nocemi průměrná tržba klubu (Club celkem) za noc a medián poměru proti obvyklé tržbě stejného dne v týdnu (medián ostatních nocí téhož dne v týdnu, aspoň 2). Nejde o hodnocení DJe, jen o tržbu nocí, kdy hrál.
+
+## Kontrola tabulek
+
+Každé ráno OKO1 u reportu dne zkontroluje, jestli tabulky sedí (src/checks.ts, MC 18. 10. 2026). Rozdíly pod 1 Kč se nepočítají. Ve zprávě jako „⚠ Tabulky: …“ a v seznamu k vyřízení:
+
+- promo celkem z reportu proti součtu promo slev (Promo Club, Promo Rest. den, …);
+- „Celkem“ slev proti součtu řádků slev;
+- Club celkem proti součtu pokladen a Texaca;
+- Celkem podle výjezdů proti součtu částí a proti hotovosti + kartám;
+- záporná částka ve výčetce hotovosti;
+- počáteční stav deníku proti včerejšímu zůstatku;
+- jako informace bez ⚠: rozdíl výčetky a zůstatku pod 500 Kč (od 500 Kč dál varování „Přepočet pokladny nesedí“) a záporný řádek deníku, který není vklad, odvod, záloha, výběr ani prodej („Olej −1 280 Kč“ je v kase jako příjem, u nákupu má být kladně).
+
+„Bilance.xls“ a „Graf.xlsx“ OKO1 nestahuje: Bilance je starý formát .xls a obojí opakuje čísla z deníku a reportu.
+
