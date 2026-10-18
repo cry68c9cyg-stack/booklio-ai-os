@@ -172,6 +172,7 @@ try {
   await worker.scheduled({scheduledTime: new Date('2026-10-11T05:00:00Z'), cron: '0 5-8 * * *'});
   // The hourly mailbox visit skips a venue with no mailbox set up (no MAIL_ACCOUNT_<VENUE> secret).
   await worker.scheduled({scheduledTime: new Date('2026-10-11T05:30:00Z'), cron: '30 * * * *'});
+  assert.deepEqual(await (await call('POST', '/admin/t/test-venue/mail', {})).json(), {visited: false, error: null});
   // SMS delivery through Twilio: a failed send is retried at the next send hour, then marked delivered.
   await mf.dispose();
   const sms = [];
