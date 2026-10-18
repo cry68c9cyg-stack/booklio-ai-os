@@ -177,7 +177,9 @@ export function createServer(context: ToolContext): McpServer {
   });
   tool('odhad_a_vyhled', 'Odhad tržby a výhled', 'Výhled jako v ranní zprávě za provozní den „datum“ (zpráva je ráno po něm, výhled začíná následujícím dnem): rezervace a plán tržby na následující den, ' +
     'odhad tržby na 7 dní, tento a příští měsíc (po dnech se svátky, počasím MET Norway, akcemi a rezervacemi a s tím, o kolik je zvedly nebo snížily), přesnost odhadu za 28 dní a akce následujícího dne. ' +
-    'Jen pro poslední den (dnešní ranní zprávu) navíc rezervace čekající na potvrzení na dalších 7 dní a hosté, které čekat po částech dne (6–17, 17–22, 22–6 h). ' +
+    'Jen pro poslední den (dnešní ranní zprávu) navíc rezervace čekající na potvrzení na dalších 7 dní a hosté, které čekat po částech dne (6–17, 17–22, 22–6 h) i s tím, kolik jich ten den v týdnu obvykle bylo (usual). ' +
+    'K tomu cíl měsíce (target: loňský stejný měsíc, jinak předchozí, +5 %; zatím, odhad za měsíc, potřeba denně), směny na 7 dní (shifts: posílit nebo ubrat část dne, kde čekáme aspoň o 30 % a 15 hostů víc nebo míň než obvykle) ' +
+    'a díry v datech za 14 dní (dataGaps: dny bez tržby, dny jen z peněžního deníku). ' +
     'Na dnešní výhled tedy datum = včera. Jen počty, částky v haléřích.', {datum: zod.string().describe('Provozní den ranní zprávy RRRR-MM-DD (výhled od dne po něm).')},
   async ({datum}: {datum: string}) => {
     if (!isDate(datum)) return badDate;
