@@ -20,6 +20,7 @@ import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
 import {competitorComparison, competitorSections, COMPETITOR_SHARE, itemProfit, menuChanges, menuGaps, menuItemTax, menuMatrix, menuOverview, nameKey, PART_NAMES, pairSale, priceText, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
+import {renderDigest} from './digest.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
 import {czechHolidays, holidayName} from './holidays.ts';
 import {addDays, businessDate, isDate, localTime, sameClockDaysBefore, weekday, zonedMidnight} from './time.ts';
@@ -48,6 +49,8 @@ import {findAccountant, type Accountant} from './accountant.ts';
 import {aboPlan, buildAbo, knownAccounts, parseAbo, symbolFromNumber, type AboFile, type PayTo} from './abo.ts';
 
 export type Env = DeliveryEnv & WebEnv & IuctoEnv & {
+  /** Where the dashboard is served (https://…, no trailing slash): the morning digest links to it. */
+  PUBLIC_ORIGIN?: string;
   TENANTS: DurableObjectNamespace<TenantObject>; REGISTRY: DurableObjectNamespace<Registry>; ADMIN_SECRET: string; DATA_JURISDICTION?: string;
   /** Grants and tokens of the MCP server's OAuth (docs/web-v1.md). Optional: without it /mcp is not available. */
   OAUTH_KV?: KVNamespace;
@@ -2812,7 +2815,9 @@ export class TenantObject extends DurableObject<Env> {
     const {briefing, text} = this.briefingFor(config, date, decision === 'send-incomplete', at);
     // Without a configured channel the briefing is 'stored' and readable through the admin API.
     // A 'failed' delivery is not counted as sent, so the next send hour (until the last one) tries again.
-    const status = await deliver(this.env, config.recipients, text);
+    // The whole message is stored and on the dashboard; what goes out is its digest, which fits an SMS (src/digest.ts).
+    const origin = this.env.PUBLIC_ORIGIN?.replace(/\/+$/, '');
+    const status = await deliver(this.env, config.recipients, renderDigest(text, briefing, origin ? `${origin}/d/${tenant}` : null));
     // What a message that went out forecast is kept, so tomorrow's message compares the day with it; a failed one is not (the retry counts).
     for (const [horizon, day] of status === 'failed' ? [] : (briefing.forecast?.days ?? []).entries()) {
       if (day.cents !== null) this.sql.exec('INSERT OR IGNORE INTO forecast_log VALUES(?,?,?,?)', day.date, horizon, day.cents, date);
