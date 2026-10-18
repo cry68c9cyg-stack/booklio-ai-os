@@ -97,3 +97,41 @@ export function renderNights(summary: NightSummary | null | undefined): string[]
   const djs = summary.byDj.slice(0, 3).map(row => `${row.dj} ${kc(row.resultCents)} (${nights(row.nights)})`).join(', ');
   return [`Výsledek noci za 4 týdny (tržba klubu − výplaty noci, průměr): ${days}${djs ? ` · DJ: ${djs}` : ''}`];
 }
+
+/**
+ * The till beyond the day's sales (batch „Kasa pod kontrolou“, MC „jo“ 18. 10. 2026): the IOUs in the evening count („Dluhy“),
+ * the "Vklad JD" rows of the cash book, and revenue rows whose cash part is negative (more on cards than sold: most likely
+ * card tips paid out in cash).
+ */
+export type TillDay = {date: string; debtsCents: number | null; depositsCents: number; tips: {label: string; amountCents: number}[]; tipsCents: number};
+export function tillDay(report: DailyReport | null): TillDay | null {
+  if (!report) return null;
+  const debts = line(report, 'cash_count', 'dluhy');
+  const deposits = report.lines.filter(entry => entry.kind === 'movement' && /^vklad/.test(plain(entry.label)));
+  // The cash part of each revenue row of the journal ("Tržba Club" …), not the row of the whole day.
+  const tips = report.lines.filter(entry => entry.kind === 'total' && entry.amountCents < 0 && /^trzba\b/.test(plain(entry.label)) && !/hotovost|celkem/.test(plain(entry.label)))
+    .map(entry => ({label: entry.label.replace(/^tržba\s+/i, '').trim(), amountCents: -entry.amountCents}));
+  if (!debts && !deposits.length && !tips.length) return null;
+  return {date: report.businessDate, debtsCents: debts ? debts.amountCents : null, depositsCents: deposits.reduce((sum, entry) => sum + Math.abs(entry.amountCents), 0),
+    tips, tipsCents: tips.reduce((sum, entry) => sum + entry.amountCents, 0)};
+}
+
+/** The day with the IOUs a week before and the month's deposits and negative cash so far. */
+export type Till = {day: TillDay; debtsWeekAgoCents: number | null; month: string; monthDepositsCents: number; monthTipsCents: number};
+/** IOUs worth a warning: at least 2 000 Kč and a quarter more than a week before. */
+export const debtsRising = (till: Till | null | undefined) => !!till && till.day.debtsCents !== null && till.debtsWeekAgoCents !== null &&
+  till.day.debtsCents - till.debtsWeekAgoCents >= 200000 && till.day.debtsCents >= till.debtsWeekAgoCents * 1.25;
+export const debtsText = (till: Till) => `${kc(till.day.debtsCents!)}, před týdnem ${kc(till.debtsWeekAgoCents!)}`;
+
+const MONTHS = ['leden', 'únor', 'březen', 'duben', 'květen', 'červen', 'červenec', 'srpen', 'září', 'říjen', 'listopad', 'prosinec'];
+/** "Kasa: Vklad JD 70 000 Kč (říjen zatím 149 000 Kč) · záporná hotovost v tržbě 12 405 Kč, nejspíš spropitné z karet (Club 4 685 Kč) · dluhy ve výčetce 7 621 Kč (před týdnem 9 472 Kč)" */
+export function renderTill(till: Till | null | undefined): string[] {
+  if (!till) return [];
+  const month = MONTHS[Number(till.month.slice(5)) - 1], day = till.day, parts: string[] = [];
+  if (day.depositsCents) parts.push(`Vklad JD ${kc(day.depositsCents)} (${month} zatím ${kc(till.monthDepositsCents)})`);
+  if (day.tipsCents) parts.push(`záporná hotovost v tržbě ${kc(day.tipsCents)}, nejspíš spropitné z karet (${day.tips.map(tip => `${tip.label} ${kc(tip.amountCents)}`).join(', ')}; ${month} zatím ${kc(till.monthTipsCents)})`);
+  if (day.debtsCents) parts.push(`dluhy ve výčetce ${kc(day.debtsCents)}${till.debtsWeekAgoCents !== null ? ` (před týdnem ${kc(till.debtsWeekAgoCents)})` : ''}`);
+  const lines = parts.length ? [`Kasa: ${parts.join(' · ')}`] : [];
+  if (debtsRising(till)) lines.push(`⚠ Dluhy ve výčetce rostou: ${debtsText(till)}; zjisti, kdo dluží a kdy vrátí.`);
+  return lines;
+}

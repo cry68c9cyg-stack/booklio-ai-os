@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {buildBriefing, renderBriefing} from '../src/briefing.ts';
-import {cashDay, cashNeed, nightSummary, payoutAlarm, renderNights, type CashDay, type Night} from '../src/cash.ts';
+import {cashDay, cashNeed, debtsRising, nightSummary, payoutAlarm, renderNights, renderTill, tillDay, type CashDay, type Night} from '../src/cash.ts';
 import {extractCashBook, type DailyReport, type ReportLine} from '../src/daily-report.ts';
 import {todoList} from '../src/todo.ts';
 import type {TenantConfig} from '../src/validate.ts';
@@ -60,4 +60,22 @@ test('nights: the club revenue minus the night staff, averages by weekday and DJ
   assert.deepEqual(summary.byDj.map(row => [row.dj, row.nights, row.resultCents]), [['Alfa', 2, 9000000], ['Beta', 2, 4000000]], 'Gama has one night');
   assert.deepEqual(renderNights(summary), ['Výsledek noci za 4 týdny (tržba klubu − výplaty noci, průměr): nejlepší pá 80 000 Kč, nejslabší čt 25 000 Kč · DJ: Alfa 90 000 Kč (2 noci), Beta 40 000 Kč (2 noci)']);
   assert.deepEqual(renderNights(nightSummary('2026-09-21', '2026-10-18', [])), []);
+});
+
+test('till: IOUs against a week before, Vklad JD and negative cash in the revenue rows with the month so far', async () => {
+  const synthetic = extractCashBook(await readXlsx(await xlsx(journalSheets())), '2026-10-09')!;
+  assert.deepEqual(tillDay(report('2026-10-09', synthetic)), {date: '2026-10-09', debtsCents: null, depositsCents: 5000000, tips: [], tipsCents: 0}, 'Vklad JD from the synthetic cash book');
+  const entry = (kind: ReportLine['kind'], key: string, label: string, crowns: number): ReportLine => ({kind, key, label, count: null, amountCents: crowns * 100});
+  const day = tillDay(report('2026-10-16', [entry('cash_count', 'dluhy', 'Dluhy', 12000), entry('movement', 'vklad-do-jd', 'Vklad do JD', -70000),
+    entry('total', 'trzba-club', 'Tržba Club', -4685), entry('total', 'trzba-restaurace-den', 'Tržba  Restaurace den', 8362), entry('total', 'trzba-hotovost-karty-celkem-zk', 'Tržba hotovost + karty celkem + ZK', -100)]))!;
+  assert.deepEqual([day.debtsCents, day.depositsCents, day.tips, day.tipsCents], [1200000, 7000000, [{label: 'Club', amountCents: 468500}], 468500], 'the row of the whole day is not a tip');
+  const till = {day, debtsWeekAgoCents: 900000, month: '2026-10', monthDepositsCents: 14900000, monthTipsCents: 2000000};
+  assert.equal(debtsRising(till), true, '+3 000 Kč and +33 %');
+  assert.equal(debtsRising({...till, debtsWeekAgoCents: 1000000}), false, '+2 000 Kč is only +20 %');
+  assert.deepEqual(renderTill(till), ['Kasa: Vklad JD 70 000 Kč (říjen zatím 149 000 Kč) · záporná hotovost v tržbě 4 685 Kč, nejspíš spropitné z karet (Club 4 685 Kč; říjen zatím 20 000 Kč) · dluhy ve výčetce 12 000 Kč (před týdnem 9 000 Kč)',
+    '⚠ Dluhy ve výčetce rostou: 12 000 Kč, před týdnem 9 000 Kč; zjisti, kdo dluží a kdy vrátí.']);
+  const briefing = buildBriefing({businessDate: '2026-10-16', ...empty, till});
+  assert.match(renderBriefing('Test', briefing), /\nKasa: Vklad JD 70 000 Kč/);
+  assert.ok(todoList(briefing).some(item => item.level === 'warn' && item.text === 'Dluhy ve výčetce rostou: 12 000 Kč, před týdnem 9 000 Kč'));
+  assert.equal(tillDay(report('2026-10-16', [])), null);
 });

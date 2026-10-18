@@ -1,5 +1,5 @@
 import {weekday} from './time.ts';
-import {cashNeedText, payoutAlarmText} from './cash.ts';
+import {cashNeedText, debtsRising, debtsText, payoutAlarmText} from './cash.ts';
 import {waitingText} from './mail-insights.ts';
 import {gapsText, hasGaps, shiftSignals, shiftText} from './goals.ts';
 import {conflictText, dueText, duplicateText, paymentText, foodCostText, overdueText, riseText, unreadableText, unusualText} from './supplies.ts';
@@ -24,6 +24,7 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   for (const check of briefing.tableChecks ?? []) items.push({level: check.level, text: `Tabulky: ${check.text}`, amountCents: check.amountCents});
   for (const text of themeTodos(briefing.noteThemes)) items.push({level: 'info', text, amountCents: null});
   if (briefing.cashNeed) warn(`Hotovost na dnešek nestačí: ${cashNeedText(briefing.cashNeed)}`, -briefing.cashNeed.shortCents);
+  if (debtsRising(briefing.till)) warn(`Dluhy ve výčetce rostou: ${debtsText(briefing.till!)}`, briefing.till!.day.debtsCents! - briefing.till!.debtsWeekAgoCents!);
   if (briefing.payoutAlarm) warn(`Výplaty v hotovosti nad obvyklým: ${payoutAlarmText(briefing.payoutAlarm)}`, briefing.payoutAlarm.payoutsCents - briefing.payoutAlarm.usualCents);
   for (const row of briefing.unusualDiscounts) warn(`Neobvyklá sleva: ${unusual(row)}`, row.amountCents - row.usualCents);
   if (noShowAlarm(briefing.noShows)) warn(`No-show: ${noShowText(briefing.noShows!)}`);
