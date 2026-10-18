@@ -6,7 +6,7 @@ import {weatherText, type WeatherDay} from './weather.ts';
 import type {TableCheck} from './checks.ts';
 import {renderThemes, THEMES, type DjRank, type ThemeSummary} from './themes.ts';
 import {cashNeedText, payoutAlarmText, renderNights, renderTill, type CashNeed, type NightSummary, type PayoutAlarm, type Till} from './cash.ts';
-import {renderCashForecast, renderCashShare, renderDeposits, type CashForecast, type CashShare} from './cashflow.ts';
+import {movementMonthText, renderCashForecast, renderCashShare, renderDeposits, type CashForecast, type CashShare, type MovementSum} from './cashflow.ts';
 import {cashDiffRepeatText, renderVoidWeek, voidAndDiffText, voidMonthText, type VoidAndDiff, type VoidSum} from './voids.ts';
 import {promoMonthText, promoStreakText, renderPromoWeek, type PromoStreak, type PromoSum, type PromoWeek} from './promo.ts';
 import {nightShareText, renderNightShares, renderStaffGaps, renderWageDay, staffGapToday, wageSumText, type NightShare, type StaffGaps, type WageDay, type WageSum} from './wages.ts';
@@ -184,6 +184,8 @@ export type Month = {
   wages?: WageSum;
   promo?: PromoSum;
   voids?: VoidSum;
+  /** Vklad JD, cash from the bank and cash taken to an account (src/cashflow.ts). */
+  movements?: MovementSum;
   reviews?: ReviewStats;
 };
 /** Discounts by type summed over the same weekday of the previous weeks that have a managers' report (`days` of them). */
@@ -1211,6 +1213,7 @@ export function renderMonth(month: Briefing['month']): string[] {
   if (month.discountsCents) parts.push(`slevy ${crowns(month.discountsCents)}`);
   if (promoMonthText(month.promo)) parts.push(promoMonthText(month.promo));
   if (voidMonthText(month.voids)) parts.push(voidMonthText(month.voids));
+  if (movementMonthText(month.movements)) parts.push(movementMonthText(month.movements));
   if (month.staffMeals?.cents) parts.push(staffMealsText(month.staffMeals));
   if (month.reviews?.reviews) parts.push(`recenze ${month.reviews.reviews}${month.reviews.starsTenths !== null ? `, průměr ${stars(month.reviews.starsTenths)}` : ''}`);
   return [`${title}${month.complete ? ' celkem' : ` do ${shortDate(month.through)}`}: ${parts.join(' · ')}`];

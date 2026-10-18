@@ -259,9 +259,11 @@ function cashFlowCard(c) {
   let html = '<div class="card"><h2>Hotovost na 7 dní</h2>';
   const f = c.forecast;
   if (f) {
-    html += '<p>V kase a trezoru <b>' + kc(f.startCents) + '</b>' + (f.depositCents ? ' · vklad JD bude potřeba asi <b>' + kc(f.depositCents) + '</b>' : ' · vystačí bez vkladu') + '</p>';
+    html += '<p>V kase a trezoru <b>' + kc(f.startCents) + '</b>' + (f.depositCents ? ' · vklad JD bude potřeba asi <b>' + kc(f.depositCents) + '</b>' : ' · vystačí bez vkladu' + (f.surplusCents >= 5000000 ? ', navíc asi <b>' + kc(f.surplusCents) + '</b> může na účet' : '')) + '</p>';
     html += '<table><tr><th></th><th class="n">přijde</th><th class="n">odejde</th><th class="n">vklad JD</th><th class="n">zůstane</th></tr>' + f.days.map(d => '<tr><td>' + day(d.date) + '</td><td class="n">' + kc(d.inCents) + '</td><td class="n">' + kc(d.outCents) + '</td><td class="n' + (d.depositCents ? ' warn' : '') + '">' + (d.depositCents ? kc(d.depositCents) : '–') + '</td><td class="n muted">' + kc(d.balanceCents) + '</td></tr>').join('') + '</table>';
   }
+  const m = c.movements;
+  if (m && (m.depositsCents || m.withdrawalsCents || m.outCents)) html += '<p>Za 30 dní: vklady JD <b>' + kc(m.depositsCents) + '</b> · výběry z banky ' + kc(m.withdrawalsCents) + ' · na účet ' + kc(m.outCents) + '</p>';
   const s = c.cashShare;
   if (s.days && s.revenueCents > 0) html += '<p>Hotovost z tržeb za 30 dní: ' + kc(s.inCents) + ' = ' + String(Math.round(s.inCents / s.revenueCents * 1000) / 10).replace('.', ',') + ' % celkové tržby (' + s.days + ' dní)</p>';
   return html + '<div class="muted">z peněžního deníku: přijde = hotovost z tržeb, odejde = výplaty a výdaje z kasy (průměr stejného dne v týdnu za 4 týdny); vklad JD zaokrouhlený nahoru na tisíce, aby hotovost a trezor neklesly pod nulu</div></div>';
@@ -595,7 +597,7 @@ function render(data) {
     (data.balances.register !== undefined ? '<div>kasa podle deníku <b>' + kc(data.balances.register) + '</b></div>' : '') +
     (b.report.cashDifferenceCents !== null && b.report.cashDifferenceCents !== undefined ? '<div>rozdíl přepočtu <b class="' + (Math.abs(b.report.cashDifferenceCents) >= 50000 ? 'warn' : '') + '">' + (b.report.cashDifferenceCents > 0 ? '+' : '') + kc(b.report.cashDifferenceCents) + '</b></div>' : '') +
     (data.balances.bank !== undefined ? '<div>banka <b>' + kc(data.balances.bank) + '</b></div>' : '') + '<div>výdaje z kasy <b>' + kc(b.report.expensesCents) + '</b></div><div>výplaty v hotovosti <b>' + kc(b.report.payoutsCents) + '</b></div>' +
-    (b.till && b.till.day.depositsCents ? '<div>Vklad JD <b>' + kc(b.till.day.depositsCents) + '</b> <span class="muted">(měsíc ' + kc(b.till.monthDepositsCents) + ')</span></div>' : '') +
+    (b.till && b.till.day.depositsCents ? '<div>Vklad JD <b>' + kc(b.till.day.depositsCents) + '</b> <span class="muted">(' + (b.till.depositForecastCents != null ? 'odhad ' + kc(b.till.depositForecastCents) + '; ' : '') + 'měsíc ' + kc(b.till.monthDepositsCents) + ')</span></div>' : '') +
     (b.till && b.till.day.tipsCents ? '<div>záporná hotovost v tržbě <b>' + kc(b.till.day.tipsCents) + '</b> <span class="muted">(nejspíš spropitné z karet; ' + b.till.day.tips.map(t => esc(t.label) + ' ' + kc(t.amountCents)).join(', ') + '; měsíc ' + kc(b.till.monthTipsCents) + ')</span></div>' : '') +
     (b.till && b.till.day.debtsCents ? '<div>dluhy ve výčetce <b class="' + (b.till.debtsWeekAgoCents !== null && b.till.day.debtsCents - b.till.debtsWeekAgoCents >= 200000 && b.till.day.debtsCents >= b.till.debtsWeekAgoCents * 1.25 ? 'warn' : '') + '">' + kc(b.till.day.debtsCents) + '</b>' + (b.till.debtsWeekAgoCents !== null ? ' <span class="muted">(před týdnem ' + kc(b.till.debtsWeekAgoCents) + ')</span>' : '') + '</div>' : '') +
     (data.foreignWeek && data.foreignWeek.cents ? '<div>cizí měny za 7 dní <b>+' + kc(data.foreignWeek.cents) + '</b>' + (data.foreignWeek.previousCents !== null ? ' <span class="muted">(týden předtím ' + kc(data.foreignWeek.previousCents) + ')</span>' : '') + '</div>' : '') + '</div>');

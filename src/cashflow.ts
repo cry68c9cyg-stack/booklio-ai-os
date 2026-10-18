@@ -17,6 +17,8 @@ const shortDate = (date: string) => `${Number(date.slice(8))}. ${Number(date.sli
 /** Basis points (hundredths of a percent) as "2,1 %", to one decimal. */
 const percent = (basisPoints: number) => `${String(Math.round(basisPoints / 10) / 10).replace('.', ',')} %`;
 const WEEKDAYS_SHORT = ['ne', 'po', 'út', 'st', 'čt', 'pá', 'so'];
+/** Cash over the week's need from this amount is worth taking to the account. */
+export const SURPLUS_CENTS = 5000000;
 /** A deposit is rounded up to whole thousands: nobody brings 38 417 Kč. */
 const DEPOSIT_STEP_CENTS = 100000;
 
@@ -40,7 +42,9 @@ export function cashFlowDay(report: DailyReport | null): CashFlowDay | null {
 
 /** One day ahead: what usually comes in and goes out on its weekday, the Vklad JD it takes so the cash never goes below zero, and the cash left. */
 export type ForecastDay = {date: string; inCents: number; outCents: number; depositCents: number; balanceCents: number};
-export type CashForecast = {from: string; startCents: number; days: ForecastDay[]; inCents: number; outCents: number; depositCents: number; firstShort: string | null};
+export type CashForecast = {from: string; startCents: number; days: ForecastDay[]; inCents: number; outCents: number; depositCents: number; firstShort: string | null;
+  /** The lowest cash of the week when no deposit is needed, down to whole thousands: what can go to the account. 0 = none. */
+  surplusCents: number};
 /**
  * The 7 days after `date` from the cash counted on its evening: each day gets the average of the same weekday of the 4 weeks
  * before it (at least 2 days of the cash book each, all of them on or before `date`). The average, not the median: the big
@@ -65,7 +69,8 @@ export function cashForecast(date: string, days: (CashFlowDay | null)[]): CashFo
   }
   const sum = (pick: (day: ForecastDay) => number) => ahead.reduce((total, day) => total + pick(day), 0);
   return {from: date, startCents: last.cashCents, days: ahead, inCents: sum(day => day.inCents), outCents: sum(day => day.outCents), depositCents: sum(day => day.depositCents),
-    firstShort: ahead.find(day => day.depositCents > 0)?.date ?? null};
+    firstShort: ahead.find(day => day.depositCents > 0)?.date ?? null,
+    surplusCents: Math.max(0, Math.floor(Math.min(last.cashCents, ...ahead.map(day => day.balanceCents)) / DEPOSIT_STEP_CENTS) * DEPOSIT_STEP_CENTS)};
 }
 const dayName = (date: string) => `${WEEKDAYS_SHORT[weekday(date)]} ${shortDate(date)}`;
 
@@ -74,7 +79,7 @@ export function cashForecastText(forecast: CashForecast): string {
   const end = forecast.days[forecast.days.length - 1];
   const head = `v kase a trezoru ${kc(forecast.startCents)}; do ${dayName(end.date)} obvykle odejde asi ${approx(forecast.outCents)} na výplaty a výdaje, z tržeb přijde v hotovosti asi ${approx(forecast.inCents)}`;
   return forecast.firstShort ? `${head}; vklad JD bude potřeba asi ${kc(forecast.depositCents)}, poprvé ${dayName(forecast.firstShort)}`
-    : `${head}; vystačí, na konci asi ${approx(end.balanceCents)}`;
+    : `${head}; vystačí, na konci asi ${approx(end.balanceCents)}${forecast.surplusCents >= SURPLUS_CENTS ? `; navíc je asi ${kc(forecast.surplusCents)}, ty mohou na účet` : ''}`;
 }
 /** Every morning: "Hotovost na 7 dní: …" */
 export const renderCashForecast = (forecast: CashForecast | null | undefined) => forecast ? [`Hotovost na 7 dní: ${cashForecastText(forecast)}`] : [];
@@ -101,4 +106,36 @@ export function renderCashShare(share: {week: CashShare; before: CashShare} | nu
   const now = shareOf(share.week), then = shareOf(share.before);
   if (now === null) return [];
   return [`Hotovost z tržeb za týden: ${kc(share.week.inCents)} = ${percent(now)} celkové tržby${then !== null ? ` (4 týdny předtím ${percent(then)})` : ''}`];
+}
+
+/**
+ * The cash moved in and out of the till beside the sales, by the cash book's movements (negative = brought in):
+ * Vklad JD, cash withdrawn from the bank („Výběr hotovosti“), cash taken to an account („Odvod“, „Vklad MŽ účet“) and other cash
+ * brought in (used oil, …).
+ */
+export type MovementDay = {date: string; depositsCents: number; withdrawalsCents: number; outCents: number; otherInCents: number};
+export function movementDay(report: DailyReport | null): MovementDay | null {
+  const rows = report?.lines.filter(entry => entry.kind === 'movement' && entry.amountCents !== 0) ?? [];
+  if (!report || !rows.length) return null;
+  const day: MovementDay = {date: report.businessDate, depositsCents: 0, withdrawalsCents: 0, outCents: 0, otherInCents: 0};
+  for (const entry of rows) {
+    const text = plain(entry.label), cents = Math.abs(entry.amountCents);
+    if (entry.amountCents > 0) day.outCents += cents;
+    else if (/^vyber/.test(text)) day.withdrawalsCents += cents;
+    else if (/^vklad/.test(text) && !/ucet/.test(text)) day.depositsCents += cents;
+    else day.otherInCents += cents;
+  }
+  return day;
+}
+export type MovementSum = Omit<MovementDay, 'date'> & {days: number};
+export function sumMovements(days: (MovementDay | null)[]): MovementSum {
+  const list = days.filter((day): day is MovementDay => day !== null);
+  const sum = (pick: (day: MovementDay) => number) => list.reduce((total, day) => total + pick(day), 0);
+  return {days: list.length, depositsCents: sum(day => day.depositsCents), withdrawalsCents: sum(day => day.withdrawalsCents), outCents: sum(day => day.outCents), otherInCents: sum(day => day.otherInCents)};
+}
+/** Month line: "vklady JD 704 000 Kč · výběry z banky 110 000 Kč · na účet 30 000 Kč" */
+export function movementMonthText(sum: MovementSum | null | undefined): string {
+  if (!sum) return '';
+  return [sum.depositsCents ? `vklady JD ${kc(sum.depositsCents)}` : '', sum.withdrawalsCents ? `výběry z banky ${kc(sum.withdrawalsCents)}` : '', sum.outCents ? `na účet ${kc(sum.outCents)}` : '']
+    .filter(Boolean).join(' · ');
 }
