@@ -5,7 +5,7 @@ import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, r
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
-import {todoList} from '../src/todo.ts';
+import {ownerOf, todoList} from '../src/todo.ts';
 import {counted, drinkMargins, dueSoon, duplicateInvoices, foodCostAlert, litresPerUnit, monthOverMonth, overdueInvoices, priceRises, renderSupplies, risesBySupplier, supplyBrief, supplySummary, unitPrice, unusualPurchases} from '../src/supplies.ts';
 import {weatherDays, weatherText} from '../src/weather.ts';
 import {competitorComparison, competitorSections, itemProfit, menuGaps, menuItemTax, menuMatrix, nameKey, pairSale, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, volumeOf, type ItemSale} from '../src/menu.ts';
@@ -760,6 +760,9 @@ test('supplier invoices: costs by kind, food cost, price rises, overdue invoices
   const todo = todoList({...buildBriefing({businessDate: '2026-10-07', config, bills: [], closings: [], planHistory: [], incomplete: false}), supplies: brief});
   assert.deepEqual(todo.filter(row => /Zdražení|splatnosti/.test(row.text)).map(row => [row.text.slice(0, 30), row.amountCents]),
     [['Faktura po splatnosti: Makro, ', 99000], ['Zdražení: limety / ks (Makro) ', 2000]]);
+  assert.ok(todo.filter(row => /Zdražení|splatnosti/.test(row.text)).every(row => row.owner === 'Nancy'), 'invoices are Nancy\'s');
+  assert.equal(ownerOf('Rozdíl v hotovosti bar: −2 000 Kč'), 'Matěj');
+  assert.equal(ownerOf('… a další 3'), null);
 });
 
 test('profit and margins: duplicates, rises per supplier, litres from names, drink margins and the Monday lines', () => {

@@ -17,7 +17,7 @@ import {GAP_DAYS, monthBase, monthTarget, shiftSignals, type DataGaps, type Mont
 import {noteThemes, rankDjs, djOf, summarizeThemes, type DjRank, type ThemeSummary} from './themes.ts';
 import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, type MenuMonth, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, sumMenuInterest, type MenuInterest, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
-import {todoList} from './todo.ts';
+import {sortedTodos, todoList} from './todo.ts';
 import {competitorComparison, competitorSections, COMPETITOR_SHARE, itemProfit, menuChanges, menuGaps, menuItemTax, menuMatrix, menuOverview, nameKey, PART_NAMES, pairSale, priceText, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {renderDigest} from './digest.ts';
@@ -2817,7 +2817,7 @@ export class TenantObject extends DurableObject<Env> {
     // A 'failed' delivery is not counted as sent, so the next send hour (until the last one) tries again.
     // The whole message is stored and on the dashboard; what goes out is its digest, which fits an SMS (src/digest.ts).
     const origin = this.env.PUBLIC_ORIGIN?.replace(/\/+$/, '');
-    const status = await deliver(this.env, config.recipients, renderDigest(text, briefing, origin ? `${origin}/d/${tenant}` : null));
+    const status = await deliver(this.env, config.recipients, renderDigest(text, briefing, origin ? `${origin}/d/${tenant}` : null, sortedTodos(briefing, this.report(date)?.warnings ?? [])));
     // What a message that went out forecast is kept, so tomorrow's message compares the day with it; a failed one is not (the retry counts).
     for (const [horizon, day] of status === 'failed' ? [] : (briefing.forecast?.days ?? []).entries()) {
       if (day.cents !== null) this.sql.exec('INSERT OR IGNORE INTO forecast_log VALUES(?,?,?,?)', day.date, horizon, day.cents, date);

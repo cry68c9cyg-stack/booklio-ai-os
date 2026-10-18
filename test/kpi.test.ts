@@ -44,7 +44,7 @@ test('Monday: the values in one line and what got worse with who and what to do'
   const briefing = buildBriefing({businessDate: '2026-10-18', ...empty});
   briefing.kpi = input;
   assert.match(renderBriefing('Test', briefing), /\nKPI týdne \(v závorce/);
-  assert.ok(todoList(briefing).some(item => item.text === 'KPI horší: Storna z tržby 0,5 % (předtím 0,3 %) – Matěj: projít storna po dnech a kdo je dělal'));
+  assert.ok(todoList(briefing).some(item => item.text === 'KPI horší: Storna z tržby 0,5 % (předtím 0,3 %) – projít storna po dnech a kdo je dělal' && item.owner === 'Matěj'));
   const good = {...input, week: part(7, 1700000, 5000, 30000, 300, 150000, 400, 20, 7, 900), overdue: {count: 0, grossCents: 0}};
   assert.equal(renderKpi(good).length, 1, 'nothing got worse');
   const saturday = buildBriefing({businessDate: '2026-10-17', ...empty});

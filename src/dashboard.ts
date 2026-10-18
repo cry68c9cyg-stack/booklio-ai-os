@@ -150,7 +150,7 @@ function todoCard(items) {
   todoItems = items;
   const open = items.filter(t => t.key && !t.done).length, total = items.filter(t => t.key).length;
   const row = t => '<li class="todo' + (t.done ? ' done' : t.level === 'warn' ? ' warn' : '') + '">' +
-    (t.key ? '<button type="button" data-key="' + esc(t.key) + '">' + (t.done ? 'Vrátit' : 'Vyřízeno') + '</button> ' : '') + '<span>' + esc(t.text) + '</span></li>';
+    (t.key ? '<button type="button" data-key="' + esc(t.key) + '">' + (t.done ? 'Vrátit' : 'Vyřízeno') + '</button> ' : '') + '<span>' + esc(t.text) + (t.owner ? ' <small class="muted">· ' + esc(t.owner) + '</small>' : '') + '</span></li>';
   return '<h2>K vyřízení' + (items.length ? ' (zbývá ' + open + ' z ' + total + ')' : '') + '</h2>' + (items.length
     ? (open ? '' : '<p class="ok">Vše vyřízeno.</p>') + '<ul class="todos">' + [...items.filter(t => !t.done), ...items.filter(t => t.done)].map(row).join('') + '</ul>'
     : '<span class="ok">Nic k vyřízení.</span>');

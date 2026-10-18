@@ -13,11 +13,22 @@ import {gapsText, hasGaps, shiftSignals, shiftText} from './goals.ts';
 import {conflictText, dueText, missingText, duplicateText, newSupplierText, paymentText, foodCostText, overdueText, receiptsText, riseText, unreadableText, unusualText} from './supplies.ts';
 import {CASH_DIFFERENCE_CENTS, crowns, menuGapsText, mismatch, mismatchText, noShowAlarm, noShowText, pendingAheadText, themeTodos, reviewDrop, reviewDropText, unusual, weakDays, weakDaysText, webDropText, type Briefing} from './briefing.ts';
 
-export type TodoItem = {level: 'warn' | 'info'; text: string; amountCents: number | null};
+export type TodoItem = {level: 'warn' | 'info'; text: string; amountCents: number | null; owner?: string | null};
 const LIMIT = 15;
+
+// Who handles an item (batch „Priorita podle peněz“, MC „jo“ 18. 10. 2026): invoices, payments and receipts Nancy, the rest the manager.
+// Klára only sends the payments Nancy prepares, so she is never the owner.
+const NANCY = /^(Faktura|Zdražení|Možná duplicitní faktura|Neobvyklý nákup|Nepřišla obvyklá faktura|Stejná faktura|Připravit hromadnou platbu|Zaplatit:|Doklad z pošty|Nákup (jídla|nápojů)|Vyfotit drobné účtenky)/;
+export const ownerOf = (text: string) => text.startsWith('… a další') ? null : NANCY.test(text) ? 'Nancy' : 'Matěj';
 
 /** "K vyřízení": deviations of the day, warnings first, each group by Kč (largest first), at most fifteen (specification §6.3). */
 export function todoList(briefing: Briefing, reportWarnings: string[] = []): TodoItem[] {
+  const sorted = sortedTodos(briefing, reportWarnings);
+  return sorted.length > LIMIT ? [...sorted.slice(0, LIMIT - 1), {level: 'info', text: `… a další ${sorted.length - LIMIT + 1}`, amountCents: null, owner: null}] : sorted;
+}
+
+/** All the items in the order of "K vyřízení", each with its owner; the morning digest takes its warnings from here, so both read the same. */
+export function sortedTodos(briefing: Briefing, reportWarnings: string[] = []): TodoItem[] {
   const items: TodoItem[] = [];
   const warn = (text: string, amountCents: number | null = null) => items.push({level: 'warn', text, amountCents});
   if (briefing.incomplete) warn(`Report za den chybí${briefing.missingClosings.length ? ` (uzávěrky: ${briefing.missingClosings.join(', ')})` : ''}.`);
@@ -40,7 +51,7 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   if (briefing.nightShare) warn(`Výplaty noci nad obvyklým podílem: ${nightShareText(briefing.nightShare)}`, briefing.nightShare.overCents);
   const staffGap = staffGapToday(addDays(briefing.businessDate, 1), briefing.staffGaps);
   if (staffGap) items.push({level: 'info', text: `Personál: ${staffGap}`, amountCents: null});
-  for (const row of briefing.kpi ? kpiRows(briefing.kpi).filter(row => row.worse) : []) items.push({level: 'info', text: `KPI horší: ${row.name} ${row.now}${row.before !== null ? ` (předtím ${row.before})` : ''} – ${row.owner}: ${row.action}`, amountCents: null});
+  for (const row of briefing.kpi ? kpiRows(briefing.kpi).filter(row => row.worse) : []) items.push({level: 'info', text: `KPI horší: ${row.name} ${row.now}${row.before !== null ? ` (předtím ${row.before})` : ''} – ${row.action}`, amountCents: null, owner: row.owner});
   // The week left a fifth less than the average week before: worth a look at revenue and purchases.
   const result = briefing.weekResult && renderWeekResult(briefing.weekResult).length ? weekResultFigures(briefing.weekResult) : null;
   if (result && result.beforeCents !== null && result.beforeCents > 0 && result.resultCents < result.beforeCents * 0.8) items.push({level: 'info', text: renderWeekResult(briefing.weekResult)[0], amountCents: result.beforeCents - result.resultCents});
@@ -101,6 +112,5 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   const group = (level: TodoItem['level']) => items.filter(item => item.level === level).map((item, i) => ({item, i}))
     .sort((a, b) => (b.item.text.startsWith('Report za den chybí') ? 1 : 0) - (a.item.text.startsWith('Report za den chybí') ? 1 : 0) || weight(b.item) - weight(a.item) || a.i - b.i)
     .map(entry => entry.item);
-  const sorted = [...group('warn'), ...group('info')];
-  return sorted.length > LIMIT ? [...sorted.slice(0, LIMIT - 1), {level: 'info', text: `… a další ${sorted.length - LIMIT + 1}`, amountCents: null}] : sorted;
+  return [...group('warn'), ...group('info')].map(item => ({...item, owner: item.owner ?? ownerOf(item.text)}));
 }

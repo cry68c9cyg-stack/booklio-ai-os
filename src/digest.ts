@@ -5,6 +5,7 @@
  * where the whole message and the to-do list are. The whole message is still stored and readable through Claude.
  */
 import type {Briefing} from './briefing.ts';
+import type {TodoItem} from './todo.ts';
 import {weekday} from './time.ts';
 import {weekResultFigures, renderWeekResult} from './weekresult.ts';
 import {dayNightFigures, renderDayNight} from './dayparts.ts';
@@ -34,8 +35,12 @@ export function weekMoneyLine(briefing: Briefing): string | null {
   return parts.length ? `Týden: ${parts.join(' · ')}` : null;
 }
 
-/** The digest of the whole message `text`: header, revenue, Monday's money, warnings that fit, the link. */
-export function renderDigest(text: string, briefing: Briefing, link: string | null): string {
+/**
+ * The digest of the whole message `text`: header, revenue, Monday's money, warnings that fit, the link.
+ * Batch „Priorita podle peněz“ (MC „jo“ 18. 10. 2026): the warnings come from `todos` (the order of "K vyřízení": a missing report first,
+ * then by the money at stake), the first three numbered with who handles them; without `todos` they keep the order of the message.
+ */
+export function renderDigest(text: string, briefing: Briefing, link: string | null, todos?: TodoItem[]): string {
   // A message that fits goes out whole.
   if (text.length <= DIGEST_CHARS) return text;
   const lines = text.split('\n');
@@ -44,8 +49,9 @@ export function renderDigest(text: string, briefing: Briefing, link: string | nu
   if (revenue) head.push(cut(revenue, 160));
   const money = weekMoneyLine(briefing);
   if (money) head.push(cut(money, 200));
-  // The warnings in the order of the message: the report and the data first, then the till, then the rest.
-  const warnings = lines.slice(1).filter(line => line.startsWith('⚠'));
+  const warnings = todos
+    ? todos.filter(item => item.level === 'warn').map((item, i) => i < 3 ? `${i + 1}. ${cut(item.text, 100)}${item.owner ? ` – ${item.owner}` : ''}` : `⚠ ${item.text}`)
+    : lines.slice(1).filter(line => line.startsWith('⚠'));
   const tail = link ? `Celá zpráva a K vyřízení: ${link}` : '';
   const out = [...head];
   let length = out.join('\n').length + (tail ? tail.length + 1 : 0), shown = 0;
