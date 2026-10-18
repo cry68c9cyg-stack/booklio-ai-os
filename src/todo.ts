@@ -1,5 +1,7 @@
 import {addDays, weekday} from './time.ts';
 import {promoStreakText} from './promo.ts';
+import {cashForecastText} from './cashflow.ts';
+import {cashDiffRepeatText, voidAndDiffText} from './voids.ts';
 import {nightShareText, staffGapToday} from './wages.ts';
 import {cashNeedText, debtsRising, debtsText, payoutAlarmText} from './cash.ts';
 import {repeatedText, waitingText} from './mail-insights.ts';
@@ -26,11 +28,14 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   for (const check of briefing.tableChecks ?? []) items.push({level: check.level, text: `Tabulky: ${check.text}`, amountCents: check.amountCents});
   for (const text of themeTodos(briefing.noteThemes)) items.push({level: 'info', text, amountCents: null});
   if (briefing.cashNeed) warn(`Hotovost na dnešek nestačí: ${cashNeedText(briefing.cashNeed)}`, -briefing.cashNeed.shortCents);
+  if (briefing.cashForecast?.firstShort) items.push({level: 'info', text: `Hotovost na 7 dní: ${cashForecastText(briefing.cashForecast)}`, amountCents: briefing.cashForecast.depositCents});
   if (debtsRising(briefing.till)) warn(`Dluhy ve výčetce rostou: ${debtsText(briefing.till!)}`, briefing.till!.day.debtsCents! - briefing.till!.debtsWeekAgoCents!);
   if (briefing.payoutAlarm) warn(`Výplaty v hotovosti nad obvyklým: ${payoutAlarmText(briefing.payoutAlarm)}`, briefing.payoutAlarm.payoutsCents - briefing.payoutAlarm.usualCents);
   if (briefing.nightShare) warn(`Výplaty noci nad obvyklým podílem: ${nightShareText(briefing.nightShare)}`, briefing.nightShare.overCents);
   const staffGap = staffGapToday(addDays(briefing.businessDate, 1), briefing.staffGaps);
   if (staffGap) items.push({level: 'info', text: `Personál: ${staffGap}`, amountCents: null});
+  if (briefing.voidAndDiff) warn(`Storna a rozdíl v kase: ${voidAndDiffText(briefing.voidAndDiff)}`, briefing.voidAndDiff.voidCents - briefing.voidAndDiff.usualCents);
+  if (briefing.cashDiffRepeat) warn(`Kasa: ${cashDiffRepeatText(briefing.cashDiffRepeat)}`, briefing.cashDiffRepeat.reduce((sum, day) => sum + day.cents, 0));
   for (const streak of briefing.promoStreaks ?? []) warn(promoStreakText(streak), streak.days.reduce((sum, day) => sum + day.cents - day.usualCents, 0));
   for (const row of briefing.unusualDiscounts) warn(`Neobvyklá sleva: ${unusual(row)}`, row.amountCents - row.usualCents);
   if (noShowAlarm(briefing.noShows)) warn(`No-show: ${noShowText(briefing.noShows!)}`);
