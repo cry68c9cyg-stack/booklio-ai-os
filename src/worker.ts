@@ -1,21 +1,25 @@
 import {DurableObject} from 'cloudflare:workers';
 import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provider';
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
+import {tableChecks} from './checks.ts';
+import {noteThemes, rankDjs, djOf, summarizeThemes, type DjRank, type ThemeSummary} from './themes.ts';
 import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, type MenuMonth, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, sumMenuInterest, type MenuInterest, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
 import {todoList} from './todo.ts';
-import {itemProfit, menuChanges, menuGaps, menuItemTax, menuMatrix, menuOverview, nameKey, PART_NAMES, pairSale, priceText, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
+import {competitorComparison, competitorSections, COMPETITOR_SHARE, itemProfit, menuChanges, menuGaps, menuItemTax, menuMatrix, menuOverview, nameKey, PART_NAMES, pairSale, priceText, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
 import {czechHolidays, holidayName} from './holidays.ts';
 import {addDays, businessDate, isDate, localTime, sameClockDaysBefore, weekday} from './time.ts';
 import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-report.ts';
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
-import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
+import {fetchDayFiles, googleDayFiles, googleFolderByName, reportFromFiles} from './onedrive.ts';
+import {authorizeUrl, pkce, redeem, renew} from './microsoft.ts';
+import {googleAccess, serviceAccount} from './google.ts';
 import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
 import {counted, drinkMargins, dueSoon, FOOD_COST_LIMIT_PERMILLE, duplicateInvoices, foodCostAlert, monthOverMonth, overdueInvoices, priceRises, supplyBrief, supplySummary, unusualPurchases} from './supplies.ts';
 import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
-import {DEFAULT_BOTTLE_LOSS_CENTS, InputError, validateBatch, withoutGuest, validateConfig, validateHistory, type Batch, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
+import {DEFAULT_BOTTLE_LOSS_CENTS, googleFolderId, InputError, validateBatch, withoutGuest, validateCompetitorPrices, validateConfig, validateHistory, type Batch, type CompetitorPrices, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
 import {dashboardWeb} from './web-views.ts';
 import {WEATHER_AGENT, WEATHER_URL, weatherDays, type WeatherDay} from './weather.ts';
@@ -31,6 +35,10 @@ export type Env = DeliveryEnv & WebEnv & IuctoEnv & {
   ARCHIVE?: R2Bucket;
   /** OKO1's own Claude API key for "Report dne". Optional: without it the raw text goes into the briefing. */
   ANTHROPIC_API_KEY?: string;
+  /** OKO1's own Microsoft app (public client, read-only OneDrive). Optional: without it OneDrive is read only through the public API. */
+  ONEDRIVE_CLIENT_ID?: string;
+  /** OKO1's own Google account (service account JSON key) for a Google Drive folder shared with it. Optional. */
+  GOOGLE_SERVICE_ACCOUNT?: string;
 };
 type Result = {status: number; body: unknown};
 export type VenueSetup = {name: string; timeZone: string; businessDayCutoffHour: number; web: {url: string} | null; today: string; reportDay: string};
@@ -141,6 +149,12 @@ export class TenantObject extends DurableObject<Env> {
         PRIMARY KEY(month, part, category));
       -- Batches OKO1 refused as not matching the contract: when, from whom, which record types (no content).
       CREATE TABLE IF NOT EXISTS ingest_rejects(at TEXT NOT NULL, installation_id TEXT NOT NULL, code TEXT NOT NULL, types TEXT NOT NULL);
+      -- Prices of comparable venues nearby from their public menus (one set, replaced by the deploy).
+      CREATE TABLE IF NOT EXISTS competitor_prices(id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL, received_at TEXT NOT NULL);
+      -- OKO1's read-only Microsoft access for OneDrive: the renewal (rotated on each use) and the last error; the
+      -- sign-ins in progress (PKCE verifier, at most 10 minutes).
+      CREATE TABLE IF NOT EXISTS onedrive_access(id INTEGER PRIMARY KEY CHECK(id=1), refresh_token TEXT, connected_at TEXT NOT NULL, error TEXT);
+      CREATE TABLE IF NOT EXISTS onedrive_signins(state TEXT PRIMARY KEY, verifier TEXT NOT NULL, created_at INTEGER NOT NULL);
     `));
     // Wrong codes for unknown venues are counted per venue name in the shared stand-in (see `loginStub`).
     if (!this.sql.exec<{name: string}>('PRAGMA table_info(login_failures)').toArray().some(column => column.name === 'scope')) {
@@ -169,6 +183,12 @@ export class TenantObject extends DurableObject<Env> {
       }
       if (route === 'admin/config' && method === 'PUT') return this.saveConfig(tenant, body);
       if (route === 'admin/config' && method === 'GET') return ok(this.config());
+      if (route === 'admin/competitors' && method === 'PUT') {
+        const data = validateCompetitorPrices(body);
+        this.sql.exec('INSERT OR REPLACE INTO competitor_prices VALUES(1,?,?)', JSON.stringify(data), new Date().toISOString());
+        return ok({checkedOn: data.checkedOn, venues: data.venues.length, prices: data.venues.reduce((sum, venue) => sum + venue.items.length, 0)});
+      }
+      if (route === 'admin/competitors' && method === 'GET') return ok(this.competitors());
       if (route === 'admin/pair' && method === 'POST') return this.pair(body);
       if (route === 'admin/logout' && method === 'POST') { const ended = this.sql.exec('DELETE FROM sessions').rowsWritten; return ok({ended}); }
       if (route === 'admin/history' && method === 'POST') return this.importHistory(body);
@@ -313,7 +333,8 @@ export class TenantObject extends DurableObject<Env> {
     const stored = this.sql.exec<{text: string}>('SELECT text FROM briefings WHERE business_date=?', day).toArray()[0];
     const todo = this.todoFor(day, briefing);
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
-      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day)});
+      week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day),
+      themes: briefing.themes ?? this.themeSummary(day), djRanking: briefing.djRanking ?? this.djRanking(day)});
   }
 
   /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
@@ -567,13 +588,71 @@ export class TenantObject extends DurableObject<Env> {
     return {businessDate: report.businessDate, lines: report.lines.length, notes: !!report.notes, warnings: report.warnings};
   }
 
-  /** Reads the day's Excel files from the shared OneDrive folder, archives them and stores the report. */
+  /**
+   * Step 1 of connecting OneDrive (from a logged-in dashboard): where to send the browser to sign in at Microsoft.
+   * The state names the venue, so that the callback finds it without a cookie (Microsoft's redirect is cross-site).
+   */
+  async onedriveStart(tenant: string, redirectUri: string): Promise<Result> {
+    const clientId = this.env.ONEDRIVE_CLIENT_ID;
+    if (!clientId) return failure('ONEDRIVE_NOT_CONFIGURED', 503);
+    if (!this.config()?.reportsLink) return failure('NO_REPORTS_LINK', 409);
+    const now = Date.now(), state = `${tenant}~${randomHex(24)}`, {verifier, challenge} = await pkce();
+    this.sql.exec('DELETE FROM onedrive_signins WHERE created_at < ?', now - 10 * 60000);
+    this.sql.exec('INSERT INTO onedrive_signins VALUES(?,?,?)', sha256(state), verifier, now);
+    return ok({url: authorizeUrl(clientId, redirectUri, state, challenge)});
+  }
+
+  /** Step 2: Microsoft's code for the access, once per sign-in and within 10 minutes. */
+  async onedriveFinish(state: string, code: string, redirectUri: string): Promise<Result> {
+    const clientId = this.env.ONEDRIVE_CLIENT_ID;
+    const row = this.sql.exec<{verifier: string; created_at: number}>('SELECT verifier, created_at FROM onedrive_signins WHERE state=?', sha256(state)).toArray()[0];
+    this.sql.exec('DELETE FROM onedrive_signins WHERE state=?', sha256(state));
+    if (!clientId || !row || row.created_at < Date.now() - 10 * 60000) return failure('SIGNIN_EXPIRED', 400);
+    const result = await redeem(clientId, redirectUri, code, row.verifier);
+    if (!result.ok) return failure(result.error, 502);
+    this.sql.exec('INSERT OR REPLACE INTO onedrive_access VALUES(1, ?, ?, NULL)', result.tokens.refreshToken, new Date().toISOString());
+    return ok({connected: true});
+  }
+
+  private onedriveConnected(): boolean {
+    return !!this.sql.exec<{refresh_token: string | null}>('SELECT refresh_token FROM onedrive_access WHERE id=1 AND error IS NULL').toArray()[0]?.refresh_token;
+  }
+
+  /** A fresh Microsoft access for this fetch, or null (not connected, not configured, or Microsoft refused: kept as the error). */
+  private async onedriveToken(): Promise<string | null> {
+    const clientId = this.env.ONEDRIVE_CLIENT_ID;
+    const row = this.sql.exec<{refresh_token: string | null}>('SELECT refresh_token FROM onedrive_access WHERE id=1').toArray()[0];
+    if (!clientId || !row?.refresh_token) return null;
+    const result = await renew(clientId, row.refresh_token);
+    if (!result.ok) { this.sql.exec('UPDATE onedrive_access SET error=? WHERE id=1', result.error); return null; }
+    this.sql.exec('UPDATE onedrive_access SET refresh_token=?, error=NULL WHERE id=1', result.tokens.refreshToken);
+    return result.tokens.accessToken;
+  }
+
+  /**
+   * Reads the day's Excel files, archives them and stores the report. With OKO1's Google account the folder
+   * "OKO1 reporty" shared with it wins (no link needed); otherwise the configured OneDrive or Google Drive link.
+   */
   private async fetchReport(tenant: string, date: string) {
-    const link = this.config()?.reportsLink;
-    if (!link) return {found: false, warnings: ['OneDrive: odkaz na složku není nastavený.']};
+    const link = this.config()?.reportsLink ?? null;
+    const account = serviceAccount(this.env.GOOGLE_SERVICE_ACCOUNT);
+    if (!link && !account) return {found: false, warnings: ['OneDrive: odkaz na složku není nastavený.']};
     let found = false, warnings: string[];
     try {
-      const fetched = await fetchDayFiles(link, date);
+      const google = link ? googleFolderId(link) : null;
+      const googleToken = account && (google || !link || !this.onedriveConnected()) ? await googleAccess(account) : null;
+      const sharedFolder = googleToken?.ok ? await googleFolderByName(googleToken.token, GOOGLE_REPORTS_FOLDER) : null;
+      let fetched: {files: {name: string; bytes: Uint8Array}[]; warnings: string[]};
+      let access: string | null = null;
+      if (sharedFolder) fetched = await googleDayFiles(sharedFolder, date, googleToken!.ok ? googleToken!.token : null);
+      else if (!link) fetched = {files: [], warnings: [`Google Drive: složka „${GOOGLE_REPORTS_FOLDER}“ není nasdílená účtu OKO1 (${account!.clientEmail}).`]};
+      else {
+        access = google ? (googleToken?.ok ? googleToken.token : null) : await this.onedriveToken();
+        fetched = await fetchDayFiles(link, date, access);
+      }
+      if (googleToken && !googleToken.ok) fetched.warnings.unshift(`Google Drive: účet OKO1 se nepřihlásil (${googleToken.error}).`);
+      const lost = google || sharedFolder || !link ? null : this.sql.exec<{error: string | null}>('SELECT error FROM onedrive_access WHERE id=1').toArray()[0]?.error;
+      if (!access && lost) fetched.warnings.unshift(`OneDrive: přístup OKO1 vypršel (${lost}), na přehledu stačí znovu kliknout na „Připojit OneDrive“.`);
       for (const file of fetched.files) this.archive(`t/${tenant}/onedrive/${date}/${file.name}`, file.bytes);
       const report = await reportFromFiles(fetched.files, date, fetched.warnings);
       if (report) { this.saveReport(report); found = true; }
@@ -702,7 +781,7 @@ export class TenantObject extends DurableObject<Env> {
     const profit = sales.length ? itemProfit(menu, sales, this.menuItemCosts(menu, day)) : null;
     return {...menuOverview(menu), received: stamp(new Date(received), config.timeZone), changes: changes.rows, changesTotal: changes.total,
       priceCheck: {findings: [...findings].sort((a, b) => FINDING_RANK[a.kind] - FINDING_RANK[b.kind]).slice(0, 10), total: findings.length},
-      gaps: (gaps => ({items: gaps.slice(0, 20), total: gaps.length}))(menuGaps(menu)), trend: this.menuTrend(), problems: this.menuProblems(new Date()),
+      gaps: (gaps => ({items: gaps.slice(0, 20), total: gaps.length}))(menuGaps(menu)), competitors: this.competitorCard(), trend: this.menuTrend(), problems: this.menuProblems(new Date()),
       matrix: profit ? menuMatrix(menu, profit, this.newMenuItems(addDays(day, -29), day)).map(part => ({...part, classes: part.classes.map(row => ({...row, count: row.items.length, items: row.items.slice(0, 5)}))})) : null,
       experiments: profit ? this.priceExperiments(day, 5) : null,
       profit: profit && {from: addDays(day, -29), to: day, items: profit.items.slice(0, 10), itemsTotal: profit.items.length, unpaired: profit.unpaired.slice(0, 5),
@@ -887,6 +966,30 @@ export class TenantObject extends DurableObject<Env> {
     return priceMismatches(menu, lines.map(row => ({name: row.name, menuItemId: row.menu_item_id, unitCents: row.unit, quantity: Math.round(row.quantity * 1000) / 1000})), earlier);
   }
 
+  private competitors(): CompetitorPrices | null {
+    const row = this.sql.exec<{json: string}>('SELECT json FROM competitor_prices WHERE id=1').toArray()[0];
+    return row ? JSON.parse(row.json) as CompetitorPrices : null;
+  }
+
+  /** Our prices against the venues nearby: the date they were read, the parts of the menu and one row per compared item; null before the first set. */
+  private competitorCard() {
+    const data = this.competitors();
+    if (!data) return null;
+    const rows = competitorComparison(this.menu(), data);
+    return {checkedOn: data.checkedOn, scope: data.scope ?? null, venues: data.venues.map(venue => ({name: venue.name, area: venue.area, kind: venue.kind, url: venue.url, note: venue.note, items: venue.items.length})),
+      sections: competitorSections(rows), rows};
+  }
+
+  /** Monday message, in the week after the prices nearby were read: the parts of the menu and the items furthest from their median. */
+  private competitorSummary(date: string) {
+    const card = this.competitorCard();
+    if (!card || card.checkedOn > date || card.checkedOn < addDays(date, -6)) return null;
+    const rows = card.rows.filter(row => row.diffPct !== null);
+    return {checkedOn: card.checkedOn, venues: card.venues.filter(venue => venue.items).length, compared: rows.length, sections: card.sections.filter(section => section.compared),
+      above: rows.filter(row => row.diffPct! >= COMPETITOR_SHARE).sort((a, b) => b.diffPct! - a.diffPct!),
+      below: rows.filter(row => row.diffPct! <= -COMPETITOR_SHARE).sort((a, b) => a.diffPct! - b.diffPct!)};
+  }
+
   /** Monday message: how many prices to look at and the two weighing most (cheap and expensive items before gaps). */
   private priceCheckSummary() {
     const menu = this.menu();
@@ -1007,7 +1110,7 @@ export class TenantObject extends DurableObject<Env> {
   /** MCP: prices to look at in each category of the menu, each with a suggested price. */
   posPriceCheck() {
     const menu = this.menu();
-    return this.config() && menu ? {items: menu.items.length, findings: priceCheck(menu), webGaps: menuGaps(menu)} : null;
+    return this.config() && menu ? {items: menu.items.length, findings: priceCheck(menu), webGaps: menuGaps(menu), competitors: this.competitorCard()} : null;
   }
 
   /** MCP: the whole current menu with every item and price, and its changes over the last year. */
@@ -1580,6 +1683,41 @@ export class TenantObject extends DurableObject<Env> {
     return days.some(day => day.booked || day.expected) ? {days} : null;
   }
 
+  /** Topics of "Report dne" over the 28 days up to a day, counting only days whose text is more than the DJ line. */
+  private themeSummary(date: string): ThemeSummary {
+    const from = addDays(date, -27);
+    return summarizeThemes(from, date, this.noteDays(from, date).filter(day => day.text).map(day => ({date: day.date, themes: day.themes})));
+  }
+
+  /** Each day's "Report dne" with its topics, its DJ and the club's revenue (report lines), oldest first. */
+  private noteDays(from: string, to: string) {
+    return this.sql.exec<{day: string; notes: string | null; club: number | null}>(`SELECT d.business_date AS day, json_extract(d.json, '$.notes') AS notes,
+        (SELECT SUM(amount_cents) FROM report_lines l WHERE l.business_date = d.business_date AND l.kind = 'revenue_section' AND l.key = 'club') AS club
+      FROM daily_reports d WHERE d.business_date BETWEEN ? AND ? ORDER BY d.business_date`, from, to).toArray().map(row => {
+      const text = (row.notes ?? '').split('\n').filter(entry => !/^DJ:/.test(entry)).join('\n').trim();
+      return {date: row.day, text: text || null, themes: noteThemes(text), dj: djOf(row.notes), clubCents: row.club};
+    });
+  }
+
+  /** Club revenue by the DJ named in the daily report over 12 weeks, each night against the median of the other same weekdays (at least 2). */
+  private djRanking(date: string): DjRank[] {
+    const days = this.noteDays(addDays(date, -83), date).filter(day => day.clubCents !== null);
+    const usual = (day: string) => {
+      const others = days.filter(entry => entry.date !== day && weekday(entry.date) === weekday(day)).map(entry => entry.clubCents!).sort((a, b) => a - b);
+      if (others.length < 2) return null;
+      const middle = Math.floor(others.length / 2);
+      return others.length % 2 ? others[middle] : Math.round((others[middle - 1] + others[middle]) / 2);
+    };
+    return rankDjs(days.filter(day => day.dj).map(day => ({date: day.date, dj: day.dj!, clubCents: day.clubCents!, usualCents: usual(day.date)})));
+  }
+
+  /** MCP: the managers' "Report dne" texts of a stretch of days with their topics and DJ, how often each topic came up, and the DJs' club revenue. */
+  posNotes(from: string, to: string) {
+    const days = this.noteDays(from, to);
+    return {from, to, days: days.map(day => ({...day, analysis: this.notes(day.date)})),
+      themes: summarizeThemes(from, to, days.filter(day => day.text).map(day => ({date: day.date, themes: day.themes}))), djs: this.djRanking(to)};
+  }
+
   private senders(now: Date) {
     return sendersFrom(this.sql.exec<{installation_id: string; last_seen_at: string | null}>('SELECT installation_id, last_seen_at FROM installations').toArray(), now);
   }
@@ -1591,6 +1729,15 @@ export class TenantObject extends DurableObject<Env> {
   }
 
   /** Dashboard: every kind of sender and type of data with the time it last arrived, plus the last report and cost fetches. No content. */
+  /** The dashboard's "Připojit OneDrive": shown when the folder is set, OKO1 has its Microsoft app and no working access. */
+  private onedriveStatus(config: TenantConfig) {
+    // A Google Drive folder is shared with OKO1's Google account: the dashboard shows its e-mail.
+    if (this.env.GOOGLE_SERVICE_ACCOUNT || (config.reportsLink && googleFolderId(config.reportsLink))) return {google: serviceAccount(this.env.GOOGLE_SERVICE_ACCOUNT)?.clientEmail ?? null, canConnect: false, connected: false, since: null, error: null};
+    if (!config.reportsLink) return null;
+    const row = this.sql.exec<{connected_at: string; error: string | null}>('SELECT connected_at, error FROM onedrive_access WHERE id=1').toArray()[0];
+    return {canConnect: !!this.env.ONEDRIVE_CLIENT_ID, connected: !!row && !row.error, since: row ? stamp(new Date(row.connected_at), config.timeZone) : null, error: row?.error ?? null};
+  }
+
   private sources(config: TenantConfig) {
     const at = (value: string | null) => value ? stamp(new Date(value), config.timeZone) : null;
     const names: Record<string, string> = {bill: 'Účty z pokladny', cash_closing: 'Uzávěrky pokladen', bottle_check: 'Kontrola lahví', reservation: 'Rezervace', web_traffic: 'Návštěvnost webu', review_summary: 'Recenze', event: 'Akce podniku', menu: 'Jídelní a nápojový lístek', supplier_invoice: 'Faktury dodavatelů'};
@@ -1602,6 +1749,7 @@ export class TenantObject extends DurableObject<Env> {
         .map(row => ({name: names[row.type] ?? row.type, lastReceived: at(row.last)})),
       report: report ? {at: at(report.at), found: report.found === 1} : null,
       costs: cost ? {at: at(cost.at), ok: !cost.error} : null,
+      onedrive: this.onedriveStatus(config),
     };
   }
 
@@ -1627,8 +1775,11 @@ export class TenantObject extends DurableObject<Env> {
       priceCheck: weekday(date) === 0 ? this.priceCheckSummary() : null,
       menuGaps: weekday(date) === 0 ? this.menuGapsSummary() : null,
       menuInterest: weekday(date) === 0 ? this.menuInterestWeek(date) : null,
+      competitors: weekday(date) === 0 ? this.competitorSummary(date) : null,
       menuByLanguage: weekday(date) === 0 ? sumMenuInterest(this.webDays(addDays(date, -27), date), addDays(date, -27), date) : null,
       forecastPlanCents: this.loggedPlan(date), todayPlanCents: this.loggedPlan(addDays(date, 1)),
+      tableChecks: tableChecks(this.report(date), this.report(addDays(date, -1))), noteThemes: noteThemes(this.report(date)?.notes),
+      themes: weekday(date) === 0 ? this.themeSummary(date) : null, djRanking: weekday(date) === 0 ? this.djRanking(date) : null,
       supplies: this.supplyBriefFor(config, date),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     return {briefing, text: renderBriefing(config.name, briefing)};
@@ -1653,7 +1804,7 @@ export class TenantObject extends DurableObject<Env> {
     // Fetching and analysis get a time budget, so a slow OneDrive or API can never stop the 9:00 send.
     if (!sent && config.sendHours.includes(hour)) {
       await withinBudget((async () => {
-        if (config.reportsLink && !this.hasReport(date)) await this.fetchReport(tenant, date);
+        if ((config.reportsLink || this.env.GOOGLE_SERVICE_ACCOUNT) && !this.hasReport(date)) await this.fetchReport(tenant, date);
         await this.analyse(config, date);
         // Costs once a day (a failed read is tried again at the next send hour); the quota is the venue's (5 000 requests a day on the Firma plan).
         await this.fetchCosts(tenant, date, businessDate(at, config.timeZone, 0));
@@ -1742,7 +1893,7 @@ export class Registry extends DurableObject<Env> {
 const routes: Record<string, string[]> = {
   'v1/ingest': ['POST'], 'v1/menu': ['GET'], 'admin/config': ['GET', 'PUT'], 'admin/pair': ['POST'], 'admin/history': ['POST'],
   'admin/briefing': ['GET'], 'admin/briefings': ['GET'], 'admin/tick': ['POST'], 'admin/report': ['GET', 'PUT'], 'admin/fetch': ['POST'], 'admin/logout': ['POST'],
-  'admin/web': ['GET'], 'admin/ingest': ['GET'],
+  'admin/web': ['GET'], 'admin/ingest': ['GET'], 'admin/competitors': ['GET', 'PUT'],
 };
 
 async function readBody(request: Request, limit: number): Promise<unknown | Result> {
@@ -1795,6 +1946,13 @@ async function dashboard(request: Request, env: Env, tenant: string, action: str
   if (action === 'web' && request.method === 'GET') {
     if (!known || !await stub.validSession(cookie(request))) return json(failure('UNAUTHORIZED', 401));
     return json(ok({card: await webCard(env, tenant, stub)}));
+  }
+  // "Připojit OneDrive": a same-site click from the logged-in dashboard sends the browser to Microsoft's sign-in.
+  if (action === 'onedrive' && request.method === 'GET') {
+    if (!known || !await stub.validSession(cookie(request))) return Response.redirect(new URL(path, request.url).toString(), 303);
+    const start = await stub.onedriveStart(tenant, new URL(ONEDRIVE_CALLBACK, request.url).toString()) as Result;
+    if (start.status !== 200) return onedrivePage(tenant, 'OneDrive teď připojit nejde (' + String((start.body as {error?: string}).error) + ').');
+    return new Response(null, {status: 303, headers: {location: (start.body as {url: string}).url, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer'}});
   }
   // One menu item over half a year: price and sales by week (the search in the menu card).
   if (action === 'item' && request.method === 'GET') {
@@ -1869,9 +2027,35 @@ export default {
   },
 };
 
+const ONEDRIVE_CALLBACK = '/onedrive/callback';
+/** The folder on Google Drive that OKO1 looks for among the folders shared with its Google account. */
+const GOOGLE_REPORTS_FOLDER = 'OKO1 reporty';
+
+/** The short page after the Microsoft sign-in, with the way back to the dashboard. */
+function onedrivePage(tenant: string | null, message: string, status = 200): Response {
+  const esc = (text: string) => text.replace(/[&<>"]/g, char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[char]!);
+  const back = tenant ? `<p><a href="/d/${esc(tenant)}">Zpět na přehled</a></p>` : '';
+  return new Response(`<!doctype html><html lang="cs"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OKO1 – OneDrive</title>` +
+    `<body style="font:16px/1.5 system-ui,sans-serif;max-width:440px;margin:8vh auto;padding:16px"><h1 style="font-size:20px">OKO1 – OneDrive</h1><p>${esc(message)}</p>${back}</body></html>`,
+  {status, headers: {'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer',
+    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"}});
+}
+
+/** Microsoft's redirect after the sign-in: the state names the venue and the sign-in it belongs to. */
+async function onedriveCallback(request: Request, env: Env): Promise<Response> {
+  const params = new URL(request.url).searchParams, state = params.get('state') ?? '', code = params.get('code');
+  const tenant = state.match(/^([a-z0-9-]{3,64})~[a-f0-9]{48}$/)?.[1] ?? null;
+  if (!tenant || !await registry(env).has(tenant)) return onedrivePage(null, 'Odkaz pro připojení neplatí.', 400);
+  if (!code) return onedrivePage(tenant, 'Připojení se nedokončilo: ve vašem účtu Microsoft nebyl přístup povolen. Zkuste to na přehledu znovu.', 400);
+  const result = await tenantStub(env, tenant).onedriveFinish(state, code.slice(0, 2000), new URL(ONEDRIVE_CALLBACK, request.url).toString()) as Result;
+  if (result.status !== 200) return onedrivePage(tenant, `Připojení se nepovedlo (${String((result.body as {error?: string}).error)}). Zkuste to na přehledu znovu.`, 400);
+  return onedrivePage(tenant, 'OneDrive je připojený. OKO1 si odteď bude reporty manažerů ze složky brát každé ráno samo.');
+}
+
 /** Everything but the MCP server: ingest, admin API and the dashboard. */
 async function app(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
+  if (url.pathname === ONEDRIVE_CALLBACK && request.method === 'GET') return onedriveCallback(request, env);
   const board = url.pathname.match(/^\/d\/([a-z0-9-]{3,64})(?:\/([a-z]+))?$/);
   if (board) return dashboard(request, env, board[1], board[2]);
   const match = url.pathname.match(/^\/(v1|admin)\/t\/([a-z0-9-]{3,64})\/([a-z]+)$/);
@@ -1886,7 +2070,8 @@ async function app(request: Request, env: Env): Promise<Response> {
   if (match[1] === 'v1' && !token) return json(failure('UNAUTHORIZED', 401));
   let body: unknown = null;
   if (request.method !== 'GET') {
-    body = await readBody(request, route === 'v1/ingest' ? 1048576 : 262144);
+    // Prices of every venue nearby are bigger than other admin bodies (stored as one row, which SQLite caps at 2 MB).
+    body = await readBody(request, route === 'v1/ingest' || route === 'admin/competitors' ? 1048576 : 262144);
     if (isResult(body)) return json(body);
   }
   const tenant = match[2];

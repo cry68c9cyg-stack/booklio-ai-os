@@ -395,11 +395,21 @@ function phone(item: unknown): string {
 }
 
 /** Only OneDrive / SharePoint share links over HTTPS. */
+/** The folder of a Google Drive link shared with "anyone with the link" (drive.google.com/drive/folders/{id}). */
+export function googleFolderId(link: string): string | null {
+  try {
+    const url = new URL(link.trim());
+    if (url.protocol !== 'https:' || url.hostname !== 'drive.google.com') return null;
+    const id = url.pathname.match(/^\/drive\/(?:u\/\d+\/)?folders\/([A-Za-z0-9_-]{10,100})$/)?.[1] ?? url.searchParams.get('id');
+    return id && /^[A-Za-z0-9_-]{10,100}$/.test(id) ? id : null;
+  } catch { return null; }
+}
+
 function shareLink(value: unknown): string {
   if (typeof value !== 'string' || value.length > 1000) fail();
   let url: URL;
   try { url = new URL((value as string).trim()); } catch { return fail(); }
-  if (url.protocol !== 'https:' || !/(^|\.)(1drv\.ms|onedrive\.live\.com|sharepoint\.com)$/.test(url.hostname)) fail();
+  if (url.protocol !== 'https:' || !/(^|\.)(1drv\.ms|onedrive\.live\.com|sharepoint\.com)$/.test(url.hostname) && !(url.hostname === 'drive.google.com' && googleFolderId(url.toString()))) fail();
   return url.toString();
 }
 
@@ -412,6 +422,62 @@ function website(raw: unknown): {url: string} {
   if (url.protocol !== 'https:' || !WEB_HOSTS.includes(url.hostname) || url.port || url.username || url.password
     || url.pathname !== '/' || url.search || url.hash) fail();
   return {url: url.origin};
+}
+
+/**
+ * Prices of comparable venues nearby, read by Claude from their public menus (decision of MC, 14. 10. 2026): public
+ * market data, nothing about guests. A basket of comparable items, with the menu item of ours each one is compared with;
+ * prices in whole crowns as published, volumes in millilitres.
+ */
+/** Kinds of menu lines compared with the venues nearby: food, alcoholic and non-alcoholic drinks. */
+export const COMPETITOR_SECTIONS = ['food', 'alcohol', 'soft'] as const;
+export type CompetitorPrices = {
+  checkedOn: string;
+  /** Where the venues are, for the dashboard ("Dlouhá a V Kolkovně"). */
+  scope: string | null;
+  /**
+   * What is compared (decision of MC 14. 10. 2026: the whole menu, food and all drinks). `volumeMl` = the volume prices are
+   * recalculated to; `perVolume` = by the millilitre from any volume (spirits, wine by the glass), else only from within 20 %.
+   */
+  basket: {item: string; label: string; section: typeof COMPETITOR_SECTIONS[number]; volumeMl: number | null; perVolume: boolean;
+    ours: {name: string; category: string | null; group: string | null; priceIndex: number; volumeMl: number | null} | null}[];
+  /** Every venue looked at; one without a public menu has no items and says so in `note`. */
+  venues: {key: string; name: string; area: string | null; kind: string | null; url: string; note: string | null;
+    items: {item: string; name: string; priceCzk: number; volumeMl: number | null; note: string | null; approx: boolean}[]}[];
+};
+const VOLUME_MAX_ML = 5000;
+export function validateCompetitorPrices(raw: unknown): CompetitorPrices {
+  const value = object(raw, ['checkedOn', 'basket', 'venues'], ['scope']);
+  const volume = (ml: unknown) => ml == null ? null : int(ml, 1, VOLUME_MAX_ML);
+  const flag = (input: unknown) => {
+    if (input !== undefined && typeof input !== 'boolean') fail();
+    return input === true;
+  };
+  const basket = list(value.basket, 200, entry => {
+    const row = object(entry, ['item', 'label', 'section'], ['volumeMl', 'perVolume', 'ours']);
+    if (!COMPETITOR_SECTIONS.includes(row.section as typeof COMPETITOR_SECTIONS[number])) fail();
+    const ours = row.ours == null ? null : object(row.ours, ['name'], ['category', 'group', 'priceIndex', 'volumeMl']);
+    const volumeMl = volume(row.volumeMl), perVolume = flag(row.perVolume);
+    if (perVolume && !volumeMl) fail();
+    return {item: id(row.item), label: text(row.label, 60), section: row.section as typeof COMPETITOR_SECTIONS[number], volumeMl, perVolume,
+      ours: ours && {name: text(ours.name, 200), category: optionalText(ours.category, 100), group: optionalText(ours.group, 100),
+        priceIndex: ours.priceIndex == null ? 0 : int(ours.priceIndex, 0, 4), volumeMl: volume(ours.volumeMl)}};
+  });
+  const items = new Set(basket.map(row => row.item));
+  if (items.size !== basket.length) fail();
+  const venues = list(value.venues, 100, entry => {
+    const row = object(entry, ['key', 'name', 'url', 'items'], ['area', 'kind', 'note']);
+    if (typeof row.url !== 'string' || !/^https:\/\/[^\s]{1,500}$/.test(row.url)) fail();
+    return {key: id(row.key), name: text(row.name, 100), area: optionalText(row.area, 60), kind: optionalText(row.kind, 40), url: row.url as string, note: optionalText(row.note, 200),
+      items: list(row.items, 300, item => {
+        const price = object(item, ['item', 'name', 'priceCzk'], ['volumeMl', 'note', 'approx']);
+        const approx = flag(price.approx);
+        if (!items.has(price.item as string)) fail();
+        return {item: price.item as string, name: text(price.name, 200), priceCzk: int(price.priceCzk, 1, 100000), volumeMl: volume(price.volumeMl), note: optionalText(price.note, 200), approx};
+      })};
+  });
+  if (new Set(venues.map(row => row.key)).size !== venues.length) fail();
+  return {checkedOn: date(value.checkedOn), scope: optionalText(value.scope, 100), basket, venues};
 }
 
 export function validateConfig(raw: unknown): TenantConfig {

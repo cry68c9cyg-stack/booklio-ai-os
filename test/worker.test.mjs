@@ -1,7 +1,7 @@
 // End-to-end test on the real workerd runtime (Miniflare) with synthetic data only.
 import assert from 'node:assert/strict';
 import {mkdtemp, readdir, readFile, rm} from 'node:fs/promises';
-import {createHash} from 'node:crypto';
+import {createHash, generateKeyPairSync, verify} from 'node:crypto';
 import vm from 'node:vm';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -227,12 +227,58 @@ try {
   // Managers' Excel on OneDrive: fetched only at 7, 8 and 9, archived, stored as the day's report; "Report dne" goes to Claude without names.
   await mf.dispose();
   const outbound = [];
+  let microsoftRenewal = 'renew-1', googleShared = false;
+  // A synthetic key of OKO1's Google account, made for the test only.
+  const googleKey = generateKeyPairSync('rsa', {modulusLength: 2048});
   const files = {'https://test.files.1drv.com/report.xlsx': await xlsx(reportSheets()), 'https://test.files.1drv.com/book.xlsx': await xlsx(journalSheets())};
   mf = new Miniflare({...options,
-    bindings: {...options.bindings, ANTHROPIC_API_KEY: 'test-only-anthropic'},
+    bindings: {...options.bindings, ANTHROPIC_API_KEY: 'test-only-anthropic', ONEDRIVE_CLIENT_ID: 'test-client', GOOGLE_SERVICE_ACCOUNT: JSON.stringify({type: 'service_account', client_email: 'oko1@test.iam.gserviceaccount.com',
+      private_key: googleKey.privateKey.export({type: 'pkcs8', format: 'pem'})})},
     outboundService: async request => {
       const url = new URL(request.url);
       outbound.push({url: request.url, body: request.method === 'POST' ? await request.text() : null, key: request.headers.get('x-api-key')});
+      // OKO1's Microsoft access: sign-in code, then a renewal each morning (rotated); Graph opens the shared folder.
+      if (url.hostname === 'login.microsoftonline.com') {
+        const form = new URLSearchParams(outbound.at(-1).body);
+        if (form.get('client_id') !== 'test-client') return Response.json({error: 'invalid_client'}, {status: 400});
+        if (form.get('grant_type') === 'authorization_code' && form.get('code') === 'test-code' && form.get('code_verifier')) return Response.json({access_token: 'graph-1', refresh_token: 'renew-1'});
+        if (form.get('grant_type') === 'refresh_token' && form.get('refresh_token') === microsoftRenewal) { microsoftRenewal = 'renew-2'; return Response.json({access_token: 'graph-2', refresh_token: 'renew-2'}); }
+        return Response.json({error: 'invalid_grant'}, {status: 400});
+      }
+      if (url.hostname === 'graph.microsoft.com') {
+        if (request.headers.get('authorization') !== 'Bearer graph-2') return new Response('', {status: 401});
+        if (url.pathname.startsWith('/v1.0/shares/')) return Response.json({name: 'Reporty', id: 'root1', folder: {}, parentReference: {driveId: 'drive1'}, children: [
+          {name: '2026-10', id: 'month1', folder: {}, parentReference: {driveId: 'drive1'}, lastModifiedDateTime: '2026-10-11T08:00:00Z'},
+        ]});
+        if (url.pathname === '/v1.0/drives/drive1/items/month1/children') return Response.json({value: [
+          {name: 'Peněžní deník.xlsx', file: {}, size: 5000, '@microsoft.graph.downloadUrl': 'https://test.files.1drv.com/book.xlsx'},
+          {name: 'Denní report 9.10.2026.xlsx', file: {}, size: 5000, '@microsoft.graph.downloadUrl': 'https://test.files.1drv.com/report.xlsx'},
+        ]});
+      }
+      // Google Drive through OKO1's own Google account: a signed JWT for an access, then the Drive API.
+      if (url.hostname === 'oauth2.googleapis.com') {
+        const assertion = new URLSearchParams(outbound.at(-1).body).get('assertion') ?? '';
+        const [head, claims, signature] = assertion.split('.');
+        const valid = verify('RSA-SHA256', Buffer.from(head + '.' + claims), googleKey.publicKey, Buffer.from(signature ?? '', 'base64url'));
+        const body = JSON.parse(Buffer.from(claims ?? '', 'base64url').toString() || '{}');
+        if (!valid || body.iss !== 'oko1@test.iam.gserviceaccount.com' || body.scope !== 'https://www.googleapis.com/auth/drive.readonly') return Response.json({error: 'invalid_grant'}, {status: 400});
+        return Response.json({access_token: 'google-1'});
+      }
+      if (url.hostname === 'www.googleapis.com') {
+        if (request.headers.get('authorization') !== 'Bearer google-1') return new Response('', {status: 401});
+        const q = url.searchParams.get('q') ?? '';
+        if (url.pathname === '/drive/v3/files' && q.startsWith("'1GoogleRootFolder' in parents")) return Response.json({files: [{id: '1GoogleMonth', name: '2026-10', mimeType: 'application/vnd.google-apps.folder', modifiedTime: '2026-10-11T08:00:00Z'}]});
+        if (url.pathname === '/drive/v3/files' && q.startsWith("'1GoogleMonth' in parents")) return Response.json({files: [
+          {id: '1GoogleReport', name: 'Denní report 9.10.2026.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},
+          {id: '1GoogleBook', name: 'Peněžní deník', mimeType: 'application/vnd.google-apps.spreadsheet'},
+        ]});
+        if (url.pathname === '/drive/v3/files' && q.startsWith("name = 'OKO1 reporty'")) return Response.json({files: googleShared ? [{id: '1GoogleRootFolder'}] : []});
+        if (url.pathname === '/drive/v3/files' ) return Response.json({error: {code: 404}}, {status: 404});
+        if (url.pathname === '/drive/v3/files/1GoogleReport' && url.searchParams.get('alt') === 'media') return new Response(files['https://test.files.1drv.com/report.xlsx']);
+        if (url.pathname === '/drive/v3/files/1GoogleBook/export') return new Response(files['https://test.files.1drv.com/book.xlsx']);
+      }
+      // New personal share links do not open through the public API any more.
+      if (url.hostname === 'api.onedrive.com' && url.pathname.includes('u!' + Buffer.from('https://1drv.ms/f/c/synthetic/test').toString('base64url'))) return new Response('', {status: 401});
       if (url.hostname === 'api.onedrive.com') {
         const day = outbound.filter(entry => entry.url.includes('onedrive')).length;
         return Response.json({name: 'Reporty', folder: {}, children: [
@@ -284,10 +330,59 @@ try {
   assert.deepEqual(await (await call('PUT', '/admin/t/excel-venue/report', manual)).json(), {businessDate: '2026-10-11', lines: 1, notes: false, warnings: []});
   assert.equal((await (await call('GET', '/admin/t/excel-venue/briefing?date=2026-10-11')).json()).briefing.revenueCents, 100000);
   assert.equal((await call('GET', '/admin/t/excel-venue/report?date=11.10.2026')).status, 400);
-  assert.deepEqual(await (await call('POST', '/admin/t/test-venue/fetch', {date: '2026-10-09'})).json(), {found: false, warnings: ['OneDrive: odkaz na složku není nastavený.']});
+  // Without a link OKO1 looks for "OKO1 reporty" shared with its Google account (none is shared here).
+  assert.deepEqual(await (await call('POST', '/admin/t/test-venue/fetch', {date: '2026-10-09'})).json(), {found: false, warnings: ['Google Drive: složka „OKO1 reporty“ není nasdílená účtu OKO1 (oko1@test.iam.gserviceaccount.com).']});
   const fetchesBefore = outbound.length;
   assert.deepEqual(await (await call('POST', '/admin/t/excel-venue/fetch', {date: '2026-10-09', keep: true})).json(), {found: true, kept: true, warnings: []}, 'history loading keeps a day with the daily report');
   assert.equal(outbound.length, fetchesBefore);
+  // A new personal share link opens only with OKO1's Microsoft access: connected once from the dashboard, then renewed each fetch.
+  const graphConfig = {...excelConfig, reportsLink: 'https://1drv.ms/f/c/synthetic/test'};
+  assert.equal((await call('PUT', '/admin/t/excel-graph/config', graphConfig)).status, 200);
+  const notConnected = await (await call('POST', '/admin/t/excel-graph/fetch', {date: '2026-10-09'})).json();
+  assert.equal(notConnected.found, false);
+  assert.match(notConnected.warnings[0], /nejde otevřít bez přihlášení.*Připojit OneDrive/);
+  const withoutSession = await mf.dispatchFetch('http://local.test/d/excel-graph/onedrive', {redirect: 'manual'});
+  assert.equal(withoutSession.status, 303);
+  assert.equal(withoutSession.headers.get('location'), 'http://local.test/d/excel-graph', 'only a logged-in dashboard starts the sign-in');
+  const graphStub = (await mf.getDurableObjectNamespace('TENANTS')).get((await mf.getDurableObjectNamespace('TENANTS')).idFromName('excel-graph'));
+  const started = await graphStub.onedriveStart('excel-graph', 'http://local.test/onedrive/callback');
+  const signin = new URL(started.body.url);
+  assert.equal(signin.origin + signin.pathname, 'https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize');
+  assert.equal(signin.searchParams.get('scope'), 'Files.Read offline_access');
+  assert.equal(signin.searchParams.get('code_challenge_method'), 'S256');
+  const state = signin.searchParams.get('state');
+  assert.match(state, /^excel-graph~[a-f0-9]{48}$/);
+  const finish = query => mf.dispatchFetch('http://local.test/onedrive/callback?' + new URLSearchParams(query));
+  assert.equal((await finish({state: 'other~' + 'a'.repeat(48), code: 'test-code'})).status, 400);
+  assert.equal((await finish({state, error: 'access_denied'})).status, 400);
+  const connected = await finish({state, code: 'test-code'});
+  assert.equal(connected.status, 200);
+  assert.match(await connected.text(), /OneDrive je připojený/);
+  assert.equal((await finish({state, code: 'test-code'})).status, 400, 'a sign-in is finished once');
+  const fetchedGraph = await (await call('POST', '/admin/t/excel-graph/fetch', {date: '2026-10-09'})).json();
+  assert.equal(fetchedGraph.found, true, JSON.stringify(fetchedGraph.warnings));
+  assert.equal(microsoftRenewal, 'renew-2', 'the rotated renewal is kept');
+  assert.deepEqual((await (await call('GET', '/admin/t/excel-graph/report?date=2026-10-09')).json()).report.files, ['Denní report 9.10.2026.xlsx', 'Peněžní deník.xlsx']);
+  // A Google Drive folder shared only with OKO1's Google account (read-only); a folder not shared with it says so.
+  assert.equal((await call('PUT', '/admin/t/excel-google/config', {...excelConfig, reportsLink: 'https://drive.google.com/drive/folders/1GoogleRootFolder?usp=sharing'})).status, 200);
+  const fetchedGoogle = await (await call('POST', '/admin/t/excel-google/fetch', {date: '2026-10-09'})).json();
+  assert.equal(fetchedGoogle.found, true, JSON.stringify(fetchedGoogle.warnings));
+  assert.deepEqual((await (await call('GET', '/admin/t/excel-google/report?date=2026-10-09')).json()).report.files, ['Denní report 9.10.2026.xlsx', 'Peněžní deník.xlsx']);
+  assert.equal((await (await call('POST', '/admin/t/excel-google/fetch', {date: '2026-10-08'})).json()).warnings[0], 'Google Drive: denní report za tento den ve složce není.');
+  assert.equal((await call('PUT', '/admin/t/excel-google/config', {...excelConfig, reportsLink: 'https://drive.google.com/drive/folders/1NotSharedFolder'})).status, 200);
+  assert.match((await (await call('POST', '/admin/t/excel-google/fetch', {date: '2026-10-09'})).json()).warnings[0], /není nasdílená účtu OKO1/);
+  // No link at all: OKO1 finds the folder "OKO1 reporty" that someone shared with its Google account.
+  assert.equal((await call('PUT', '/admin/t/excel-auto/config', {...excelConfig, reportsLink: ''})).status, 200);
+  assert.match((await (await call('POST', '/admin/t/excel-auto/fetch', {date: '2026-10-09'})).json()).warnings[0], /„OKO1 reporty“ není nasdílená účtu OKO1 \(oko1@test\.iam\.gserviceaccount\.com\)/);
+  googleShared = true;
+  const fetchedAuto = await (await call('POST', '/admin/t/excel-auto/fetch', {date: '2026-10-09'})).json();
+  assert.equal(fetchedAuto.found, true, JSON.stringify(fetchedAuto.warnings));
+  assert.deepEqual((await (await call('GET', '/admin/t/excel-auto/report?date=2026-10-09')).json()).report.files, ['Denní report 9.10.2026.xlsx', 'Peněžní deník.xlsx']);
+  googleShared = false;
+  // Microsoft refuses the renewal: no access, the warning says to connect again.
+  microsoftRenewal = 'revoked';
+  const lost = await (await call('POST', '/admin/t/excel-graph/fetch', {date: '2026-10-10'})).json();
+  assert.match(lost.warnings[0], /přístup OKO1 vypršel \(Microsoft 400 invalid_grant\)/);
 
   // Dashboard: page with a strict CSP, login by SMS code to the owner, session cookie, day data, logout.
   await mf.dispose();
@@ -648,10 +743,12 @@ try {
     body: rpc(1, 'initialize', {protocolVersion: '2025-06-18', capabilities: {}, clientInfo: {name: 'test', version: '1'}})})).json();
   assert.equal(initialized.result.serverInfo.name, 'oko1');
   const listed = await (await local('/mcp', {method: 'POST', headers: {...mcpHeaders, authorization: 'Bearer ' + tokens.access_token}, body: rpc(2, 'tools/list')})).json();
-  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['akce_zebricek', 'den', 'historie_ceny', 'k_vyrizeni', 'kontrola_cen', 'kontrola_lahvi', 'listek', 'menu_engineering', 'naklady_dodavatele', 'odhad_a_vyhled', 'preceneni', 'ranni_prehled', 'report_manazeru', 'souhrn_obdobi', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty', 'vydelek_polozek',
+  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['akce_zebricek', 'den', 'historie_ceny', 'k_vyrizeni', 'kontrola_cen', 'kontrola_lahvi', 'listek', 'menu_engineering', 'naklady_dodavatele', 'odhad_a_vyhled', 'preceneni', 'ranni_prehled', 'report_dne_texty', 'report_manazeru', 'souhrn_obdobi', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty', 'vydelek_polozek',
     'web_blokace_a_akce', 'web_darkove_karty', 'web_host', 'web_navstevnost', 'web_platby_lahvi', 'web_prehled', 'web_recenze', 'web_rezervace', 'web_rezervace_detail', 'web_tabulka']);
   assert.ok(listed.result.tools.every(entry => entry.annotations.readOnlyHint === true), 'read only');
 
+  const reportTexts = await mcp('report_dne_texty', {od: '2026-10-01', do: '2026-10-31'});
+  assert.ok(!reportTexts.error && Array.isArray(reportTexts.data.days) && Array.isArray(reportTexts.data.themes.themes) && Array.isArray(reportTexts.data.djs), 'report texts over a period');
   // Tools: live data of the web (names, contacts, tables) and the POS data of OKO1, together in "den".
   const day = await mcp('web_rezervace', {od: today, do: today});
   assert.equal(day.data.pocet, 3);
@@ -802,6 +899,18 @@ try {
   assert.equal((await jdIngest('batch-jd-menu-0', [menuDay(addDays(today, -1), {...interest, ids: []})])).status, 400, 'nothing about single visits');
   assert.equal((await jdIngest('batch-jd-menu-0', [menuDay(addDays(today, -1), {...interest, languages: [{key: 'en', visits: 1}]})])).status, 400, 'a language needs reservations');
   assert.equal((await jdIngest('batch-jd-menu-1', [menuDay(addDays(today, -1), interest), menuDay(addDays(today, -2)), menuDay(addDays(today, -8), {...interest, visits: 10, abroad: 2, languages: [{key: 'cs', visits: 10, reserved: 2}]})])).status, 200);
+  // Prices nearby (public menus, stored by the deploy): a wrong set is refused, the card compares with our current menu.
+  const nearby = {checkedOn: addDays(today, -3), scope: 'Dlouhá <x>', basket: [{item: 'burger', label: 'Burger', section: 'food', ours: {name: 'Classic <b>Burger</b>', category: 'Burgery', priceIndex: 1}}],
+    venues: [...['a', 'b', 'c'].map((key, i) => ({key, name: `Podnik <${key}>`, url: `https://${key}.example/menu`, items: [{item: 'burger', name: 'Burger', priceCzk: 200 + 10 * i}]})),
+      {key: 'd', name: 'Podnik d', kind: 'bar', url: 'https://d.example', note: 'lístek <i>není</i> online', items: []}]};
+  assert.equal((await call('PUT', '/admin/t/james-dean/competitors', {...nearby, checkedOn: 'x'})).status, 400);
+  assert.equal((await call('PUT', '/admin/t/james-dean/competitors', nearby, null)).status, 401, 'admin only');
+  assert.deepEqual((await (await call('PUT', '/admin/t/james-dean/competitors', nearby)).json()), {checkedOn: nearby.checkedOn, venues: 4, prices: 3});
+  assert.equal((await (await call('GET', '/admin/t/james-dean/competitors')).json()).venues.length, 4);
+  const big = {...nearby, venues: [...nearby.venues, ...['e', 'f', 'g', 'h', 'i'].map(key => ({key, name: key, url: `https://${key}.example`, items: Array.from({length: 300}, () => ({item: 'burger', name: 'x'.repeat(200), priceCzk: 250}))}))]};
+  assert.ok(JSON.stringify(big).length > 262144);
+  assert.equal((await call('PUT', '/admin/t/james-dean/competitors', big)).status, 200, 'every venue nearby: a bigger body than other admin calls');
+  assert.equal((await call('PUT', '/admin/t/james-dean/competitors', nearby)).status, 200);
   const boardData = await (await jdBoard('GET', '/data', undefined, jdCookie)).json();
   assert.deepEqual([boardData.menuInterest.length, boardData.menuInterest[11].to, boardData.menuInterest[11].days, boardData.menuInterest[11].visits, boardData.menuInterest[11].food, boardData.menuInterest[11].languages,
     boardData.menuInterest[10].days, boardData.menuInterest[10].visits, boardData.menuInterest[9].days],
@@ -811,6 +920,16 @@ try {
   assert.deepEqual([boardData.menu.items, boardData.menu.parts.map(part => [part.part, part.items]), boardData.menu.changes.length, boardData.menu.changesTotal], [4, [['food', 3], ['drinks', 1]], 4, 4]);
   assert.deepEqual(boardData.menu.parts[0].categories[0], {name: 'Burgery', items: 2, minCents: 22500, maxCents: 25900, avgCents: 24200});
   const content = await renderCard({'/d/james-dean/data': boardData, '/d/james-dean/web': {card}}, 'content');
+  const nearbyRow = boardData.menu.competitors.rows[0];
+  assert.deepEqual([nearbyRow.ourName, nearbyRow.medianCents, nearbyRow.diffPct], ['Classic <b>Burger</b>', 21000, Math.round((nearbyRow.ourCents / 21000 - 1) * 100)]);
+  assert.ok(nearbyRow.ourCents > 0, 'our price from the current menu');
+  assert.deepEqual(boardData.menu.competitors.sections, [{section: 'food', name: 'Jídlo', compared: 1, medianDiffPct: nearbyRow.diffPct, above: nearbyRow.diffPct >= 15 ? 1 : 0, below: nearbyRow.diffPct <= -15 ? 1 : 0}]);
+  assert.match(content, /Ceny proti okolí <span class="muted">\(4 podniky – Dlouhá &lt;x&gt;, s cenami online 3,[\s\S]*<b>Jídlo<\/b> celkově[\s\S]*Podnik &lt;a&gt;[\s\S]*Podnik d<\/a> \(bar\) – lístek &lt;i&gt;není&lt;\/i&gt; online/, 'names escaped, a venue without prices online');
+  // The Monday message in the week after the prices were read, not later.
+  const nearbySunday = [0, 1, 2, 3, 4, 5, 6].map(day => addDays(nearby.checkedOn, day)).find(day => new Date(day + 'T12:00:00Z').getUTCDay() === 0);
+  const nearbyBriefing = async day => (await (await call('GET', `/admin/t/james-dean/briefing?date=${day}`)).json()).briefing.competitors;
+  assert.deepEqual([(await nearbyBriefing(nearbySunday)).venues, (await nearbyBriefing(nearbySunday)).compared], [3, 1]);
+  assert.equal(await nearbyBriefing(addDays(nearbySunday, 7)), null);
   assert.match(content, /Zájem o lístek na webu \(12 týdnů\)[\s\S]*<td class="n">20<\/td><td class="n">30 \/ 12<\/td><td class="n">75 %<\/td><td class="n">30 %<\/td><td class="n">70 %<\/td><td class="n">0 %<\/td><td class="n">2 <span class="muted">\(10,0 %\)<\/span>/);
   // The menu card also checks prices and, with POS bills, shows what sold by item and what is not paired to the menu.
   assert.deepEqual([boardData.menu.priceCheck, boardData.menu.profit.items.map(row => [row.name, row.quantity]), boardData.menu.profit.unpaired.map(row => row.name)],

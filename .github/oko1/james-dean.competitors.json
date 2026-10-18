@@ -1,0 +1,3631 @@
+{
+ "checkedOn": "2026-10-18",
+ "scope": "Dlouhá a V Kolkovně",
+ "basket": [
+  {
+   "item": "eggs-scrambled",
+   "label": "Míchaná vejce (snídaně)",
+   "section": "food",
+   "ours": {
+    "name": "Míchaná vejce – 3 ks",
+    "category": "Snídaně"
+   }
+  },
+  {
+   "item": "breakfast-full",
+   "label": "Velká snídaně (americká / anglická)",
+   "section": "food",
+   "ours": {
+    "name": "Americká snídaně",
+    "category": "Snídaně"
+   }
+  },
+  {
+   "item": "omelette",
+   "label": "Omeleta",
+   "section": "food",
+   "ours": {
+    "name": "Cheesy Spin omeleta",
+    "category": "Snídaně"
+   }
+  },
+  {
+   "item": "granola",
+   "label": "Jogurt s granolou / ovesná kaše",
+   "section": "food",
+   "ours": {
+    "name": "Giant Granola",
+    "category": "Snídaně"
+   }
+  },
+  {
+   "item": "onion-rings",
+   "label": "Cibulové kroužky",
+   "section": "food",
+   "ours": {
+    "name": "Cibulové kroužky",
+    "category": "Předkrmy"
+   }
+  },
+  {
+   "item": "loaded-fries",
+   "label": "Hranolky se sýrem (loaded fries)",
+   "section": "food",
+   "ours": {
+    "name": "Buffalo Hranolky",
+    "category": "Předkrmy"
+   }
+  },
+  {
+   "item": "chicken-strips",
+   "label": "Kuřecí stripsy",
+   "section": "food",
+   "ours": {
+    "name": "Colorado Strips",
+    "category": "Předkrmy"
+   }
+  },
+  {
+   "item": "fried-shrimp",
+   "label": "Smažené krevety",
+   "section": "food",
+   "ours": {
+    "name": "Panko krevety",
+    "category": "Předkrmy"
+   }
+  },
+  {
+   "item": "broth",
+   "label": "Hovězí vývar",
+   "section": "food",
+   "ours": {
+    "name": "Hovězí vývar",
+    "category": "Polévky"
+   }
+  },
+  {
+   "item": "soup",
+   "label": "Krémová polévka / polévka dne",
+   "section": "food",
+   "ours": {
+    "name": "Dýňová polévka",
+    "category": "Polévky"
+   }
+  },
+  {
+   "item": "cheeseburger",
+   "label": "Cheeseburger",
+   "section": "food",
+   "ours": {
+    "name": "Classic Cheeseburger",
+    "category": "Burgery",
+    "priceIndex": 1
+   }
+  },
+  {
+   "item": "bacon-burger",
+   "label": "Burger se slaninou",
+   "section": "food",
+   "ours": {
+    "name": "Bacon Cheddar burger",
+    "category": "Burgery",
+    "priceIndex": 1
+   }
+  },
+  {
+   "item": "smashburger",
+   "label": "Smashburger",
+   "section": "food",
+   "ours": {
+    "name": "Double Dean Smashburger",
+    "category": "Burgery"
+   }
+  },
+  {
+   "item": "chicken-burger",
+   "label": "Kuřecí burger",
+   "section": "food",
+   "ours": {
+    "name": "Spicy Chicken Burger",
+    "category": "Burgery"
+   }
+  },
+  {
+   "item": "veggie-burger",
+   "label": "Vegetariánský burger",
+   "section": "food",
+   "ours": {
+    "name": "Vegetarian Burger",
+    "category": "Burgery"
+   }
+  },
+  {
+   "item": "club-sandwich",
+   "label": "Club sendvič",
+   "section": "food",
+   "ours": {
+    "name": "Club sendvič",
+    "category": "Sendviče"
+   }
+  },
+  {
+   "item": "pastrami",
+   "label": "Pastrami sendvič",
+   "section": "food",
+   "ours": {
+    "name": "Pastrami sendvič",
+    "category": "Sendviče"
+   }
+  },
+  {
+   "item": "hot-dog",
+   "label": "Hot dog",
+   "section": "food",
+   "ours": {
+    "name": "Chicago Dog",
+    "category": "Sendviče"
+   }
+  },
+  {
+   "item": "philly",
+   "label": "Philly cheesesteak",
+   "section": "food",
+   "ours": {
+    "name": "Philly Cheesesteak sendvič",
+    "category": "Sendviče"
+   }
+  },
+  {
+   "item": "caesar",
+   "label": "Caesar salát s kuřetem",
+   "section": "food",
+   "ours": {
+    "name": "Caesar",
+    "category": "Saláty"
+   }
+  },
+  {
+   "item": "salad",
+   "label": "Salát (hlavní, bez masa)",
+   "section": "food",
+   "ours": {
+    "name": "Route 66",
+    "category": "Saláty"
+   }
+  },
+  {
+   "item": "wrap",
+   "label": "Wrap / tortilla",
+   "section": "food",
+   "ours": {
+    "name": "Kuřecí Jalapeños Wrap",
+    "category": "Saláty"
+   }
+  },
+  {
+   "item": "steak",
+   "label": "Hovězí steak (rumpsteak / striploin ~250 g)",
+   "section": "food",
+   "ours": {
+    "name": "Striploin steak",
+    "category": "Steaky"
+   }
+  },
+  {
+   "item": "chicken-main",
+   "label": "Kuřecí hlavní jídlo (prsa / supreme)",
+   "section": "food",
+   "ours": {
+    "name": "Kuřecí supreme",
+    "category": "Steaky"
+   }
+  },
+  {
+   "item": "ribs",
+   "label": "Vepřová žebra",
+   "section": "food",
+   "ours": {
+    "name": "Kovbojská žebra",
+    "category": "Steaky"
+   }
+  },
+  {
+   "item": "wings",
+   "label": "Kuřecí křídla",
+   "section": "food",
+   "ours": {
+    "name": "Kuřecí křídla",
+    "category": "Steaky"
+   }
+  },
+  {
+   "item": "shrimp-main",
+   "label": "Grilované krevety (hlavní jídlo)",
+   "section": "food",
+   "ours": {
+    "name": "Bubba Gump krevety",
+    "category": "Mezinárodní"
+   }
+  },
+  {
+   "item": "octopus",
+   "label": "Chobotnice",
+   "section": "food",
+   "ours": {
+    "name": "Karibská chobotnice",
+    "category": "Mezinárodní"
+   }
+  },
+  {
+   "item": "pasta",
+   "label": "Těstoviny (aglio olio / základní)",
+   "section": "food",
+   "ours": {
+    "name": "Spaghetti Aglio Olio & Beef",
+    "category": "Mezinárodní"
+   }
+  },
+  {
+   "item": "pasta-seafood",
+   "label": "Těstoviny s krevetami / mořskými plody",
+   "section": "food",
+   "ours": {
+    "name": "Spaghetti Scampi",
+    "category": "Mezinárodní"
+   }
+  },
+  {
+   "item": "mac-cheese",
+   "label": "Mac & cheese",
+   "section": "food",
+   "ours": {
+    "name": "Macaroni & Cheese",
+    "category": "Mezinárodní"
+   }
+  },
+  {
+   "item": "fries",
+   "label": "Hranolky (příloha)",
+   "section": "food",
+   "ours": {
+    "name": "Hranolky",
+    "category": "Přílohy"
+   }
+  },
+  {
+   "item": "mashed",
+   "label": "Bramborová kaše (příloha)",
+   "section": "food",
+   "ours": {
+    "name": "Bramborová kaše",
+    "category": "Přílohy"
+   }
+  },
+  {
+   "item": "coleslaw",
+   "label": "Coleslaw (příloha)",
+   "section": "food",
+   "ours": {
+    "name": "Salát Coleslaw",
+    "category": "Přílohy"
+   }
+  },
+  {
+   "item": "side-salad",
+   "label": "Přílohový salát",
+   "section": "food",
+   "ours": {
+    "name": "Přílohový salát",
+    "category": "Přílohy"
+   }
+  },
+  {
+   "item": "bread",
+   "label": "Pečivo (příloha)",
+   "section": "food",
+   "ours": {
+    "name": "Pečivo",
+    "category": "Přílohy"
+   }
+  },
+  {
+   "item": "sauce",
+   "label": "Omáčka / dip navíc",
+   "section": "food",
+   "ours": {
+    "name": "BBQ",
+    "category": "Omáčky"
+   }
+  },
+  {
+   "item": "pancakes",
+   "label": "Lívance / palačinky",
+   "section": "food",
+   "ours": {
+    "name": "Lívance slečny Daisy",
+    "category": "Dezerty"
+   }
+  },
+  {
+   "item": "waffles",
+   "label": "Vafle",
+   "section": "food",
+   "ours": {
+    "name": "Vafle slečny Daisy",
+    "category": "Dezerty"
+   }
+  },
+  {
+   "item": "ice-cream",
+   "label": "Zmrzlinový pohár",
+   "section": "food",
+   "ours": {
+    "name": "Banana Split",
+    "category": "Dezerty"
+   }
+  },
+  {
+   "item": "cake",
+   "label": "Dort / koláč (porce)",
+   "section": "food",
+   "ours": {
+    "name": "Dorty - dle nabídky - 1 porce",
+    "category": "Dezerty"
+   }
+  },
+  {
+   "item": "beer-draft-03",
+   "label": "Točený ležák 0,3 l",
+   "section": "alcohol",
+   "volumeMl": 300,
+   "ours": {
+    "name": "Budvar Original",
+    "category": "Pivo & cider",
+    "group": "Točené"
+   }
+  },
+  {
+   "item": "beer-draft-05",
+   "label": "Točený ležák 0,5 l",
+   "section": "alcohol",
+   "volumeMl": 500
+  },
+  {
+   "item": "beer-bottle",
+   "label": "Lahvový ležák 0,33 l",
+   "section": "alcohol",
+   "volumeMl": 330,
+   "ours": {
+    "name": "Budvar Original",
+    "category": "Pivo & cider",
+    "group": "Lahvové"
+   }
+  },
+  {
+   "item": "beer-nonalc",
+   "label": "Nealkoholické pivo (lahev)",
+   "section": "soft",
+   "volumeMl": 330
+  },
+  {
+   "item": "beer-import",
+   "label": "Corona / Desperados 0,33 l",
+   "section": "alcohol",
+   "volumeMl": 330,
+   "ours": {
+    "name": "Corona Extra",
+    "category": "Pivo & cider"
+   }
+  },
+  {
+   "item": "cider",
+   "label": "Cider 0,33 l",
+   "section": "alcohol",
+   "volumeMl": 330,
+   "ours": {
+    "name": "Frisco",
+    "category": "Pivo & cider"
+   }
+  },
+  {
+   "item": "wine-white",
+   "label": "Bílé víno rozlévané (0,15 l)",
+   "section": "alcohol",
+   "volumeMl": 150,
+   "perVolume": true,
+   "ours": {
+    "name": "La Decza Cuvée",
+    "category": "Vína",
+    "volumeMl": 150
+   }
+  },
+  {
+   "item": "wine-red",
+   "label": "Červené víno rozlévané (0,15 l)",
+   "section": "alcohol",
+   "volumeMl": 150,
+   "perVolume": true,
+   "ours": {
+    "name": "Primitivo",
+    "category": "Vína",
+    "volumeMl": 150
+   }
+  },
+  {
+   "item": "prosecco-glass",
+   "label": "Prosecco rozlévané (0,1 l)",
+   "section": "alcohol",
+   "volumeMl": 100,
+   "perVolume": true,
+   "ours": {
+    "name": "Martini Prosecco",
+    "category": "Vína",
+    "volumeMl": 100
+   }
+  },
+  {
+   "item": "wine-bottle",
+   "label": "Víno domácí láhev 0,75 l",
+   "section": "alcohol",
+   "volumeMl": 750,
+   "ours": {
+    "name": "La Decza Cuvée",
+    "category": "Vína",
+    "volumeMl": 750
+   }
+  },
+  {
+   "item": "prosecco-bottle",
+   "label": "Prosecco láhev 0,75 l",
+   "section": "alcohol",
+   "volumeMl": 750,
+   "ours": {
+    "name": "Martini Prosecco",
+    "category": "Vína",
+    "volumeMl": 750
+   }
+  },
+  {
+   "item": "moet-bottle",
+   "label": "Moët & Chandon Impérial 0,75 l",
+   "section": "alcohol",
+   "volumeMl": 750,
+   "ours": {
+    "name": "Moët&Chandon Imperial Brut",
+    "category": "Vína",
+    "volumeMl": 750
+   }
+  },
+  {
+   "item": "vodka",
+   "label": "Vodka (Finlandia / Absolut / běžná) 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Finlandia",
+    "category": "Destiláty",
+    "group": "Vodka"
+   }
+  },
+  {
+   "item": "vodka-premium",
+   "label": "Vodka prémiová (Grey Goose / Belvedere) 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Grey Goose",
+    "category": "Destiláty",
+    "group": "Vodka"
+   }
+  },
+  {
+   "item": "rum-white",
+   "label": "Rum bílý (Bacardi) 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Bacardi Carta Blanca",
+    "category": "Destiláty",
+    "group": "Rum & Cachaça"
+   }
+  },
+  {
+   "item": "rum-spiced",
+   "label": "Captain Morgan Spiced 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Captain Morgan Spiced Gold",
+    "category": "Destiláty",
+    "group": "Rum & Cachaça"
+   }
+  },
+  {
+   "item": "rum-zacapa",
+   "label": "Ron Zacapa 23 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Ron Zacapa Centenario 23 Años",
+    "category": "Destiláty",
+    "group": "Rum & Cachaça"
+   }
+  },
+  {
+   "item": "rum-diplomatico",
+   "label": "Diplomático Reserva Exclusiva 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Diplomático Reserva Exclusiva",
+    "category": "Destiláty",
+    "group": "Rum & Cachaça"
+   }
+  },
+  {
+   "item": "gin",
+   "label": "Gin (Bombay / Beefeater / běžný) 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Bombay Sapphire",
+    "category": "Destiláty",
+    "group": "Gin"
+   }
+  },
+  {
+   "item": "gin-hendricks",
+   "label": "Hendrick's 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Hendrick's",
+    "category": "Destiláty",
+    "group": "Gin"
+   }
+  },
+  {
+   "item": "gin-monkey",
+   "label": "Monkey 47 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Monkey 47",
+    "category": "Destiláty",
+    "group": "Gin"
+   }
+  },
+  {
+   "item": "tequila",
+   "label": "Tequila blanco (El Jimador / běžná) 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "El Jimador",
+    "category": "Destiláty",
+    "group": "Tequila"
+   }
+  },
+  {
+   "item": "tequila-patron",
+   "label": "Patrón Silver 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Patrón",
+    "category": "Destiláty",
+    "group": "Tequila"
+   }
+  },
+  {
+   "item": "jack",
+   "label": "Jack Daniel's 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Jack Daniel's",
+    "category": "Destiláty",
+    "group": "Whisk(e)y & Bourbon"
+   }
+  },
+  {
+   "item": "jameson",
+   "label": "Jameson 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Jameson",
+    "category": "Destiláty",
+    "group": "Whisk(e)y & Bourbon"
+   }
+  },
+  {
+   "item": "jw-red",
+   "label": "Johnnie Walker Red 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Johnnie Walker Red Label",
+    "category": "Destiláty",
+    "group": "Whisk(e)y & Bourbon"
+   }
+  },
+  {
+   "item": "jw-black",
+   "label": "Johnnie Walker Black 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Johnnie Walker Black Label",
+    "category": "Destiláty",
+    "group": "Whisk(e)y & Bourbon"
+   }
+  },
+  {
+   "item": "chivas",
+   "label": "Chivas Regal 12 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Chivas Regal aged 12 years",
+    "category": "Destiláty",
+    "group": "Whisk(e)y & Bourbon"
+   }
+  },
+  {
+   "item": "jim-beam",
+   "label": "Jim Beam 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Jim Beam",
+    "category": "Destiláty",
+    "group": "Whisk(e)y & Bourbon"
+   }
+  },
+  {
+   "item": "glenfiddich",
+   "label": "Glenfiddich 12 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Glenfiddich aged 12 years",
+    "category": "Destiláty",
+    "group": "Single Malt Whisky"
+   }
+  },
+  {
+   "item": "macallan",
+   "label": "Macallan 12 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "The Macallan aged 12 years",
+    "category": "Destiláty",
+    "group": "Single Malt Whisky"
+   }
+  },
+  {
+   "item": "hennessy",
+   "label": "Hennessy VS 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Hennessy Very Special",
+    "category": "Destiláty",
+    "group": "Cognac & Brandy"
+   }
+  },
+  {
+   "item": "jager",
+   "label": "Jägermeister 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Jägermeister",
+    "category": "Destiláty",
+    "group": "Likéry"
+   }
+  },
+  {
+   "item": "baileys",
+   "label": "Baileys 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Baileys",
+    "category": "Destiláty",
+    "group": "Likéry"
+   }
+  },
+  {
+   "item": "becherovka",
+   "label": "Becherovka 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Becherovka",
+    "category": "Destiláty",
+    "group": "Likéry"
+   }
+  },
+  {
+   "item": "slivovice",
+   "label": "Slivovice 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Slivovice",
+    "category": "Destiláty",
+    "group": "Ostatní destiláty"
+   }
+  },
+  {
+   "item": "absinth",
+   "label": "Absinth 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Hill's Absinth 70%",
+    "category": "Destiláty",
+    "group": "Ostatní destiláty"
+   }
+  },
+  {
+   "item": "aperol-shot",
+   "label": "Aperol / Campari 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true,
+   "ours": {
+    "name": "Campari Bitter",
+    "category": "Destiláty",
+    "group": "Aperitivy"
+   }
+  },
+  {
+   "item": "fernet",
+   "label": "Fernet Stock 4 cl",
+   "section": "alcohol",
+   "volumeMl": 40,
+   "perVolume": true
+  },
+  {
+   "item": "aperol-spritz",
+   "label": "Aperol Spritz",
+   "section": "alcohol",
+   "ours": {
+    "name": "Aperol Spritz",
+    "category": "Aperitivy"
+   }
+  },
+  {
+   "item": "hugo",
+   "label": "Hugo",
+   "section": "alcohol",
+   "ours": {
+    "name": "Skinny Hugo",
+    "category": "Aperitivy"
+   }
+  },
+  {
+   "item": "negroni",
+   "label": "Negroni",
+   "section": "alcohol",
+   "ours": {
+    "name": "Negroni",
+    "category": "Aperitivy"
+   }
+  },
+  {
+   "item": "old-fashioned",
+   "label": "Old Fashioned",
+   "section": "alcohol",
+   "ours": {
+    "name": "Rum Old Fashioned",
+    "category": "Aperitivy"
+   }
+  },
+  {
+   "item": "mojito",
+   "label": "Mojito",
+   "section": "alcohol",
+   "ours": {
+    "name": "Mojito",
+    "category": "Caipirinhy"
+   }
+  },
+  {
+   "item": "caipirinha",
+   "label": "Caipirinha",
+   "section": "alcohol",
+   "ours": {
+    "name": "Caipirinha",
+    "category": "Caipirinhy"
+   }
+  },
+  {
+   "item": "margarita",
+   "label": "Margarita",
+   "section": "alcohol",
+   "ours": {
+    "name": "Margarita",
+    "category": "Tiki & Fancy drinky"
+   }
+  },
+  {
+   "item": "daiquiri",
+   "label": "Daiquiri",
+   "section": "alcohol",
+   "ours": {
+    "name": "Daiquiri",
+    "category": "Tiki & Fancy drinky"
+   }
+  },
+  {
+   "item": "mai-tai",
+   "label": "Mai Tai",
+   "section": "alcohol",
+   "ours": {
+    "name": "Mai-Tai",
+    "category": "Tiki & Fancy drinky"
+   }
+  },
+  {
+   "item": "espresso-martini",
+   "label": "Espresso Martini",
+   "section": "alcohol",
+   "ours": {
+    "name": "Espresso Vanilla Martini",
+    "category": "Martini"
+   }
+  },
+  {
+   "item": "pornstar",
+   "label": "Pornstar Martini",
+   "section": "alcohol",
+   "ours": {
+    "name": "Pornstar Martini",
+    "category": "Martini"
+   }
+  },
+  {
+   "item": "cosmopolitan",
+   "label": "Cosmopolitan",
+   "section": "alcohol",
+   "ours": {
+    "name": "Cosmopolitan",
+    "category": "Hollywood Glamour"
+   }
+  },
+  {
+   "item": "whiskey-sour",
+   "label": "Whiskey Sour",
+   "section": "alcohol",
+   "ours": {
+    "name": "Whiskey Sour",
+    "category": "Hollywood Glamour"
+   }
+  },
+  {
+   "item": "dark-stormy",
+   "label": "Dark 'n' Stormy",
+   "section": "alcohol",
+   "ours": {
+    "name": "Dark 'n' Stormy",
+    "category": "Hollywood Glamour"
+   }
+  },
+  {
+   "item": "moscow-mule",
+   "label": "Moscow Mule",
+   "section": "alcohol",
+   "ours": {
+    "name": "Moscow Mule",
+    "category": "Drive In Classic"
+   }
+  },
+  {
+   "item": "manhattan",
+   "label": "Manhattan",
+   "section": "alcohol",
+   "ours": {
+    "name": "Manhattan",
+    "category": "Drive In Classic"
+   }
+  },
+  {
+   "item": "paloma",
+   "label": "Paloma",
+   "section": "alcohol",
+   "ours": {
+    "name": "Highway Sunset Paloma",
+    "category": "Drive In Classic"
+   }
+  },
+  {
+   "item": "long-island",
+   "label": "Long Island Iced Tea",
+   "section": "alcohol",
+   "ours": {
+    "name": "Long Island Iced Tea",
+    "category": "Tall Drinky & Iced Tea"
+   }
+  },
+  {
+   "item": "bloody-mary",
+   "label": "Bloody Mary",
+   "section": "alcohol",
+   "ours": {
+    "name": "Bloody Marilyn",
+    "category": "Tall Drinky & Iced Tea"
+   }
+  },
+  {
+   "item": "gin-fizz",
+   "label": "Gin Fizz / Tom Collins",
+   "section": "alcohol",
+   "ours": {
+    "name": "Gin Fizz",
+    "category": "Tall Drinky & Iced Tea"
+   }
+  },
+  {
+   "item": "white-russian",
+   "label": "White Russian",
+   "section": "alcohol",
+   "ours": {
+    "name": "White Russian Ice Cream",
+    "category": "Desserty, Sladké Koktejly"
+   }
+  },
+  {
+   "item": "b52",
+   "label": "B-52 (shot)",
+   "section": "alcohol",
+   "ours": {
+    "name": "B-52",
+    "category": "Shootery"
+   }
+  },
+  {
+   "item": "cuba-libre",
+   "label": "Cuba Libre",
+   "section": "alcohol"
+  },
+  {
+   "item": "pina-colada",
+   "label": "Piña Colada",
+   "section": "alcohol"
+  },
+  {
+   "item": "gin-tonic",
+   "label": "Gin & Tonic",
+   "section": "alcohol"
+  },
+  {
+   "item": "irish-coffee",
+   "label": "Irská káva",
+   "section": "alcohol",
+   "ours": {
+    "name": "Irská káva",
+    "category": "Káva a horké nápoje"
+   }
+  },
+  {
+   "item": "cola",
+   "label": "Coca-Cola 0,33 l",
+   "section": "soft",
+   "volumeMl": 330,
+   "ours": {
+    "name": "Coca-Cola",
+    "category": "Nealkoholické nápoje"
+   }
+  },
+  {
+   "item": "sprite",
+   "label": "Sprite / Fanta 0,33 l",
+   "section": "soft",
+   "volumeMl": 330,
+   "ours": {
+    "name": "Sprite",
+    "category": "Nealkoholické nápoje"
+   }
+  },
+  {
+   "item": "tonic",
+   "label": "Tonic 0,25 l",
+   "section": "soft",
+   "volumeMl": 250,
+   "ours": {
+    "name": "Kinley",
+    "category": "Nealkoholické nápoje"
+   }
+  },
+  {
+   "item": "ginger-beer",
+   "label": "Ginger beer",
+   "section": "soft",
+   "volumeMl": 200,
+   "perVolume": true,
+   "ours": {
+    "name": "Ginger Beer",
+    "category": "Nealkoholické nápoje"
+   }
+  },
+  {
+   "item": "water-small",
+   "label": "Minerálka malá (0,25–0,33 l)",
+   "section": "soft",
+   "volumeMl": 300,
+   "ours": {
+    "name": "Natura",
+    "category": "Nealkoholické nápoje"
+   }
+  },
+  {
+   "item": "water-large",
+   "label": "Minerálka velká 0,75 l",
+   "section": "soft",
+   "volumeMl": 750,
+   "ours": {
+    "name": "Römerquelle",
+    "category": "Nealkoholické nápoje"
+   }
+  },
+  {
+   "item": "water-carafe",
+   "label": "Karafa vody",
+   "section": "soft",
+   "ours": {
+    "name": "Karafa vody",
+    "category": "Nealkoholické nápoje"
+   }
+  },
+  {
+   "item": "red-bull",
+   "label": "Red Bull 0,25 l",
+   "section": "soft",
+   "volumeMl": 250,
+   "ours": {
+    "name": "Red Bull",
+    "category": "Energetické nápoje"
+   }
+  },
+  {
+   "item": "juice",
+   "label": "Džus (Cappy apod.) 0,2 l",
+   "section": "soft",
+   "volumeMl": 200,
+   "perVolume": true,
+   "ours": {
+    "name": "Pomerančový",
+    "category": "Džusy"
+   }
+  },
+  {
+   "item": "fresh-orange",
+   "label": "Fresh pomerančový 0,2 l",
+   "section": "soft",
+   "volumeMl": 200,
+   "perVolume": true,
+   "ours": {
+    "name": "Pomerančová",
+    "category": "Čerstvě vymačkané šťávy"
+   }
+  },
+  {
+   "item": "lemonade",
+   "label": "Domácí limonáda (0,3–0,5 l)",
+   "section": "soft",
+   "volumeMl": 350,
+   "perVolume": true,
+   "ours": {
+    "name": "Citrónová",
+    "category": "Americké limonády"
+   }
+  },
+  {
+   "item": "ice-tea",
+   "label": "Domácí ledový čaj",
+   "section": "soft",
+   "volumeMl": 300,
+   "perVolume": true,
+   "ours": {
+    "name": "Black Mint Lemon Ice Tea",
+    "category": "Domácí ledové čaje",
+    "volumeMl": 300
+   }
+  },
+  {
+   "item": "milkshake",
+   "label": "Milkshake",
+   "section": "soft",
+   "ours": {
+    "name": "Vanilkový",
+    "category": "Mléčné koktejly"
+   }
+  },
+  {
+   "item": "virgin-mojito",
+   "label": "Virgin Mojito / nealko koktejl",
+   "section": "soft",
+   "ours": {
+    "name": "Virgin Mojito",
+    "category": "Nealkoholické"
+   }
+  },
+  {
+   "item": "espresso",
+   "label": "Espresso",
+   "section": "soft",
+   "ours": {
+    "name": "Espresso",
+    "category": "Káva a horké nápoje"
+   }
+  },
+  {
+   "item": "espresso-double",
+   "label": "Dvojité espresso / doppio",
+   "section": "soft",
+   "ours": {
+    "name": "Dvojité Espresso",
+    "category": "Káva a horké nápoje"
+   }
+  },
+  {
+   "item": "cappuccino",
+   "label": "Cappuccino",
+   "section": "soft",
+   "ours": {
+    "name": "Cappuccino",
+    "category": "Káva a horké nápoje"
+   }
+  },
+  {
+   "item": "latte",
+   "label": "Caffè latte / latte macchiato",
+   "section": "soft",
+   "ours": {
+    "name": "Espresso Latte Macchiato",
+    "category": "Káva a horké nápoje"
+   }
+  },
+  {
+   "item": "flat-white",
+   "label": "Flat white",
+   "section": "soft",
+   "ours": {
+    "name": "Flat white",
+    "category": "Káva a horké nápoje"
+   }
+  },
+  {
+   "item": "americano",
+   "label": "Americano / filtrovaná káva",
+   "section": "soft",
+   "ours": {
+    "name": "Americká překapávaná káva",
+    "category": "Káva a horké nápoje"
+   }
+  },
+  {
+   "item": "iced-coffee",
+   "label": "Ledová káva",
+   "section": "soft",
+   "ours": {
+    "name": "Ledová káva",
+    "category": "Káva a horké nápoje"
+   }
+  },
+  {
+   "item": "tea",
+   "label": "Čaj",
+   "section": "soft",
+   "ours": {
+    "name": "Čaj",
+    "category": "Káva a horké nápoje"
+   }
+  },
+  {
+   "item": "hot-chocolate",
+   "label": "Horká čokoláda",
+   "section": "soft",
+   "ours": {
+    "name": "Horká čokoláda",
+    "category": "Káva a horké nápoje"
+   }
+  }
+ ],
+ "venues": [
+  {
+   "key": "kolkovna-v-kolkovne",
+   "name": "Kolkovna V Kolkovně",
+   "area": "V Kolkovně 8",
+   "kind": "restaurant",
+   "url": "https://vkolkovne.kolkovna.cz/",
+   "items": [
+    {
+     "item": "soup",
+     "name": "Kulajda 0,33 l",
+     "priceCzk": 139,
+     "volumeMl": 330
+    },
+    {
+     "item": "soup",
+     "name": "Trhaná slepice v polévce 0,33 l",
+     "priceCzk": 129,
+     "volumeMl": 330,
+     "approx": true
+    },
+    {
+     "item": "caesar",
+     "name": "Salát Caesar 100 g",
+     "priceCzk": 289
+    },
+    {
+     "item": "salad",
+     "name": "Míchaný salát z čerstvé zeleniny 300 g",
+     "priceCzk": 249
+    },
+    {
+     "item": "salad",
+     "name": "Salát mozzarella 100 g",
+     "priceCzk": 269
+    },
+    {
+     "item": "cheeseburger",
+     "name": "Hovězí burger XXL 200 g",
+     "priceCzk": 329,
+     "approx": true
+    },
+    {
+     "item": "steak",
+     "name": "Hovězí biftek na grilu 200 g",
+     "priceCzk": 559,
+     "approx": true
+    },
+    {
+     "item": "chicken-main",
+     "name": "Kuřecí supreme 200 g",
+     "priceCzk": 339
+    },
+    {
+     "item": "ribs",
+     "name": "Pikantní vepřová žebra Spare Ribs 800 g",
+     "priceCzk": 429
+    },
+    {
+     "item": "wings",
+     "name": "Kolkovna Wings 9 ks",
+     "priceCzk": 329
+    },
+    {
+     "item": "pasta",
+     "name": "Špagety s mozzarellou 100 g",
+     "priceCzk": 269
+    },
+    {
+     "item": "pasta",
+     "name": "Pappardelle s lososem 100 g",
+     "priceCzk": 299,
+     "approx": true
+    },
+    {
+     "item": "bread",
+     "name": "Pečivo 1 košík",
+     "priceCzk": 79
+    },
+    {
+     "item": "ice-cream",
+     "name": "Výběr zmrzlin a sorbetů (3 kopečky)",
+     "priceCzk": 75
+    },
+    {
+     "item": "cake",
+     "name": "Domácí jablečný štrúdl 170 g",
+     "priceCzk": 149,
+     "approx": true
+    },
+    {
+     "item": "cake",
+     "name": "Čokoládový fondant 100 g",
+     "priceCzk": 179,
+     "approx": true
+    },
+    {
+     "item": "beer-draft-03",
+     "name": "Pilsner Urquell 0,3 l",
+     "priceCzk": 58,
+     "volumeMl": 300
+    },
+    {
+     "item": "beer-draft-03",
+     "name": "K-Sládkův speciál 0,3 l",
+     "priceCzk": 62,
+     "volumeMl": 300
+    },
+    {
+     "item": "beer-draft-05",
+     "name": "Pilsner Urquell 0,5 l",
+     "priceCzk": 76,
+     "volumeMl": 500
+    },
+    {
+     "item": "beer-draft-05",
+     "name": "K-Sládkův speciál 0,5 l",
+     "priceCzk": 79,
+     "volumeMl": 500
+    },
+    {
+     "item": "beer-nonalc",
+     "name": "Birell Světlý 0,3 l (točený)",
+     "priceCzk": 58,
+     "volumeMl": 300,
+     "approx": true
+    },
+    {
+     "item": "beer-nonalc",
+     "name": "Birell Světlý 0,5 l (točený)",
+     "priceCzk": 74,
+     "volumeMl": 500,
+     "approx": true
+    },
+    {
+     "item": "cider",
+     "name": "Frisco cider 0,33 l",
+     "priceCzk": 69,
+     "volumeMl": 330
+    },
+    {
+     "item": "wine-white",
+     "name": "Kolkovna Selection Chardonnay 0,15 l",
+     "priceCzk": 109,
+     "volumeMl": 150
+    },
+    {
+     "item": "wine-white",
+     "name": "Pinot Grigio Emilia Crea Vini 0,15 l",
+     "priceCzk": 129,
+     "volumeMl": 150
+    },
+    {
+     "item": "wine-red",
+     "name": "Kolkovna Selection Rulandské modré 0,15 l",
+     "priceCzk": 109,
+     "volumeMl": 150
+    },
+    {
+     "item": "wine-red",
+     "name": "Merlot Veneto 0,15 l",
+     "priceCzk": 129,
+     "volumeMl": 150
+    },
+    {
+     "item": "wine-red",
+     "name": "Primitivo di Manduria 0,15 l",
+     "priceCzk": 139,
+     "volumeMl": 150
+    },
+    {
+     "item": "prosecco-glass",
+     "name": "Prosecco DOC Serenissima 0,15 l",
+     "priceCzk": 139,
+     "volumeMl": 150
+    },
+    {
+     "item": "wine-bottle",
+     "name": "Ryzlink Vlašský p.s. suché, Cibulka 0,75 l",
+     "priceCzk": 469,
+     "volumeMl": 750
+    },
+    {
+     "item": "wine-bottle",
+     "name": "Cabernet Sauvignon, Pfeffer 0,75 l",
+     "priceCzk": 499,
+     "volumeMl": 750
+    },
+    {
+     "item": "prosecco-bottle",
+     "name": "Prosecco Spumante DOC Serenissima Extra Dry 0,75 l",
+     "priceCzk": 629,
+     "volumeMl": 750
+    },
+    {
+     "item": "prosecco-bottle",
+     "name": "Prosecco DOC Brut Millesimato Contarini 0,75 l",
+     "priceCzk": 769,
+     "volumeMl": 750
+    },
+    {
+     "item": "vodka",
+     "name": "Absolut Vodka 0,04 l",
+     "priceCzk": 109,
+     "volumeMl": 40
+    },
+    {
+     "item": "vodka",
+     "name": "Finlandia 0,04 l",
+     "priceCzk": 109,
+     "volumeMl": 40
+    },
+    {
+     "item": "vodka-premium",
+     "name": "Grey Goose 0,04 l",
+     "priceCzk": 149,
+     "volumeMl": 40
+    },
+    {
+     "item": "vodka-premium",
+     "name": "Beluga 0,04 l",
+     "priceCzk": 169,
+     "volumeMl": 40
+    },
+    {
+     "item": "rum-white",
+     "name": "Bacardi Carta Blanca 0,04 l",
+     "priceCzk": 109,
+     "volumeMl": 40
+    },
+    {
+     "item": "rum-spiced",
+     "name": "Captain Morgan Original Spiced Gold 0,04 l",
+     "priceCzk": 109,
+     "volumeMl": 40
+    },
+    {
+     "item": "rum-zacapa",
+     "name": "Ron Zacapa No. 23 0,04 l",
+     "priceCzk": 189,
+     "volumeMl": 40
+    },
+    {
+     "item": "rum-diplomatico",
+     "name": "Diplomatico Reserva Exclusiva 0,04 l",
+     "priceCzk": 179,
+     "volumeMl": 40
+    },
+    {
+     "item": "gin",
+     "name": "Beefeater 0,04 l",
+     "priceCzk": 109,
+     "volumeMl": 40
+    },
+    {
+     "item": "gin",
+     "name": "Bombay Sapphire 0,04 l",
+     "priceCzk": 119,
+     "volumeMl": 40
+    },
+    {
+     "item": "gin-hendricks",
+     "name": "Hendricks 0,04 l",
+     "priceCzk": 149,
+     "volumeMl": 40
+    },
+    {
+     "item": "tequila",
+     "name": "Olmeca Blanco 0,04 l",
+     "priceCzk": 109,
+     "volumeMl": 40
+    },
+    {
+     "item": "jack",
+     "name": "Jack Daniel's 0,04 l",
+     "priceCzk": 119,
+     "volumeMl": 40
+    },
+    {
+     "item": "jameson",
+     "name": "Jameson 0,04 l",
+     "priceCzk": 109,
+     "volumeMl": 40
+    },
+    {
+     "item": "chivas",
+     "name": "Chivas Regal 12 YO 0,04 l",
+     "priceCzk": 129,
+     "volumeMl": 40
+    },
+    {
+     "item": "glenfiddich",
+     "name": "Glenfiddich 12 YO 0,04 l",
+     "priceCzk": 169,
+     "volumeMl": 40
+    },
+    {
+     "item": "hennessy",
+     "name": "Martell VSOP 0,04 l",
+     "priceCzk": 179,
+     "volumeMl": 40,
+     "approx": true,
+     "note": "jiný koňak, Hennessy v lístku není"
+    },
+    {
+     "item": "jager",
+     "name": "Jägermeister 35 % 0,04 l",
+     "priceCzk": 109,
+     "volumeMl": 40
+    },
+    {
+     "item": "baileys",
+     "name": "Baileys Original 0,04 l",
+     "priceCzk": 99,
+     "volumeMl": 40
+    },
+    {
+     "item": "becherovka",
+     "name": "Becherovka 38 % 0,04 l",
+     "priceCzk": 109,
+     "volumeMl": 40
+    },
+    {
+     "item": "slivovice",
+     "name": "K-Slivovice 50 % 0,04 l",
+     "priceCzk": 139,
+     "volumeMl": 40
+    },
+    {
+     "item": "slivovice",
+     "name": "Slivovice R. Jelínek 45 % 0,04 l",
+     "priceCzk": 99,
+     "volumeMl": 40
+    },
+    {
+     "item": "fernet",
+     "name": "Fernet Stock 38 % 0,04 l",
+     "priceCzk": 109,
+     "volumeMl": 40
+    },
+    {
+     "item": "aperol-shot",
+     "name": "Campari Bitter 0,1 l",
+     "priceCzk": 119,
+     "volumeMl": 100,
+     "approx": true,
+     "note": "objem 0,1 l"
+    },
+    {
+     "item": "aperol-spritz",
+     "name": "Aperol Spritz",
+     "priceCzk": 179
+    },
+    {
+     "item": "hugo",
+     "name": "Hugo Spritz",
+     "priceCzk": 169
+    },
+    {
+     "item": "mojito",
+     "name": "Mojito",
+     "priceCzk": 179
+    },
+    {
+     "item": "long-island",
+     "name": "Long Island Iced Tea",
+     "priceCzk": 219
+    },
+    {
+     "item": "b52",
+     "name": "B 52",
+     "priceCzk": 129
+    },
+    {
+     "item": "cuba-libre",
+     "name": "Cuba Libre",
+     "priceCzk": 179
+    },
+    {
+     "item": "pina-colada",
+     "name": "Piňa Colada",
+     "priceCzk": 179
+    },
+    {
+     "item": "gin-tonic",
+     "name": "Gin Tonic",
+     "priceCzk": 179
+    },
+    {
+     "item": "irish-coffee",
+     "name": "Irská káva",
+     "priceCzk": 109
+    },
+    {
+     "item": "cola",
+     "name": "Coca-Cola 0,33 l",
+     "priceCzk": 72,
+     "volumeMl": 330
+    },
+    {
+     "item": "sprite",
+     "name": "Sprite 0,33 l",
+     "priceCzk": 72,
+     "volumeMl": 330
+    },
+    {
+     "item": "sprite",
+     "name": "Fanta 0,33 l",
+     "priceCzk": 72,
+     "volumeMl": 330
+    },
+    {
+     "item": "tonic",
+     "name": "Kinley Tonic 0,25 l",
+     "priceCzk": 70,
+     "volumeMl": 250
+    },
+    {
+     "item": "ginger-beer",
+     "name": "Kinley Ginger Ale 0,25 l",
+     "priceCzk": 70,
+     "volumeMl": 250,
+     "approx": true,
+     "note": "ginger ale, ne ginger beer"
+    },
+    {
+     "item": "water-small",
+     "name": "Voda Fromin 0,33 l",
+     "priceCzk": 59,
+     "volumeMl": 330
+    },
+    {
+     "item": "water-large",
+     "name": "Voda Fromin 0,7 l",
+     "priceCzk": 99,
+     "volumeMl": 700,
+     "approx": true
+    },
+    {
+     "item": "water-large",
+     "name": "Voda Fromin PREMIUM 0,75 l",
+     "priceCzk": 139,
+     "volumeMl": 750
+    },
+    {
+     "item": "red-bull",
+     "name": "Red Bull 0,25 l",
+     "priceCzk": 99,
+     "volumeMl": 250
+    },
+    {
+     "item": "juice",
+     "name": "Cappy 0,25 l",
+     "priceCzk": 70,
+     "volumeMl": 250
+    },
+    {
+     "item": "fresh-orange",
+     "name": "Fresh pomeranč 100 % 0,2 l",
+     "priceCzk": 129,
+     "volumeMl": 200
+    },
+    {
+     "item": "lemonade",
+     "name": "Domácí oranžáda 0,4 l",
+     "priceCzk": 95,
+     "volumeMl": 400,
+     "approx": true
+    },
+    {
+     "item": "virgin-mojito",
+     "name": "Virgin Mojito",
+     "priceCzk": 129
+    },
+    {
+     "item": "espresso",
+     "name": "Espresso",
+     "priceCzk": 69
+    },
+    {
+     "item": "espresso-double",
+     "name": "Espresso Doppio",
+     "priceCzk": 112
+    },
+    {
+     "item": "cappuccino",
+     "name": "Cappuccino",
+     "priceCzk": 85
+    },
+    {
+     "item": "latte",
+     "name": "Latte Macchiato",
+     "priceCzk": 89
+    },
+    {
+     "item": "flat-white",
+     "name": "Flat White",
+     "priceCzk": 119
+    },
+    {
+     "item": "americano",
+     "name": "Espresso Americano",
+     "priceCzk": 69
+    },
+    {
+     "item": "iced-coffee",
+     "name": "Ice Coffee",
+     "priceCzk": 99
+    },
+    {
+     "item": "tea",
+     "name": "Čaj",
+     "priceCzk": 69
+    },
+    {
+     "item": "hot-chocolate",
+     "name": "Horká čokoláda",
+     "priceCzk": 69
+    }
+   ]
+  },
+  {
+   "key": "cafe-80s",
+   "name": "Café 80's",
+   "area": "V Kolkovně 6",
+   "kind": "club",
+   "url": "https://www.cafe80.cz/cz/menu/",
+   "items": [
+    {
+     "item": "aperol-spritz",
+     "name": "Aperol Spritz",
+     "priceCzk": 169
+    },
+    {
+     "item": "mojito",
+     "name": "Mojito",
+     "priceCzk": 189
+    },
+    {
+     "item": "mojito",
+     "name": "Mojito (happy hour, přízemí)",
+     "priceCzk": 95,
+     "note": "happy hour",
+     "approx": true
+    },
+    {
+     "item": "caipirinha",
+     "name": "Caipirinha",
+     "priceCzk": 189
+    },
+    {
+     "item": "cosmopolitan",
+     "name": "Cosmopolitan",
+     "priceCzk": 189
+    },
+    {
+     "item": "long-island",
+     "name": "Long Island Ice Tea",
+     "priceCzk": 229
+    },
+    {
+     "item": "mai-tai",
+     "name": "Mai Tai",
+     "priceCzk": 189
+    },
+    {
+     "item": "moscow-mule",
+     "name": "Moscow Mule",
+     "priceCzk": 179
+    },
+    {
+     "item": "pornstar",
+     "name": "80's Pornstar",
+     "priceCzk": 249,
+     "approx": true,
+     "note": "vlastní verze"
+    },
+    {
+     "item": "dark-stormy",
+     "name": "Dark 'N' Stormy (special offer)",
+     "priceCzk": 249
+    },
+    {
+     "item": "dark-stormy",
+     "name": "Dark and Stormy (happy hour, přízemí)",
+     "priceCzk": 90,
+     "note": "happy hour",
+     "approx": true
+    },
+    {
+     "item": "pina-colada",
+     "name": "Piña Colada",
+     "priceCzk": 189
+    },
+    {
+     "item": "white-russian",
+     "name": "White Russian",
+     "priceCzk": 189
+    },
+    {
+     "item": "b52",
+     "name": "B-52",
+     "priceCzk": 139
+    },
+    {
+     "item": "cuba-libre",
+     "name": "Cuba Libre",
+     "priceCzk": 179
+    },
+    {
+     "item": "cuba-libre",
+     "name": "Cuba Libre (happy hour, přízemí)",
+     "priceCzk": 90,
+     "note": "happy hour",
+     "approx": true
+    },
+    {
+     "item": "gin-tonic",
+     "name": "Beefeater Tonic",
+     "priceCzk": 179
+    },
+    {
+     "item": "espresso-martini",
+     "name": "Coco Espresso Martiny",
+     "priceCzk": 239,
+     "approx": true
+    },
+    {
+     "item": "negroni",
+     "name": "Blackgroni",
+     "priceCzk": 229,
+     "approx": true
+    },
+    {
+     "item": "beer-bottle",
+     "name": "Heineken lahev",
+     "priceCzk": 119,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "beer-import",
+     "name": "Corona",
+     "priceCzk": 139,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "beer-import",
+     "name": "Desperados",
+     "priceCzk": 139,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "cider",
+     "name": "Strongbow Apple cider",
+     "priceCzk": 129,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "wine-white",
+     "name": "Chardonnay rozlévané",
+     "priceCzk": 99,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "wine-red",
+     "name": "Merlot rozlévané",
+     "priceCzk": 99,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "prosecco-glass",
+     "name": "Prosecco Frizzante rozlévané",
+     "priceCzk": 99,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "wine-bottle",
+     "name": "Sedlák Sauvignon p.s.",
+     "priceCzk": 790,
+     "volumeMl": 750
+    },
+    {
+     "item": "wine-bottle",
+     "name": "Bardolino Chiaretto Rosé",
+     "priceCzk": 790,
+     "volumeMl": 750,
+     "approx": true,
+     "note": "růžové"
+    },
+    {
+     "item": "prosecco-bottle",
+     "name": "Prosecco Valdo Brut/Rosé/Extra Dry",
+     "priceCzk": 890,
+     "volumeMl": 750
+    },
+    {
+     "item": "moet-bottle",
+     "name": "Moët & Chandon Impérial Brut",
+     "priceCzk": 2690,
+     "volumeMl": 750
+    },
+    {
+     "item": "cola",
+     "name": "Pepsi Cola",
+     "priceCzk": 79,
+     "approx": true,
+     "note": "Pepsi, objem neuveden"
+    },
+    {
+     "item": "sprite",
+     "name": "Mirinda Orange / 7Up",
+     "priceCzk": 79,
+     "approx": true,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "tonic",
+     "name": "Schweppes Indian Tonic",
+     "priceCzk": 79,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "ginger-beer",
+     "name": "Schweppes Ginger Ale",
+     "priceCzk": 79,
+     "approx": true,
+     "note": "ginger ale"
+    },
+    {
+     "item": "water-small",
+     "name": "Mattoni Grand / Aquila",
+     "priceCzk": 79,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "water-large",
+     "name": "San Benedetto perlivá 0,75 l",
+     "priceCzk": 160,
+     "volumeMl": 750
+    },
+    {
+     "item": "red-bull",
+     "name": "Red Bull",
+     "priceCzk": 89,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "juice",
+     "name": "Juice dle denní nabídky",
+     "priceCzk": 79,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "lemonade",
+     "name": "Domácí limonáda (mango, citrus, jahoda, maracuja)",
+     "priceCzk": 99,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "espresso",
+     "name": "Espresso",
+     "priceCzk": 69
+    },
+    {
+     "item": "espresso-double",
+     "name": "Doppio",
+     "priceCzk": 109
+    },
+    {
+     "item": "cappuccino",
+     "name": "Cappuccino",
+     "priceCzk": 79
+    },
+    {
+     "item": "latte",
+     "name": "Caffè Latte",
+     "priceCzk": 79
+    },
+    {
+     "item": "iced-coffee",
+     "name": "Ledová káva",
+     "priceCzk": 99
+    },
+    {
+     "item": "tea",
+     "name": "Tea (black, green, fruit)",
+     "priceCzk": 79
+    },
+    {
+     "item": "irish-coffee",
+     "name": "Irská káva",
+     "priceCzk": 119
+    },
+    {
+     "item": "vodka",
+     "name": "Absolut",
+     "priceCzk": 120,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "vodka",
+     "name": "Smirnoff Red",
+     "priceCzk": 130,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "vodka-premium",
+     "name": "Grey Goose",
+     "priceCzk": 189,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "vodka-premium",
+     "name": "Beluga Silver Line",
+     "priceCzk": 189,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "rum-spiced",
+     "name": "Captain Morgan Spiced",
+     "priceCzk": 120,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "rum-zacapa",
+     "name": "Ron Zacapa 23 Y.O.",
+     "priceCzk": 279,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "rum-diplomatico",
+     "name": "Diplomatico 12 Y.O.",
+     "priceCzk": 259,
+     "approx": true,
+     "note": "objem neuveden, jiné než Reserva Exclusiva"
+    },
+    {
+     "item": "gin",
+     "name": "Beefeater",
+     "priceCzk": 120,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "gin",
+     "name": "Gordon's",
+     "priceCzk": 120,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "gin-hendricks",
+     "name": "Hendrick's",
+     "priceCzk": 189,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "gin-monkey",
+     "name": "Monkey 47",
+     "priceCzk": 229,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "tequila",
+     "name": "Olmeca Blanco",
+     "priceCzk": 120,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "tequila-patron",
+     "name": "Patrón Blanco",
+     "priceCzk": 249,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "jack",
+     "name": "Jack Daniel's",
+     "priceCzk": 120,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "jameson",
+     "name": "Jameson",
+     "priceCzk": 120,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "jw-red",
+     "name": "Johnnie Walker Red",
+     "priceCzk": 130,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "jw-black",
+     "name": "Johnnie Walker Black 12 Y.O.",
+     "priceCzk": 180,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "chivas",
+     "name": "Chivas Regal 12 Y.O.",
+     "priceCzk": 159,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "jim-beam",
+     "name": "Jim Beam",
+     "priceCzk": 120,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "glenfiddich",
+     "name": "Glenfiddich 12 Y.O.",
+     "priceCzk": 220,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "hennessy",
+     "name": "Hennessy V.S.",
+     "priceCzk": 179,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "jager",
+     "name": "Jägermeister",
+     "priceCzk": 120,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "baileys",
+     "name": "Baileys",
+     "priceCzk": 120,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "becherovka",
+     "name": "Becherovka KV 14",
+     "priceCzk": 90,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "slivovice",
+     "name": "Slivovice Silver Kosher",
+     "priceCzk": 149,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "absinth",
+     "name": "Pernod Absinthe",
+     "priceCzk": 220,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "aperol-shot",
+     "name": "Aperol",
+     "priceCzk": 90,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "aperol-shot",
+     "name": "Campari",
+     "priceCzk": 90,
+     "note": "objem neuveden"
+    },
+    {
+     "item": "fernet",
+     "name": "Fernet",
+     "priceCzk": 90,
+     "note": "objem neuveden"
+    }
+   ]
+  },
+  {
+   "key": "zakladna",
+   "name": "Základna Restaurace",
+   "area": "Dlouhá 36",
+   "kind": "restaurant",
+   "url": "https://www.zakladnarestaurace.cz/",
+   "items": [
+    {
+     "item": "soup",
+     "name": "Silný hovězí vývar s masem, zeleninou a nudlemi",
+     "priceCzk": 99
+    },
+    {
+     "item": "broth",
+     "name": "Silný hovězí vývar s masem, zeleninou a nudlemi",
+     "priceCzk": 99
+    },
+    {
+     "item": "soup",
+     "name": "Polévka dle denní nabídky",
+     "priceCzk": 99
+    },
+    {
+     "item": "onion-rings",
+     "name": "Cibulové kroužky, pikantní dip",
+     "priceCzk": 189
+    },
+    {
+     "item": "fries",
+     "name": "Bramborové hranolky",
+     "priceCzk": 89
+    },
+    {
+     "item": "caesar",
+     "name": "Caesar salát s kuřecím masem, krutony",
+     "priceCzk": 299
+    },
+    {
+     "item": "salad",
+     "name": "Šopský salát",
+     "priceCzk": 229,
+     "approx": true
+    },
+    {
+     "item": "side-salad",
+     "name": "Okurkový salát",
+     "priceCzk": 129
+    },
+    {
+     "item": "chicken-main",
+     "name": "Opečené kuřecí prso sous-vide, máslový sos",
+     "priceCzk": 269
+    },
+    {
+     "item": "ribs",
+     "name": "Pečená vepřová žebra v bbq omáčce",
+     "priceCzk": 395
+    },
+    {
+     "item": "ice-cream",
+     "name": "Vanilková zmrzlina se šlehačkou",
+     "priceCzk": 149
+    },
+    {
+     "item": "cake",
+     "name": "Domácí jablečný štrůdl s vanilkovým krémem",
+     "priceCzk": 189,
+     "approx": true
+    },
+    {
+     "item": "sauce",
+     "name": "Domácí tatarka",
+     "priceCzk": 40
+    },
+    {
+     "item": "sauce",
+     "name": "Kečup",
+     "priceCzk": 25,
+     "approx": true
+    },
+    {
+     "item": "beer-draft-05",
+     "name": "Pilsner Urquell 0,5 l",
+     "priceCzk": 79,
+     "volumeMl": 500
+    },
+    {
+     "item": "beer-draft-03",
+     "name": "Pilsner Urquell 0,3 l",
+     "priceCzk": 69,
+     "volumeMl": 300
+    },
+    {
+     "item": "cider",
+     "name": "Frisco jablko",
+     "priceCzk": 79,
+     "volumeMl": 330,
+     "approx": true
+    },
+    {
+     "item": "vodka",
+     "name": "Finlandia",
+     "priceCzk": 110,
+     "volumeMl": 40
+    },
+    {
+     "item": "vodka-premium",
+     "name": "Grey Goose",
+     "priceCzk": 145,
+     "volumeMl": 40
+    },
+    {
+     "item": "rum-white",
+     "name": "Bacardi Carta Blanca",
+     "priceCzk": 110,
+     "volumeMl": 40
+    },
+    {
+     "item": "rum-spiced",
+     "name": "Bacardi Spiced",
+     "priceCzk": 110,
+     "volumeMl": 40,
+     "approx": true,
+     "note": "ne Captain Morgan"
+    },
+    {
+     "item": "rum-zacapa",
+     "name": "Zacapa Centenario 23",
+     "priceCzk": 189,
+     "volumeMl": 40
+    },
+    {
+     "item": "rum-diplomatico",
+     "name": "Diplomatico Reserva Exclusiva",
+     "priceCzk": 169,
+     "volumeMl": 40
+    },
+    {
+     "item": "gin",
+     "name": "Broker's London Dry Gin",
+     "priceCzk": 110,
+     "volumeMl": 40
+    },
+    {
+     "item": "gin-hendricks",
+     "name": "Hendrick's Gin",
+     "priceCzk": 149,
+     "volumeMl": 40
+    },
+    {
+     "item": "tequila",
+     "name": "Tequila Cabrito Blanco",
+     "priceCzk": 129,
+     "volumeMl": 40
+    },
+    {
+     "item": "jack",
+     "name": "Jack Daniel's",
+     "priceCzk": 119,
+     "volumeMl": 40
+    },
+    {
+     "item": "jameson",
+     "name": "Jameson",
+     "priceCzk": 110,
+     "volumeMl": 40
+    },
+    {
+     "item": "glenfiddich",
+     "name": "Glenfiddich 12",
+     "priceCzk": 179,
+     "volumeMl": 40
+    },
+    {
+     "item": "hennessy",
+     "name": "Hennessy V.S.O.P.",
+     "priceCzk": 199,
+     "volumeMl": 40,
+     "approx": true,
+     "note": "VSOP, ne VS"
+    },
+    {
+     "item": "jager",
+     "name": "Jägermeister",
+     "priceCzk": 110,
+     "volumeMl": 40
+    },
+    {
+     "item": "baileys",
+     "name": "Baileys",
+     "priceCzk": 110,
+     "volumeMl": 40
+    },
+    {
+     "item": "becherovka",
+     "name": "Becherovka",
+     "priceCzk": 55,
+     "volumeMl": 20,
+     "note": "2 cl"
+    },
+    {
+     "item": "slivovice",
+     "name": "Slivovice blatenská",
+     "priceCzk": 75,
+     "volumeMl": 20,
+     "note": "2 cl"
+    },
+    {
+     "item": "fernet",
+     "name": "Fernet Stock",
+     "priceCzk": 55,
+     "volumeMl": 20,
+     "note": "2 cl"
+    },
+    {
+     "item": "aperol-spritz",
+     "name": "Aperol Spritz",
+     "priceCzk": 169
+    },
+    {
+     "item": "hugo",
+     "name": "Hugo Spritz",
+     "priceCzk": 169
+    },
+    {
+     "item": "moscow-mule",
+     "name": "Moscow Mule",
+     "priceCzk": 179
+    },
+    {
+     "item": "cuba-libre",
+     "name": "Cuba Libre",
+     "priceCzk": 175
+    },
+    {
+     "item": "gin-tonic",
+     "name": "House Gin Tonic",
+     "priceCzk": 179
+    },
+    {
+     "item": "gin-tonic",
+     "name": "Hendrick's Gin Tonic",
+     "priceCzk": 219,
+     "approx": true
+    },
+    {
+     "item": "wine-white",
+     "name": "Pinot Grigio",
+     "priceCzk": 79,
+     "volumeMl": 100
+    },
+    {
+     "item": "wine-red",
+     "name": "Frankovka",
+     "priceCzk": 79,
+     "volumeMl": 100
+    },
+    {
+     "item": "prosecco-glass",
+     "name": "Prosecco Flumen DOC",
+     "priceCzk": 79,
+     "volumeMl": 100
+    },
+    {
+     "item": "wine-bottle",
+     "name": "Nero d'Avola DOC",
+     "priceCzk": 590,
+     "volumeMl": 750
+    },
+    {
+     "item": "wine-bottle",
+     "name": "Grüner Veltliner Alte Reben",
+     "priceCzk": 590,
+     "volumeMl": 750
+    },
+    {
+     "item": "prosecco-bottle",
+     "name": "Prosecco Flumen DOC",
+     "priceCzk": 590,
+     "volumeMl": 750
+    },
+    {
+     "item": "cola",
+     "name": "Coca-Cola",
+     "priceCzk": 79,
+     "volumeMl": 330
+    },
+    {
+     "item": "sprite",
+     "name": "Sprite",
+     "priceCzk": 79,
+     "volumeMl": 330
+    },
+    {
+     "item": "sprite",
+     "name": "Fanta",
+     "priceCzk": 79,
+     "volumeMl": 330
+    },
+    {
+     "item": "tonic",
+     "name": "Kinley Tonic Water",
+     "priceCzk": 65,
+     "volumeMl": 250
+    },
+    {
+     "item": "ginger-beer",
+     "name": "Fever-Tree Ginger Beer",
+     "priceCzk": 85,
+     "volumeMl": 200
+    },
+    {
+     "item": "water-small",
+     "name": "Natura",
+     "priceCzk": 55,
+     "volumeMl": 300
+    },
+    {
+     "item": "water-large",
+     "name": "Römmerquelle",
+     "priceCzk": 110,
+     "volumeMl": 750
+    },
+    {
+     "item": "water-carafe",
+     "name": "Karafa vody 1 l",
+     "priceCzk": 85,
+     "volumeMl": 1000
+    },
+    {
+     "item": "red-bull",
+     "name": "Red Bull",
+     "priceCzk": 95,
+     "volumeMl": 250
+    },
+    {
+     "item": "juice",
+     "name": "Cappy",
+     "priceCzk": 65,
+     "volumeMl": 250
+    },
+    {
+     "item": "lemonade",
+     "name": "Domácí limonáda",
+     "priceCzk": 85,
+     "volumeMl": 400
+    },
+    {
+     "item": "ice-tea",
+     "name": "Domácí ledový čaj",
+     "priceCzk": 85,
+     "volumeMl": 400
+    },
+    {
+     "item": "espresso",
+     "name": "Espresso / Lungo",
+     "priceCzk": 65
+    },
+    {
+     "item": "espresso-double",
+     "name": "Espresso Doppio",
+     "priceCzk": 85
+    },
+    {
+     "item": "cappuccino",
+     "name": "Cappuccino",
+     "priceCzk": 75
+    },
+    {
+     "item": "tea",
+     "name": "Čaj",
+     "priceCzk": 69
+    }
+   ]
+  },
+  {
+   "key": "harlys",
+   "name": "Harly's (Harley's Bar)",
+   "area": "Dlouhá 18",
+   "kind": "cocktail bar",
+   "url": "https://harlys.cz/bar-menu",
+   "items": [
+    {
+     "item": "beer-bottle",
+     "name": "Staropramen 0,33",
+     "priceCzk": 85,
+     "volumeMl": 330
+    },
+    {
+     "item": "beer-bottle",
+     "name": "Heineken 0,33",
+     "priceCzk": 90,
+     "volumeMl": 330
+    },
+    {
+     "item": "beer-nonalc",
+     "name": "Non-alcoholic beer",
+     "priceCzk": 55,
+     "volumeMl": 330
+    },
+    {
+     "item": "beer-import",
+     "name": "Corona 0,33",
+     "priceCzk": 95,
+     "volumeMl": 330
+    },
+    {
+     "item": "wine-white",
+     "name": "House White 2 dcl",
+     "priceCzk": 65,
+     "volumeMl": 200
+    },
+    {
+     "item": "wine-red",
+     "name": "House Red 2 dcl",
+     "priceCzk": 65,
+     "volumeMl": 200
+    },
+    {
+     "item": "wine-bottle",
+     "name": "Marqués de Castilla Blanco (láhev)",
+     "priceCzk": 390
+    },
+    {
+     "item": "wine-bottle",
+     "name": "Valpolicella DOC (láhev)",
+     "priceCzk": 390
+    },
+    {
+     "item": "prosecco-bottle",
+     "name": "Rustico Prosecco 0,7 l",
+     "priceCzk": 790,
+     "volumeMl": 700
+    },
+    {
+     "item": "moet-bottle",
+     "name": "Moët & Chandon Brut 0,75 l",
+     "priceCzk": 2200,
+     "volumeMl": 750
+    },
+    {
+     "item": "vodka",
+     "name": "Absolut",
+     "priceCzk": 95,
+     "volumeMl": 40
+    },
+    {
+     "item": "vodka-premium",
+     "name": "Grey Goose",
+     "priceCzk": 140,
+     "volumeMl": 40
+    },
+    {
+     "item": "rum-spiced",
+     "name": "Captain Morgan Spiced",
+     "priceCzk": 95,
+     "volumeMl": 40
+    },
+    {
+     "item": "rum-zacapa",
+     "name": "Zacapa 23YO Reserva",
+     "priceCzk": 190,
+     "volumeMl": 40
+    },
+    {
+     "item": "rum-diplomatico",
+     "name": "Diplomático Clásico",
+     "priceCzk": 125,
+     "volumeMl": 40,
+     "approx": true
+    },
+    {
+     "item": "gin",
+     "name": "Beefeater",
+     "priceCzk": 95,
+     "volumeMl": 40
+    },
+    {
+     "item": "gin-hendricks",
+     "name": "Hendrick's",
+     "priceCzk": 125,
+     "volumeMl": 40
+    },
+    {
+     "item": "tequila",
+     "name": "El Jimador Blanco",
+     "priceCzk": 95,
+     "volumeMl": 40
+    },
+    {
+     "item": "jack",
+     "name": "Jack Daniel's",
+     "priceCzk": 95,
+     "volumeMl": 40
+    },
+    {
+     "item": "jameson",
+     "name": "Jameson",
+     "priceCzk": 90,
+     "volumeMl": 40
+    },
+    {
+     "item": "jw-red",
+     "name": "Johnnie Walker Red Label",
+     "priceCzk": 95,
+     "volumeMl": 40
+    },
+    {
+     "item": "jw-black",
+     "name": "Johnnie Walker Black Label",
+     "priceCzk": 130,
+     "volumeMl": 40
+    },
+    {
+     "item": "chivas",
+     "name": "Chivas Regal",
+     "priceCzk": 130,
+     "volumeMl": 40
+    },
+    {
+     "item": "glenfiddich",
+     "name": "Glenfiddich 12YO",
+     "priceCzk": 160,
+     "volumeMl": 40
+    },
+    {
+     "item": "hennessy",
+     "name": "Hennessy V.S.",
+     "priceCzk": 150,
+     "volumeMl": 40
+    },
+    {
+     "item": "jager",
+     "name": "Jägermeister",
+     "priceCzk": 85,
+     "volumeMl": 40
+    },
+    {
+     "item": "baileys",
+     "name": "Bailey's",
+     "priceCzk": 85,
+     "volumeMl": 40
+    },
+    {
+     "item": "becherovka",
+     "name": "Becherovka",
+     "priceCzk": 70,
+     "volumeMl": 40
+    },
+    {
+     "item": "slivovice",
+     "name": "Slivovice",
+     "priceCzk": 70,
+     "volumeMl": 40
+    },
+    {
+     "item": "absinth",
+     "name": "Absinth Hills",
+     "priceCzk": 120,
+     "volumeMl": 40
+    },
+    {
+     "item": "aperol-shot",
+     "name": "Aperol",
+     "priceCzk": 85,
+     "volumeMl": 40
+    },
+    {
+     "item": "aperol-shot",
+     "name": "Campari Bitter",
+     "priceCzk": 85,
+     "volumeMl": 50
+    },
+    {
+     "item": "fernet",
+     "name": "Fernet Stock",
+     "priceCzk": 70,
+     "volumeMl": 40
+    },
+    {
+     "item": "aperol-spritz",
+     "name": "Aperol Spritz",
+     "priceCzk": 135
+    },
+    {
+     "item": "negroni",
+     "name": "Negroni",
+     "priceCzk": 165
+    },
+    {
+     "item": "old-fashioned",
+     "name": "Old Fashioned",
+     "priceCzk": 165
+    },
+    {
+     "item": "mojito",
+     "name": "Mojito",
+     "priceCzk": 165
+    },
+    {
+     "item": "caipirinha",
+     "name": "Caipirinha",
+     "priceCzk": 165
+    },
+    {
+     "item": "margarita",
+     "name": "Margarita",
+     "priceCzk": 165
+    },
+    {
+     "item": "mai-tai",
+     "name": "Mai Tai",
+     "priceCzk": 165
+    },
+    {
+     "item": "cosmopolitan",
+     "name": "Cosmopolitan",
+     "priceCzk": 165
+    },
+    {
+     "item": "whiskey-sour",
+     "name": "Whiskey Sour",
+     "priceCzk": 155
+    },
+    {
+     "item": "moscow-mule",
+     "name": "Moscow Mule",
+     "priceCzk": 165
+    },
+    {
+     "item": "manhattan",
+     "name": "Manhattan",
+     "priceCzk": 155
+    },
+    {
+     "item": "long-island",
+     "name": "Long Island Iced Tea",
+     "priceCzk": 195
+    },
+    {
+     "item": "bloody-mary",
+     "name": "Bloody Mary",
+     "priceCzk": 165
+    }
+   ]
+  },
+  {
+   "key": "yami-sushi-dlouha",
+   "name": "Yami Sushi Bistro Dlouhá",
+   "area": "Dlouhá 39",
+   "kind": "restaurant",
+   "url": "https://yamidlouha.cz/menu.html",
+   "items": [
+    {
+     "item": "beer-draft-03",
+     "name": "Kirin Ichiban draft 0,25 l",
+     "priceCzk": 58,
+     "volumeMl": 250
+    },
+    {
+     "item": "beer-draft-05",
+     "name": "Kirin Ichiban draft 0,5 l",
+     "priceCzk": 85,
+     "volumeMl": 500
+    },
+    {
+     "item": "beer-bottle",
+     "name": "Pilsner Urquell 0,33 l",
+     "priceCzk": 60,
+     "volumeMl": 330
+    },
+    {
+     "item": "beer-nonalc",
+     "name": "Birell 0,33 l",
+     "priceCzk": 50,
+     "volumeMl": 330
+    },
+    {
+     "item": "beer-import",
+     "name": "Asahi",
+     "priceCzk": 85,
+     "volumeMl": 330,
+     "approx": true
+    },
+    {
+     "item": "beer-import",
+     "name": "Sapporo",
+     "priceCzk": 85,
+     "volumeMl": 330,
+     "approx": true
+    },
+    {
+     "item": "wine-white",
+     "name": "Rulandské šedé",
+     "priceCzk": 130,
+     "volumeMl": 150
+    },
+    {
+     "item": "wine-white",
+     "name": "Chardonnay",
+     "priceCzk": 130,
+     "volumeMl": 150
+    },
+    {
+     "item": "wine-red",
+     "name": "Merlot IGT",
+     "priceCzk": 110,
+     "volumeMl": 150
+    },
+    {
+     "item": "wine-red",
+     "name": "Rulandské modré",
+     "priceCzk": 130,
+     "volumeMl": 150
+    },
+    {
+     "item": "prosecco-glass",
+     "name": "Prosecco DOC spumante",
+     "priceCzk": 150,
+     "volumeMl": 150
+    },
+    {
+     "item": "wine-bottle",
+     "name": "Chardonnay",
+     "priceCzk": 595,
+     "volumeMl": 750
+    },
+    {
+     "item": "prosecco-bottle",
+     "name": "Prosecco DOC Spumante",
+     "priceCzk": 750,
+     "volumeMl": 750
+    },
+    {
+     "item": "vodka",
+     "name": "Nikka Coffey Vodka",
+     "priceCzk": 150,
+     "volumeMl": 40,
+     "approx": true,
+     "note": "japonská vodka"
+    },
+    {
+     "item": "gin",
+     "name": "Nikka Coffey Gin",
+     "priceCzk": 155,
+     "volumeMl": 40,
+     "approx": true,
+     "note": "japonský gin"
+    },
+    {
+     "item": "aperol-spritz",
+     "name": "Aperol Spritz",
+     "priceCzk": 145,
+     "volumeMl": 150
+    },
+    {
+     "item": "cola",
+     "name": "Coca-Cola",
+     "priceCzk": 62,
+     "volumeMl": 330
+    },
+    {
+     "item": "sprite",
+     "name": "Sprite",
+     "priceCzk": 62,
+     "volumeMl": 330
+    },
+    {
+     "item": "sprite",
+     "name": "Fanta",
+     "priceCzk": 62,
+     "volumeMl": 330
+    },
+    {
+     "item": "tonic",
+     "name": "Fever-Tree Mediterranean Tonic",
+     "priceCzk": 79,
+     "volumeMl": 200
+    },
+    {
+     "item": "ginger-beer",
+     "name": "Fever-Tree Ginger Beer",
+     "priceCzk": 79,
+     "volumeMl": 200
+    },
+    {
+     "item": "water-small",
+     "name": "Aquila neperlivá",
+     "priceCzk": 55,
+     "volumeMl": 330
+    },
+    {
+     "item": "water-small",
+     "name": "Mattoni perlivá",
+     "priceCzk": 55,
+     "volumeMl": 330
+    },
+    {
+     "item": "water-large",
+     "name": "Aquila 0,7 l",
+     "priceCzk": 95,
+     "volumeMl": 700
+    },
+    {
+     "item": "water-carafe",
+     "name": "Karafa vody",
+     "priceCzk": 69
+    },
+    {
+     "item": "juice",
+     "name": "Granini",
+     "priceCzk": 67,
+     "volumeMl": 200
+    },
+    {
+     "item": "ice-tea",
+     "name": "Ice tea",
+     "priceCzk": 83,
+     "volumeMl": 330
+    },
+    {
+     "item": "lemonade",
+     "name": "Yuzu limonáda",
+     "priceCzk": 98,
+     "volumeMl": 400
+    },
+    {
+     "item": "lemonade",
+     "name": "Karásek limonáda",
+     "priceCzk": 69,
+     "volumeMl": 330,
+     "approx": true
+    },
+    {
+     "item": "espresso",
+     "name": "Espresso",
+     "priceCzk": 65
+    },
+    {
+     "item": "espresso-double",
+     "name": "Double espresso",
+     "priceCzk": 95
+    },
+    {
+     "item": "cappuccino",
+     "name": "Cappuccino",
+     "priceCzk": 70
+    },
+    {
+     "item": "latte",
+     "name": "Latte macchiato",
+     "priceCzk": 90
+    },
+    {
+     "item": "tea",
+     "name": "Black tea",
+     "priceCzk": 85
+    },
+    {
+     "item": "soup",
+     "name": "Polévka",
+     "priceCzk": 78,
+     "approx": true,
+     "note": "pravděpodobně miso"
+    }
+   ]
+  },
+  {
+   "key": "lokal-dlouha",
+   "name": "Lokál Dlouhááá",
+   "area": "Dlouhá 33",
+   "kind": "pub",
+   "url": "https://lokal-dlouha.ambi.cz/menu/napoje",
+   "items": [
+    {
+     "item": "beer-draft-05",
+     "name": "Plzeň světlý ležák hladinka",
+     "priceCzk": 74,
+     "volumeMl": 500
+    },
+    {
+     "item": "beer-draft-03",
+     "name": "Plzeň světlý ležák",
+     "priceCzk": 57,
+     "volumeMl": 300
+    },
+    {
+     "item": "cider",
+     "name": "Tátův sad jablečný suchý",
+     "priceCzk": 89,
+     "volumeMl": 330
+    },
+    {
+     "item": "cider",
+     "name": "Tátův sad veselá višeň",
+     "priceCzk": 89,
+     "volumeMl": 330
+    },
+    {
+     "item": "wine-white",
+     "name": "Ryzlink vlašský 2024 suché",
+     "priceCzk": 119,
+     "volumeMl": 150
+    },
+    {
+     "item": "wine-white",
+     "name": "Sauvignon 2025 suché",
+     "priceCzk": 139,
+     "volumeMl": 150
+    },
+    {
+     "item": "wine-red",
+     "name": "Zweigeltrebe 2022 suché",
+     "priceCzk": 139,
+     "volumeMl": 150
+    },
+    {
+     "item": "wine-bottle",
+     "name": "Ryzlink vlašský 2024 suché Naturvini",
+     "priceCzk": 499,
+     "volumeMl": 750
+    },
+    {
+     "item": "rum-white",
+     "name": "Rum Republica Božkov",
+     "priceCzk": 59,
+     "volumeMl": 20,
+     "approx": true,
+     "note": "2 cl"
+    },
+    {
+     "item": "becherovka",
+     "name": "Becherovka",
+     "priceCzk": 65,
+     "volumeMl": 20,
+     "note": "2 cl"
+    },
+    {
+     "item": "slivovice",
+     "name": "Slivovice Kosher Jelínek",
+     "priceCzk": 75,
+     "volumeMl": 20,
+     "note": "2 cl"
+    },
+    {
+     "item": "slivovice",
+     "name": "Horňácká slivovice 2025",
+     "priceCzk": 79,
+     "volumeMl": 20,
+     "note": "2 cl"
+    },
+    {
+     "item": "absinth",
+     "name": "Absinth Žufánek",
+     "priceCzk": 89,
+     "volumeMl": 20,
+     "note": "2 cl"
+    },
+    {
+     "item": "fernet",
+     "name": "Fernet Šitner",
+     "priceCzk": 59,
+     "volumeMl": 20,
+     "approx": true,
+     "note": "2 cl, ne Stock"
+    },
+    {
+     "item": "vodka",
+     "name": "Vodka Cryo",
+     "priceCzk": 65,
+     "volumeMl": 20,
+     "note": "2 cl"
+    },
+    {
+     "item": "tonic",
+     "name": "Tonic",
+     "priceCzk": 65,
+     "volumeMl": 250
+    },
+    {
+     "item": "water-small",
+     "name": "Voda Mattoni",
+     "priceCzk": 59,
+     "volumeMl": 330
+    },
+    {
+     "item": "lemonade",
+     "name": "Malinovka",
+     "priceCzk": 69,
+     "volumeMl": 300,
+     "approx": true
+    },
+    {
+     "item": "juice",
+     "name": "Jablečný mošt 100 %",
+     "priceCzk": 65,
+     "volumeMl": 250,
+     "approx": true
+    },
+    {
+     "item": "espresso",
+     "name": "Espresso",
+     "priceCzk": 65
+    },
+    {
+     "item": "tea",
+     "name": "Čaj Biogena",
+     "priceCzk": 65
+    },
+    {
+     "item": "soup",
+     "name": "Dršťková polévka",
+     "priceCzk": 79,
+     "approx": true
+    },
+    {
+     "item": "cake",
+     "name": "Rakvička se šlehačkou",
+     "priceCzk": 69,
+     "approx": true
+    }
+   ]
+  },
+  {
+   "key": "bed-lounge",
+   "name": "Bed Lounge",
+   "area": "Dlouhá 2",
+   "kind": "cocktail bar",
+   "url": "https://bedlounge.cz/pdf/BD_MENU_2025_21x21_CZE.pdf",
+   "items": [
+    {
+     "item": "wine-white",
+     "name": "Chardonnay Roche Mazet 0,1 l",
+     "priceCzk": 229,
+     "volumeMl": 100,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    },
+    {
+     "item": "wine-red",
+     "name": "Rulandské modré barrique 0,1 l",
+     "priceCzk": 229,
+     "volumeMl": 100,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    },
+    {
+     "item": "prosecco-glass",
+     "name": "Prosecco 0,1 l",
+     "priceCzk": 229,
+     "volumeMl": 100,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    },
+    {
+     "item": "prosecco-bottle",
+     "name": "Prosecco 0,75 l",
+     "priceCzk": 990,
+     "volumeMl": 750,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    },
+    {
+     "item": "moet-bottle",
+     "name": "Moët & Chandon Imperial Brut",
+     "priceCzk": 2900,
+     "volumeMl": 750,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    },
+    {
+     "item": "mojito",
+     "name": "Mojito",
+     "priceCzk": 325,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    },
+    {
+     "item": "daiquiri",
+     "name": "Daiquiri",
+     "priceCzk": 325,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    },
+    {
+     "item": "caipirinha",
+     "name": "Caipirinha",
+     "priceCzk": 325,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    },
+    {
+     "item": "espresso-martini",
+     "name": "Espresso Martini",
+     "priceCzk": 325,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    },
+    {
+     "item": "moscow-mule",
+     "name": "Moscow Mule",
+     "priceCzk": 325,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    },
+    {
+     "item": "cosmopolitan",
+     "name": "Cosmopolitan",
+     "priceCzk": 325,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    },
+    {
+     "item": "negroni",
+     "name": "Negroni",
+     "priceCzk": 325,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    },
+    {
+     "item": "gin-fizz",
+     "name": "Gin Fizz",
+     "priceCzk": 325,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    },
+    {
+     "item": "margarita",
+     "name": "Margarita",
+     "priceCzk": 325,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    },
+    {
+     "item": "old-fashioned",
+     "name": "Old Fashioned",
+     "priceCzk": 325,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    },
+    {
+     "item": "aperol-spritz",
+     "name": "Aperol Spritz",
+     "priceCzk": 325,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    },
+    {
+     "item": "hugo",
+     "name": "Hugo Spritz",
+     "priceCzk": 325,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    },
+    {
+     "item": "long-island",
+     "name": "Long Island Iced Tea (small)",
+     "priceCzk": 325,
+     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
+     "approx": true
+    }
+   ],
+   "note": "lístek PDF čten jen přes textový převod se špatným zarovnáním; destiláty, pivo a jídla bez jistých cen vynechány"
+  },
+  {
+   "key": "vipet-coffee",
+   "name": "VIPET coffee",
+   "area": "Dlouhá 36",
+   "kind": "café",
+   "url": "https://vipetcoffee.cz/menu/",
+   "items": [
+    {
+     "item": "espresso",
+     "name": "espresso",
+     "priceCzk": 60
+    },
+    {
+     "item": "espresso-double",
+     "name": "double espresso",
+     "priceCzk": 75
+    },
+    {
+     "item": "cappuccino",
+     "name": "cappuccino",
+     "priceCzk": 75
+    },
+    {
+     "item": "latte",
+     "name": "latté",
+     "priceCzk": 85
+    },
+    {
+     "item": "flat-white",
+     "name": "flat white",
+     "priceCzk": 85
+    },
+    {
+     "item": "americano",
+     "name": "americano",
+     "priceCzk": 70
+    },
+    {
+     "item": "hot-chocolate",
+     "name": "horká čokoláda",
+     "priceCzk": 80
+    },
+    {
+     "item": "tea",
+     "name": "čaj",
+     "priceCzk": 70
+    },
+    {
+     "item": "lemonade",
+     "name": "naše limonáda",
+     "priceCzk": 80,
+     "approx": true
+    }
+   ]
+  },
+  {
+   "key": "nase-maso-dlouha",
+   "name": "Naše maso",
+   "area": "Dlouhá 39",
+   "kind": "bistro",
+   "url": "https://nasemaso.dlouha.ambi.cz/en/menu",
+   "items": [
+    {
+     "item": "cheeseburger",
+     "name": "Hamburger / Cheeseburger (medium rare)",
+     "priceCzk": 375,
+     "note": "180 g, cena z lístku 14. 10. 2026"
+    },
+    {
+     "item": "beer-draft-05",
+     "name": "Vrátnice ležák 11°",
+     "priceCzk": 75,
+     "volumeMl": 400,
+     "note": "cena z lístku 14. 10. 2026"
+    }
+   ],
+   "note": null
+  },
+  {
+   "key": "au-gourmand",
+   "name": "Au Gourmand",
+   "area": "Dlouhá 10",
+   "kind": "café",
+   "url": "https://augourmand.cz/",
+   "items": [],
+   "note": "web nedostupný, lístek bez cen online"
+  },
+  {
+   "key": "bokovka",
+   "name": "Bokovka",
+   "area": "Dlouhá 37",
+   "kind": "wine bar",
+   "url": "https://bokovka.com/",
+   "items": [],
+   "note": "Ceny online nenalezeny; web blokuje čtení, provoz neověřen (zivefirmy ji vede jako zavřenou)."
+  },
+  {
+   "key": "banh-mi-makers-dlouha",
+   "name": "Bánh Mì Makers Dlouhá",
+   "area": "Dlouhá 39",
+   "kind": "bistro",
+   "url": "https://spinach.guide/venues/banh-mi-makers-dlouha-994/",
+   "items": [],
+   "note": "lístek s cenami online nenalezen"
+  },
+  {
+   "key": "cafe-domecek",
+   "name": "Café Domeček",
+   "area": "Dlouhá 6",
+   "kind": "café",
+   "url": "https://www.facebook.com/CafeDomecek",
+   "items": [],
+   "note": "bez webu a lístku online"
+  },
+  {
+   "key": "cukrar-skala-dlouha",
+   "name": "Cukrář Skála",
+   "area": "Dlouhá 39",
+   "kind": "café",
+   "url": "https://prague.eu/cs/objevujte/cukrar-skala-v-dlouhe/",
+   "items": [],
+   "note": "cukrárna s kávou a limonádou, web cukrarskala.cz bez cen online; po-pá 8-20, so-ne 10-20"
+  },
+  {
+   "key": "el-mojito",
+   "name": "El Mojito Café-Cocktail Bar",
+   "area": "Dlouhá 31",
+   "kind": "cocktail bar",
+   "url": "https://www.elmojito.cz/napoje/",
+   "items": [],
+   "note": "Lístek nápojů online bez cen; po prázdninové pauze (do 13. 10. 2026) otevřeno."
+  },
+  {
+   "key": "lfleur-mixology-champagne",
+   "name": "L'Fleur Mixology & Champagne",
+   "area": "V Kolkovně 5",
+   "kind": "cocktail bar",
+   "url": "https://lfleur.cz/menu/",
+   "items": [],
+   "note": "lístek jen jako obrázky PNG, text bez cen; obrázky se nepodařilo přečíst"
+  },
+  {
+   "key": "la-bottega-bistroteka",
+   "name": "La Bottega Bistroteka",
+   "area": "Dlouhá 39",
+   "kind": "bistro",
+   "url": "https://bistroteka.lacollezione.cz/",
+   "items": [],
+   "note": "Lístek bez cen online, web zastaralý, provoz neověřen."
+  },
+  {
+   "key": "la-casa-argentina",
+   "name": "La Casa Argentina",
+   "area": "Dlouhá 35",
+   "kind": "restaurant",
+   "url": "https://www.lacasaargentina.cz/",
+   "items": [],
+   "note": "Web blokuje čtení robotem (robots), lístek s cenami jinde nenalezen."
+  },
+  {
+   "key": "moon-club",
+   "name": "Moon Club",
+   "area": "Dlouhá 26",
+   "kind": "club",
+   "url": "https://www.moonclub.cz/en/menu/",
+   "items": [],
+   "note": "nápojový lístek 2026_10 jen jako obrázky, nepodařilo se přečíst"
+  },
+  {
+   "key": "nod-cafe",
+   "name": "NoD (café/bar)",
+   "area": "Dlouhá 33",
+   "kind": "café",
+   "url": "https://nod.roxy.cz/",
+   "items": [],
+   "note": "Lístek café online nenalezen."
+  },
+  {
+   "key": "prague-beer-museum",
+   "name": "Prague Beer Museum",
+   "area": "Dlouhá 46",
+   "kind": "pub",
+   "url": "https://www.praguebeermuseum.com/en",
+   "items": [],
+   "note": "web blokuje automatické čtení (robots), ceny jinde online nenalezeny"
+  },
+  {
+   "key": "staromacek",
+   "name": "Restaurace Staromáček",
+   "area": "Dlouhá 4",
+   "kind": "restaurant",
+   "url": "https://staromacek.cz/menu",
+   "items": [],
+   "note": "lístky jsou PDF bez textové vrstvy (sken), ceny nečitelné"
+  },
+  {
+   "key": "roxy",
+   "name": "Roxy",
+   "area": "Dlouhá 33",
+   "kind": "club",
+   "url": "https://www.roxy.cz/",
+   "items": [],
+   "note": "Lístek s cenami online není."
+  },
+  {
+   "key": "sisters-bistro",
+   "name": "Sisters",
+   "area": "Dlouhá 39",
+   "kind": "bistro",
+   "url": "https://www.sistersbistro.cz/eshop/",
+   "items": [],
+   "note": "Jen ceny obložených chlebíčků, nápoje bez cen online."
+  },
+  {
+   "key": "steampunk-prague",
+   "name": "Steampunk Prague",
+   "area": "V Kolkovně 5",
+   "kind": "cocktail bar",
+   "url": "https://steampunkprague.cz/napojovy-listek/",
+   "items": [],
+   "note": "lístek jen jako obrázky PNG, text bez cen; obrázky se nepodařilo přečíst"
+  },
+  {
+   "key": "the-spot",
+   "name": "The Spot",
+   "area": "Dlouhá 13",
+   "kind": "bistro",
+   "url": "https://www.thespot.cz",
+   "items": [],
+   "note": "web nedostupný, lístek bez cen online"
+  }
+ ]
+}

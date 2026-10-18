@@ -1,16 +1,17 @@
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
 import {test} from 'node:test';
-import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, rankEvents, renderEventRanking, eventTip, renderMenuWeek, renderMenuMonth, renderSlowSellers, renderPriceResults, renderPriceCheck, renderPriceMismatches, sectionThousands, guestOutlookDay, median, weakDays, webDrop, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, sumMenuInterest, renderMenuInterest, renderMenuByLanguage, type MonthResult} from '../src/briefing.ts';
+import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, renderBriefing, renderCosts, renderReservations, renderReviews, renderWeb, renderWeek, renderMonth, reviewDrop, eventFactor, renderBooking, renderEvents, rainFactor, renderEventReviews, renderGuestOutlook, rankEvents, renderEventRanking, eventTip, renderMenuWeek, renderMenuMonth, renderSlowSellers, renderPriceResults, renderPriceCheck, renderPriceMismatches, sectionThousands, guestOutlookDay, median, weakDays, webDrop, dayPart, forecast, forecastAccuracy, renderForecast, unusualDiscounts, summarizeReservations, summarizeReviews, summarizeWeb, sumMenuInterest, renderMenuInterest, renderMenuByLanguage, renderCompetitors, type MonthResult} from '../src/briefing.ts';
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
 import {todoList} from '../src/todo.ts';
 import {counted, drinkMargins, dueSoon, duplicateInvoices, foodCostAlert, litresPerUnit, monthOverMonth, overdueInvoices, priceRises, renderSupplies, risesBySupplier, supplyBrief, supplySummary, unitPrice, unusualPurchases} from '../src/supplies.ts';
 import {weatherDays, weatherText} from '../src/weather.ts';
-import {itemProfit, menuGaps, menuItemTax, menuMatrix, nameKey, pairSale, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, volumeOf, type ItemSale} from '../src/menu.ts';
+import {competitorComparison, competitorSections, itemProfit, menuGaps, menuItemTax, menuMatrix, nameKey, pairSale, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, volumeOf, type ItemSale} from '../src/menu.ts';
 import {businessDate, sameClockDaysBefore} from '../src/time.ts';
 import {czechHolidays, easterSunday, holidayName} from '../src/holidays.ts';
-import {InputError, validateBatch, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type Menu, type MenuItem, type SupplierInvoice, type TenantConfig, type WebTraffic} from '../src/validate.ts';
+import {InputError, validateBatch, validateCompetitorPrices, validateConfig, withoutGuest, type Bill, type BottleCheck, type Reservation, type Menu, type MenuItem, type SupplierInvoice, type TenantConfig, type WebTraffic} from '../src/validate.ts';
 
 const config: TenantConfig = {
   name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9],
@@ -801,6 +802,63 @@ const dish = (id: string, category: string, name: string, pricesCents: number[],
   ({id, part: 'food', category, group: null, name, description: null, volume: null, volumeMl: null, pricesCents, tip: false, ...extra});
 const drink = (id: string, name: string, volumeMl: number, cents: number): MenuItem =>
   dish(id, 'Pivo', name, [cents], {part: 'drinks', volume: `${volumeMl / 1000} l`, volumeMl});
+
+test('prices nearby: ours against the median of the venues, drinks per volume, the Monday line and the file in the repo', async () => {
+  const menu = menuOf([dish('b1', 'Burgery', 'Classic Burger', [20000, 25000]), {...drink('p3', 'Pivo X', 300, 9000), group: 'Točené'}, {...drink('p4', 'Pivo X', 330, 9500), group: 'Lahvové'},
+    dish('m1', 'Koktejly', 'Mojito', [20000]), dish('m2', 'XXL', 'Mojito', [150000]), dish('f1', 'Přílohy', 'Hranolky', [8000]),
+    drink('v1', 'Vodka V', 40, 10000), drink('w1', 'Víno W', 150, 10000), drink('w2', 'Víno W', 750, 50000)]);
+  const data = validateCompetitorPrices({checkedOn: '2026-10-12', basket: [
+    {item: 'burger', label: 'Burger', section: 'food', ours: {name: 'classic burger', category: 'Burgery', priceIndex: 1}},
+    {item: 'beer', label: 'Pivo', section: 'alcohol', volumeMl: 330, ours: {name: 'Pivo X', category: 'Pivo', group: 'Točené'}},
+    {item: 'mojito', label: 'Mojito', section: 'alcohol', ours: {name: 'Mojito', category: 'Koktejly'}},
+    {item: 'fries', label: 'Hranolky', section: 'food', ours: {name: 'Hranolky'}},
+    {item: 'shake', label: 'Shake', section: 'soft', ours: null},
+    {item: 'vodka', label: 'Vodka', section: 'alcohol', volumeMl: 40, perVolume: true, ours: {name: 'Vodka V', volumeMl: 40}},
+    {item: 'wine', label: 'Víno', section: 'alcohol', volumeMl: 750, ours: {name: 'Víno W', volumeMl: 750}}],
+  venues: [
+    {key: 'd', name: 'D', url: 'https://d.example', items: [{item: 'vodka', name: 'Vodka 3 cl', priceCzk: 60, volumeMl: 30}, {item: 'vodka', name: 'Vodka 7 cl', priceCzk: 70, volumeMl: 70}]},
+    {key: 'a', name: 'A', url: 'https://a.example/menu', items: [{item: 'burger', name: 'Bacon', priceCzk: 150, approx: true}, {item: 'burger', name: 'Cheese', priceCzk: 200}, {item: 'burger', name: 'Big', priceCzk: 300}, {item: 'beer', name: 'Ležák', priceCzk: 60, volumeMl: 300}, {item: 'mojito', name: 'Mojito', priceCzk: 150}, {item: 'vodka', name: 'Vodka', priceCzk: 100, volumeMl: 50}, {item: 'wine', name: 'Víno', priceCzk: 600, volumeMl: 750}]},
+    {key: 'b', name: 'B', area: 'Praha 1', url: 'https://b.example', items: [{item: 'burger', name: 'Burger', priceCzk: 220}, {item: 'beer', name: 'Pivo', priceCzk: 80}, {item: 'mojito', name: 'Mojito', priceCzk: 160}, {item: 'fries', name: 'Fries', priceCzk: 80}, {item: 'vodka', name: 'Panák', priceCzk: 50, volumeMl: 20}, {item: 'vodka', name: 'Vodka láhev', priceCzk: 1500, volumeMl: 700}]},
+    {key: 'c', name: 'C', url: 'https://c.example', items: [{item: 'burger', name: 'Burger', priceCzk: 240}, {item: 'fries', name: 'Curly', priceCzk: 99, approx: true}, {item: 'beer', name: 'Pivo', priceCzk: 90, volumeMl: 500}, {item: 'mojito', name: 'Mojito', priceCzk: 170, note: 'web'}, {item: 'vodka', name: 'Vodka', priceCzk: 90, volumeMl: 40}, {item: 'wine', name: 'Víno', priceCzk: 120, volumeMl: 150}]},
+  ]});
+  const rows = competitorComparison(menu, data);
+  assert.deepEqual(rows.map(row => [row.item, row.ourName, row.ourCents, row.venues.map(v => v.cents), row.medianCents, row.diffPct]), [
+    ['burger', 'Classic Burger', 25000, [20000, 22000, 24000], 22000, 14],
+    ['beer', 'Pivo X', 9900, [6600], 6600, null],
+    ['mojito', 'Mojito', 20000, [15000, 16000, 17000], 16000, 25],
+    ['fries', 'Hranolky', 8000, [8000, 9900], 8000, null],
+    ['shake', null, null, [], null, null],
+    ['vodka', 'Vodka V', 10000, [8000, 8000, 9000], 8000, 25],
+    ['wine', 'Víno W', 50000, [60000], 60000, null],
+  ], 'the cheapest exact line of a venue, drinks only from a volume within 20 % (none without it), spirits by the millilitre only from 3 to 6 cl (not a 2 cl pour, a double or a bottle), our item by category, group and volume, a look-alike outside the median, no difference from fewer than 3 venues');
+  assert.deepEqual(competitorSections(rows), [
+    {section: 'food', name: 'Jídlo', compared: 1, medianDiffPct: 14, above: 0, below: 0},
+    {section: 'alcohol', name: 'Alkoholické nápoje', compared: 2, medianDiffPct: 25, above: 2, below: 0},
+    {section: 'soft', name: 'Nealkoholické nápoje', compared: 0, medianDiffPct: null, above: 0, below: 0}], 'each part of the menu: the median of our differences');
+  assert.deepEqual(rows[3].venues[1], {name: 'C', cents: 9900, line: 'Curly', note: null, approx: true});
+  assert.deepEqual([rows[3].minCents, rows[3].maxCents], [8000, 8000], 'the range of exact matches only');
+  assert.equal(competitorComparison(null, data)[0].ourCents, null, 'no menu, no price of ours');
+  const bad = (change: (raw: any) => void) => { const raw = JSON.parse(JSON.stringify(data)); change(raw); assert.throws(() => validateCompetitorPrices(raw), InputError); };
+  bad(raw => { raw.venues[0].items[0].item = 'pizza'; });
+  bad(raw => { raw.venues[1].key = 'd'; });
+  bad(raw => { raw.venues[0].url = 'http://a.example'; });
+  bad(raw => { raw.venues[0].items[0].priceCzk = 0; });
+  bad(raw => { raw.basket.push(raw.basket[0]); });
+  bad(raw => { raw.venues[0].guest = 'x'; });
+  bad(raw => { raw.venues[0].items[0].approx = 'yes'; });
+  bad(raw => { raw.basket[0].section = 'drinks'; });
+  bad(raw => { delete raw.basket[0].section; });
+  bad(raw => { raw.basket[0].perVolume = true; });
+  const summary = {checkedOn: '2026-10-12', venues: 4, compared: 3, sections: competitorSections(rows).filter(section => section.compared), above: [rows[2]], below: []};
+  assert.deepEqual(renderCompetitors(summary), ['Ceny proti okolí (3 položky proti 4 podnikům s cenami online, 12. 10.): celkově jídlo +14 %, alkohol +25 %; dráže Mojito 200 Kč (+25 %, okolí 160 Kč)']);
+  const many = {...summary, sections: [], above: [rows[2], rows[2], rows[2], rows[2], rows[2]], below: [{...rows[0], diffPct: -20}]};
+  assert.match(renderCompetitors(many)[0], /: dráže (Mojito [^,]+, okolí 160 Kč\), ){2}Mojito [^;]+ a další 2; levněji Burger 250 Kč \(−20 %, okolí 220 Kč\)$/, 'three named on each side');
+  assert.equal(renderCompetitors({...summary, sections: [], above: []})[0], 'Ceny proti okolí (3 položky proti 4 podnikům s cenami online, 12. 10.): všechno do ±15 % od mediánu');
+  assert.deepEqual(renderCompetitors(null), []);
+  // The file the deploy stores: valid, every price with the page it was read from.
+  const file = validateCompetitorPrices(JSON.parse(await readFile(new URL('../.github/oko1/james-dean.competitors.json', import.meta.url), 'utf8')));
+  assert.ok(file.venues.filter(venue => venue.items.length).length >= 5 && file.venues.every(venue => venue.url.startsWith('https://')));
+});
 
 test('POS products are paired to the menu by name, size by volume or price, and only clear look-alikes', () => {
   const menu = menuOf([dish('b1', 'Burgery', 'Classic Burger', [22500, 25500]), dish('b2', 'Burgery', 'Texas Burger', [24500]),

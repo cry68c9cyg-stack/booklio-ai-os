@@ -1,6 +1,6 @@
 import {weekday} from './time.ts';
 import {dueText, duplicateText, foodCostText, overdueText, riseText, unusualText} from './supplies.ts';
-import {CASH_DIFFERENCE_CENTS, crowns, menuGapsText, mismatch, mismatchText, noShowAlarm, noShowText, pendingAheadText, reviewDrop, reviewDropText, unusual, weakDays, weakDaysText, webDropText, type Briefing} from './briefing.ts';
+import {CASH_DIFFERENCE_CENTS, crowns, menuGapsText, mismatch, mismatchText, noShowAlarm, noShowText, pendingAheadText, themeTodos, reviewDrop, reviewDropText, unusual, weakDays, weakDaysText, webDropText, type Briefing} from './briefing.ts';
 
 export type TodoItem = {level: 'warn' | 'info'; text: string; amountCents: number | null};
 const LIMIT = 15;
@@ -17,6 +17,9 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   if (difference !== null && Math.abs(difference) >= CASH_DIFFERENCE_CENTS) warn(`Přepočet pokladny nesedí s deníkem: ${difference > 0 ? '+' : ''}${crowns(difference)}`, difference);
   for (const row of briefing.report?.journalMismatches ?? []) warn(`Tržba nesedí s deníkem, ${mismatch(row)}`, row.reportCents - row.journalCents);
   for (const row of briefing.report?.paymentMismatches ?? []) warn(`Platba nesedí s deníkem, ${mismatch(row)}`, row.reportCents - row.journalCents);
+  // The managers' tables that do not add up (src/checks.ts): a wrong sum is a warning, a small cash difference or a sign to check is info.
+  for (const check of briefing.tableChecks ?? []) items.push({level: check.level, text: `Tabulky: ${check.text}`, amountCents: check.amountCents});
+  for (const text of themeTodos(briefing.noteThemes)) items.push({level: 'info', text, amountCents: null});
   for (const row of briefing.unusualDiscounts) warn(`Neobvyklá sleva: ${unusual(row)}`, row.amountCents - row.usualCents);
   if (noShowAlarm(briefing.noShows)) warn(`No-show: ${noShowText(briefing.noShows!)}`);
   if (briefing.week && weekday(briefing.businessDate) === 0 && reviewDrop(briefing.week)) warn(`Recenze klesají: ${reviewDropText(briefing.week)}`);

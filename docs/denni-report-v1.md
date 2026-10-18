@@ -9,9 +9,11 @@ Přechodný zdroj dat, než poběží Pexeso (specifikace OKO1 §4). Manažeři 
 - **Které soubory:** denní report je sešit s datem dne v názvu (např. `Denní report 9.10.2026.xlsx`, `09_10_26`). Peněžní deník je sešit, jehož název obsahuje „deník“, a OKO1 z něj bere jen blok daného dne; je-li deníků víc (např. po měsících), stáhne tři nejnovější a použije ten, který den má. Sešit s tržbami po částech je vždy denní report, i když má datum v záhlaví. „Bilance.xls“ (starý formát .xls) a „Graf.xlsx“ OKO1 nepotřebuje: totéž je v deníku a v reportu. Za hotový report se počítá jen denní report s tržbami po částech: samotný deník nestačí a OKO1 to zkusí znovu v další hodině. Když denní report chybí i v 9:00, vezmou se tržby po částech a platby z deníku (řádky s popiskem `Deník: …`, upozornění „Denní report chybí, tržby jsou jen z peněžního deníku“). Když denní report je, jeho tržby a platby mají přednost a řádky z deníku se zahodí; jen tržby po částech a platby z deníku zůstanou vedle jako `journal_revenue` a `journal_payment` pro kontrolu. Liší-li se tržba některé části v reportu a v deníku o 1 Kč a víc, ranní zpráva i seznam k vyřízení to ukážou („Tržba v reportu nesedí s deníkem“). Totéž platí pro platby hotovostí, kartou a zákaznickou kartou („Platby v reportu nesedí s deníkem“); porovná se jen způsob platby, který mají oba soubory (denní report nemá řádek zákaznických karet). Na skutečném dni 9. 10. 2026 sedí hotovost 9 058 Kč i karty 410 960 Kč v reportu i v deníku. Prohledá kořen složky a nejvýš pět podsložek, od nejnovější. Soubory nad 10 MB a dočasné soubory Excelu (`~$…`) se přeskočí. Odkaz na jediný sešit se čte celý.
 - **Archiv:** stažené soubory se beze změny uloží do R2 v EU (`t/{tenant}/onedrive/{datum}/{soubor}`).
 
-**Neověřeno na skutečném odkazu.** Čtení bez přihlášení přes `api.onedrive.com` funguje u osobního OneDrive; firemní OneDrive (SharePoint, `*.sharepoint.com`) ho obvykle nepustí. Pak OKO1 uloží upozornění „sdílený odkaz nejde otevřít bez přihlášení“ a náhradní cestu zařídí Claude bez práce MC. Ověří se hned s odkazem od Matěje.
+**Google Drive jen pro OKO1.** Složka na Google Drive se nesdílí odkazem pro kohokoli. OKO1 má u Googlu vlastní servisní účet (projekt OKO1, Google Drive API) a složka se nasdílí jen jeho e-mailu (`…@….iam.gserviceaccount.com`) jako Čtenář. OKO1 čte s oprávněním `drive.readonly` jen to, co mu někdo nasdílí. Klíč účtu (JSON) je v tajemství repozitáře `GOOGLE_SERVICE_ACCOUNT`, nasazení ho vloží do OKO1. Odkaz není potřeba: OKO1 si mezi složkami nasdílenými jeho účtu najde složku `OKO1 reporty` (nejnověji změněnou) a ta má přednost před odkazem v `ONEDRIVE_REPORTS_LINK`. Odkaz na jinou složku Google Drive (`https://drive.google.com/drive/folders/…`) funguje taky. Tabulky Google se stahují jako xlsx. E-mail účtu OKO1 ukazuje přehled v kartě „Zdroje dat“.
 
-Bezpečnost: OKO1 stahuje jen z adres Microsoftu (`1drv.ms`, `*.1drv.com`, `*.onedrive.com`, `onedrive.live.com`, `*.live.net`, `*.sharepoint.com`), přesměrování kontroluje znovu, každý požadavek má limit 15 s a soubor nejvýš 10 MB (rozbalený sešit nejvýš 40 MB). Čtení a rozbor mají dohromady nejvýš 60 s, takže pomalý OneDrive ani API nikdy nezastaví odeslání zprávy v 9:00.
+**Přístup OKO1 u Microsoftu.** Osobní OneDrive nové odkazy (`1drv.ms/f/c/…`) přes veřejné `api.onedrive.com` bez přihlášení neotevře (ověřeno 18. 10. 2026 na složce James Dean). Proto má OKO1 vlastní aplikaci u Microsoftu (veřejný klient, přihlášení s PKCE, bez tajného klíče) s oprávněním jen pro čtení `Files.Read` a `offline_access`. ID aplikace je v tajemství repozitáře `ONEDRIVE_CLIENT_ID`, nasazení ho vloží do OKO1. Připojení: na přehledu v kartě „Zdroje dat“ tlačítko „Připojit OneDrive“ (jen po přihlášení SMS kódem), přihlášení k účtu Microsoft a „Povolit“. Stačí jakýkoli účet Microsoft: složku otevírá sdílený odkaz, přístup OKO1 jen dovolí ji přes Microsoft Graph číst. OKO1 si každé ráno přístup obnoví; když ho Microsoft odmítne (zrušený souhlas, změna hesla), přidá k reportu upozornění a tlačítko se na přehledu objeví znovu. Bez připojení zkouší OKO1 veřejné API jako dřív. Adresa pro návrat z přihlášení: `https://<OKO1>/onedrive/callback` (u aplikace jako platforma „Mobilní a desktopové aplikace“).
+
+Bezpečnost: OKO1 stahuje jen z adres Microsoftu (`1drv.ms`, `*.1drv.com`, `*.onedrive.com`, `onedrive.live.com`, `*.live.net`, `*.sharepoint.com`, `graph.microsoft.com`, `*.microsoftpersonalcontent.com`, `www.googleapis.com`), přesměrování kontroluje znovu, každý požadavek má limit 15 s a soubor nejvýš 10 MB (rozbalený sešit nejvýš 40 MB). Čtení a rozbor mají dohromady nejvýš 60 s, takže pomalý OneDrive ani API nikdy nezastaví odeslání zprávy v 9:00.
 
 ## Co se čte
 
@@ -27,14 +29,14 @@ Podle popisků v řádcích. **Ověřeno na skutečných souborech za 9. 10. 202
 | `discount` | denní report | Odpisy…, Promo…, Personál, Sleva N %, MŽ, IG, Cosmo…: počet a Kč |
 | `void` | denní report | Storno: počet a Kč |
 | `revenue_section`, `revenue_register`, `payment` | deník (záloha) | řádky „Tržba …“ se sloupci Karty, Zákaznické karty (ZK), Tržba celkem: den → `diner`, noc → `bar`, Club + Texaco → `club`, Texaco → `texaco`; řádek „Tržba hotovost + karty …“ → `cash`, `card`, `customer_card` a `total`/`payments`. Popisek začíná `Deník: ` |
-| `total` | oba | Celkem podle výjezdů → `payments`; „Celkem“ v bloku „Slevy“ / „Slevy a odpisy“ → `discounts`; řádky „Tržba …“ v deníku (hotovostní část tržby, jen pro kontrolu); `cash-difference` = přepočet Celkem − Zůstatek (kladné = v kase je víc) |
+| `total` | oba | Celkem podle výjezdů → `payments`; samotné „Promo“ nad blokem slev → `promo` (promo celkem podle reportu, není to další sleva); „Celkem bez Promo“ → `without-promo`; „Celkem“ v bloku „Slevy“ / „Slevy a odpisy“ → `discounts`; řádky „Tržba …“ v deníku (hotovostní část tržby, jen pro kontrolu); `cash-difference` = přepočet Celkem − Zůstatek (kladné = v kase je víc) |
 | `balance` | deník | Počáteční stav → `register-start`, Zůstatek → `register`, Trezor z přepočtu → `safe` (starší rozvržení: Banka → `bank`, Trezor → `safe`, Pokladna → `register`) |
 | `movement` | deník | Vklad…, Odvod…, Záloha… a každý záporný řádek (peníze do kasy, nejsou to výdaje) |
 | `expense` | deník | ostatní kladné řádky bloku dne (název nákupu a částka) |
 | `payout` | deník | Security, Tanečnice, DJ, Popelář, Hosteska, Barback, Uklízečka a řádky s „výplata“, „zkouška“, „brigáda“, „výpomoc“ (role a částka); „DJ oprava …“ je výdaj |
 | `cash_count` | deník | večerní přepočet vedle bloku: měny, kov, dluhy, obálky, kasáč, hotovost, celkem |
 
-Text řádku „Report dne“ (také „Poznámky“, „Události“) a jméno DJ tvoří volný text `notes`.
+Text řádku „Report dne“ (také „Poznámky“, „Události“) a jméno DJ tvoří volný text `notes`. „Report dne“ může přijít i jako samostatný dokument Wordu s datem v názvu (např. `Textový report 17.10.2026.docx`): jeho text (odstavce po řádcích) se přidá do `notes` a soubor do `files`.
 
 ## Uložení
 
@@ -48,7 +50,7 @@ Text řádku „Report dne“ (také „Poznámky“, „Události“) a jméno 
 
 Stejný tvar přijímá `PUT /admin/t/{tenant}/report` (oprava dne, import historie). Neznámá pole se odmítnou (400).
 
-**Historie:** starší dny se načtou z peněžního deníku na OneDrive ručním spuštěním nasazení (Actions → Nasazení OKO1 → Run workflow, pole „od“ a „do“). Excely ani jejich výtahy se do Gitu nedávají, ani šifrovaně. Pro soubory, které už máte u sebe, je `node scripts/admin.ts import <tenant> <složka> <od> <do> [--dry-run]`.
+**Historie:** starší dny se načtou z peněžního deníku na OneDrive ručním spuštěním nasazení (Actions → Nasazení OKO1 → Run workflow, pole „od“ a „do“; dny, které denní report už mají, zůstanou, pokud není zaškrtnuté „Načíst znovu“, např. po opravě souborů). Excely ani jejich výtahy se do Gitu nedávají, ani šifrovaně. Pro soubory, které už máte u sebe, je `node scripts/admin.ts import <tenant> <složka> <od> <do> [--dry-run]`.
 
 ## Ranní zpráva z reportu
 
@@ -57,3 +59,22 @@ Dokud nejsou účty z pokladny, je zdrojem tržby report: tržba a plán, část
 ## „Report dne“
 
 S klíčem `ANTHROPIC_API_KEY` (vlastní klíč OKO1) pošle OKO1 text Claudovi a dostane zpět shrnutí a nejvýš deset bodů: incident, problém, úkol, informace. Před odesláním nahradí jména (slova s velkým písmenem mimo seznam běžných slov), telefony (devět číslic, i s +420) a e-maily značkami `[X1]`, `[telefon]`, `[e-mail]`. Jména se vrátí jen do výsledku uloženého v OKO1. Jména napsaná malým písmenem (přezdívky) se nepoznají; patří to do posouzení DPIA (specifikace §9). Úspěšný rozbor se dělá jednou, změněný text znovu, nepovedený se zkusí v další hodině ranního okna. Do té doby, bez klíče nebo při chybě jde do zprávy zkrácený původní text.
+
+**Témata textu** (src/themes.ts): OKO1 v textu dne (bez řádku DJ) hledá podle slov bez diakritiky témata: zdravotní incident, konflikt nebo bezpečnost, chybí hotovost na výplaty, porucha, chybí personál, došlo zboží, stížnost hosta, položka se neprodává, slabý provoz, plno, akce ve městě. Téma popřené v téže větě („bez problémů a konfliktů“, „žádná stížnost“) se nepočítá. Text se nikam neposílá, ukládá se jen v databázi provozovny s reportem dne. Témata, která potřebují člověka (prvních sedm), jdou do seznamu k vyřízení s tipem, co udělat. V pondělí ranní zpráva ukáže „Report dne za 4 týdny“ (na kolika dnech s textem se které téma objevilo) a „Co řešit“ (nejvýš tři témata, která potřebují člověka nebo se vrátila aspoň dvakrát). Dashboard má kartu „Z textových reportů“ a Claude nástroj `report_dne_texty` (texty, témata, DJ a tržba klubu za období) pro hlubší rozbor.
+
+**DJ a tržba klubu:** jméno z řádku „DJ:“ denního reportu. V pondělí řádek „DJ za 12 týdnů (tržba klubu)“: u DJe aspoň se 2 nocemi průměrná tržba klubu (Club celkem) za noc a medián poměru proti obvyklé tržbě stejného dne v týdnu (medián ostatních nocí téhož dne v týdnu, aspoň 2). Nejde o hodnocení DJe, jen o tržbu nocí, kdy hrál.
+
+## Kontrola tabulek
+
+Každé ráno OKO1 u reportu dne zkontroluje, jestli tabulky sedí (src/checks.ts, MC 18. 10. 2026). Rozdíly pod 1 Kč se nepočítají. Ve zprávě jako „⚠ Tabulky: …“ a v seznamu k vyřízení:
+
+- promo celkem z reportu proti součtu promo slev (Promo Club, Promo Rest. den, …);
+- „Celkem“ slev proti součtu řádků slev;
+- Club celkem proti součtu pokladen a Texaca;
+- Celkem podle výjezdů proti součtu částí a proti hotovosti + kartám;
+- záporná částka ve výčetce hotovosti;
+- počáteční stav deníku proti včerejšímu zůstatku;
+- jako informace bez ⚠: rozdíl výčetky a zůstatku pod 500 Kč (od 500 Kč dál varování „Přepočet pokladny nesedí“) a záporný řádek deníku, který není vklad, odvod, záloha, výběr ani prodej („Olej −1 280 Kč“ je v kase jako příjem, u nákupu má být kladně).
+
+„Bilance.xls“ a „Graf.xlsx“ OKO1 nestahuje: Bilance je starý formát .xls a obojí opakuje čísla z deníku a reportu.
+

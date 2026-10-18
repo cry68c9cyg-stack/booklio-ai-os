@@ -13,6 +13,10 @@ on:
       fetch_to:
         description: 'do (YYYY-MM-DD)'
         required: false
+      fetch_replace:
+        description: 'Načíst znovu i dny, které denní report už mají (po opravě souborů)'
+        type: boolean
+        default: false
 
 concurrency: deploy-production
 
@@ -114,6 +118,16 @@ jobs:
             echo "$out" | jq -c '(.reportsLink |= (if . then "nastaven" else null end)) | del(.recipients, .dashboardPhones)'
             rm "$RUNNER_TEMP/$tenant.json"
           done
+      - name: Ceny podniků v okolí (veřejné lístky, .github/oko1/*.competitors.json)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AI_OS_URL: https://oko1.rr7whdyyhf.workers.dev
+        run: |
+          export AI_OS_ADMIN_SECRET=$(printf '%s' oko1-admin | openssl dgst -sha256 -hmac "$CLOUDFLARE_API_TOKEN" -r | cut -d' ' -f1)
+          for f in .github/oko1/*.competitors.json; do
+            [ -e "$f" ] || continue
+            if out=$(node scripts/admin.ts competitors "$(basename "$f" .competitors.json)" "$f"); then echo "$out" | jq -c .; else echo "::warning::Ceny okolí z $f se neuložily."; fi
+          done
       - name: Načtení dnů z OneDrive (jen ručně spuštěné nasazení s rozsahem dnů)
         if: github.event_name == 'workflow_dispatch' && (inputs.fetch_from != '' || inputs.fetch_to != '')
         env:
@@ -121,15 +135,17 @@ jobs:
           AI_OS_URL: https://oko1.rr7whdyyhf.workers.dev
           FROM: ${{ inputs.fetch_from }}
           TO: ${{ inputs.fetch_to }}
+          REPLACE: ${{ inputs.fetch_replace }}
         run: |
           export AI_OS_ADMIN_SECRET=$(printf '%s' oko1-admin | openssl dgst -sha256 -hmac "$CLOUDFLARE_API_TOKEN" -r | cut -d' ' -f1)
           to=${TO:-$FROM}
           [[ "$FROM" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && "$to" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && ! "$FROM" > "$to" ]] || { echo "::error::Rozsah dnů musí být YYYY-MM-DD a „od“ nejpozději „do“."; exit 1; }
           (( ($(date -u -d "$to" +%s) - $(date -u -d "$FROM" +%s)) / 86400 < 62 )) || { echo "::error::Najednou nejvýš 62 dnů."; exit 1; }
+          keep=--keep; [ "$REPLACE" = true ] && keep=
           d="$FROM"; n=0
           while [[ ! "$d" > "$to" ]] && (( n < 62 )); do
-            # Days that already have the managers' daily report stay as they are; a failed day does not stop the others.
-            node scripts/admin.ts fetch james-dean "$d" --keep | jq -c --arg d "$d" '{den: $d, nalezeno: .found, ponechano: (.kept // false), upozorneni: .warnings}' || echo "::warning::Den $d se nenačetl."
+            # Days that already have the managers' daily report stay as they are (unless replaced); a failed day does not stop the others.
+            node scripts/admin.ts fetch james-dean "$d" $keep | jq -c --arg d "$d" '{den: $d, nalezeno: .found, ponechano: (.kept // false), upozorneni: .warnings}' || echo "::warning::Den $d se nenačetl."
             d=$(date -u -d "$d + 1 day" +%F); n=$((n + 1))
           done
       - name: Spárování rezervačního systému (web James Dean posílá rezervace, jen poprvé)
@@ -221,6 +237,27 @@ jobs:
           k=$(printf '%s' "$KEY" | tr -d '[:space:]')
           if [ -z "$k" ]; then echo "ANTHROPIC_API_KEY není vyplněný, Report dne půjde do zprávy jako text."; exit 0; fi
           printf '%s' "$k" | npx wrangler secret put ANTHROPIC_API_KEY --env production
+      - name: Aplikace OKO1 u Microsoftu pro čtení OneDrive (ONEDRIVE_CLIENT_ID), jen když je vyplněná
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          KEY: ${{ secrets.ONEDRIVE_CLIENT_ID }}
+        run: |
+          k=$(printf '%s' "$KEY" | tr -d '[:space:]')
+          if [ -z "$k" ]; then echo "ONEDRIVE_CLIENT_ID není vyplněný, OneDrive jde číst jen bez přihlášení."; exit 0; fi
+          if ! printf '%s' "$k" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then echo "::warning::ONEDRIVE_CLIENT_ID není ID aplikace (GUID)."; exit 0; fi
+          printf '%s' "$k" | npx wrangler secret put ONEDRIVE_CLIENT_ID --env production
+          echo "Aplikace OKO1 pro OneDrive nastavená."
+      - name: Účet OKO1 u Googlu pro čtení Google Drive (GOOGLE_SERVICE_ACCOUNT), jen když je vyplněný
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$KEY" ]; then echo "GOOGLE_SERVICE_ACCOUNT není vyplněný, Google Drive OKO1 nepřečte."; exit 0; fi
+          if ! printf '%s' "$KEY" | jq -e '.type == "service_account" and (.client_email | type == "string") and (.private_key | type == "string")' > /dev/null 2>&1; then
+            echo "::warning::GOOGLE_SERVICE_ACCOUNT není klíč servisního účtu Googlu (soubor JSON)."; exit 0
+          fi
+          printf '%s' "$KEY" | jq -c . | npx wrangler secret put GOOGLE_SERVICE_ACCOUNT --env production > /dev/null
+          echo "Účet OKO1 u Googlu uložen: $(printf '%s' "$KEY" | jq -r .client_email)"
       - name: Klíč iÚčta pro náklady (IUCTO_API_KEY, v OKO1 jako IUCTO_KEY_JAMES_DEAN), jen když je vyplněný
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

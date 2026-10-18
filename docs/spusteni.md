@@ -77,6 +77,22 @@ Připojení v Claudovi (každý, kdo smí na dashboard):
 2. Na stránce OKO1 zkontrolovat, kam přístup půjde, zadat provozovnu `james-dean` a svoje číslo.
 3. Opsat kód z SMS. Připojení i přihlášení na dashboard platí 30 dní od posledního použití, nejvýš rok od kódu; `POST /admin/t/james-dean/logout` (správní API) ukončí všechna připojení i přihlášení na dashboard.
 
+## 6a. Ceny podniků v okolí
+
+Rozhodnutí MC 14. 10. 2026: Claude jednou měsíčně přečte veřejné lístky **všech barů a restaurací v ulicích Dlouhá a V Kolkovně** a porovná s nimi **celý náš lístek: jídlo i všechny nápoje, alkoholické i nealkoholické**. Ceny zapíše do `.github/oko1/<tenant>.competitors.json`:
+
+- `checkedOn`: datum čtení; `scope`: kde podniky jsou (pro dashboard, např. „Dlouhá a V Kolkovně“);
+- `basket`: srovnávané položky, u každé část lístku (`section`: `food` jídlo, `alcohol` alkohol, `soft` nealko), naše položka lístku podle názvu, kategorie, případně skupiny, objemu a pořadí ceny, a u nápojů objem, na který se ceny přepočítají (`volumeMl`; `perVolume: true` = přepočet po mililitrech ze sklenky 0,75× až 1,5× objemu, např. destiláty 3–6 cl na 4 cl a víno rozlévané; malý panák 2 cl ani lahev se nepřepočítá, protože malá porce stojí víc než svůj díl; jinak jen z objemu do ±20 %); položka, kterou nemáme, má `ours: null` a ukazuje jen okolí;
+- `venues`: každý prohlédnutý podnik s adresou (`area`), druhem (`kind`) a adresou stránky, ze které ceny pochází; podnik bez cen online má prázdné `items` a důvod v `note`.
+
+Jsou to veřejná data, nic o hostech ani o nás. Nasazení soubor uloží do OKO1 (`npm run admin -- competitors james-dean soubor.json`, nejvýš 1 MB).
+
+OKO1 porovná naši aktuální cenu z lístku s mediánem podniků. Rozdíl se počítá jen tehdy, když stejnou položku má aspoň 3 podniky; u podniku s více řádky se bere nejlevnější, podobné položky (`approx`) jsou jen pro představu. Nápoj bez uvedeného objemu se do srovnání nepočítá. Výsledek ukazuje:
+
+- karta lístku na dashboardu („Ceny proti okolí“): jídlo, alkoholické a nealkoholické nápoje zvlášť, každá část celkově (medián našich rozdílů) a po položkách;
+- nástroj Clauda `kontrola_cen` (`competitors`);
+- pondělní ranní zpráva v týdnu po přečtení cen: části lístku celkově a nejvýš tři položky o 15 % a víc dražší a tři levnější než medián.
+
 ## 7. Ověření
 
 - `npm run admin -- preview james-dean 2026-10-08`: náhled přehledu za den.

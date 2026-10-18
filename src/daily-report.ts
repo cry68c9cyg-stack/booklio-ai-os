@@ -97,6 +97,7 @@ const REPORT_RULES: Rule[] = [
   {match: /^karty\b/, kind: 'payment', key: 'card'},
   {match: /^zakaznicke karty\b/, kind: 'payment', key: 'customer_card'},
   {match: /^celkem podle vyjezdu\b/, kind: 'total', key: 'payments'},
+  {match: /^celkem bez promo\b/, kind: 'total', key: 'without-promo'},
   {match: /^storn/, kind: 'void', key: 'void'},
   {match: /^(odpis|promo|personal|sleva|slevy \d|mz$|ig$|cosmo)/, kind: 'discount', key: label => slug(label)},
   {match: /^slevy a odpisy celkem\b/, kind: 'total', key: 'discounts'},
@@ -144,7 +145,8 @@ export function extractDailyReport(sheets: Sheet[]): {lines: ReportLine[]; notes
       if (NOTE_LABEL.test(text)) { if (row.texts.length) notes.push(row.texts.join(' ')); continue; }
       if (/^dj\b/.test(text)) { if (row.texts.length) notes.push(`DJ: ${row.texts.join(', ')}`); continue; }
       if (!row.numbers.length) continue;
-      let rule = apply(REPORT_RULES, row.label);
+      // A bare "Promo" above the discount block is the report's own promo total (the promo discounts are below it).
+      let rule = !discounts && /^promo$/.test(text) ? {kind: 'total' as const, key: 'promo'} : apply(REPORT_RULES, row.label);
       if (!rule && discounts && /^celkem\b/.test(text)) rule = {kind: 'total', key: 'discounts'};
       rule ??= {kind: 'unmapped', key: slug(row.label)};
       // A known label repeated (charts, copies on other sheets) counts once; unknown rows are all kept.

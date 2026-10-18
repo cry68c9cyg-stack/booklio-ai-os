@@ -161,7 +161,7 @@ export function createServer(context: ToolContext): McpServer {
   });
 
   tool('kontrola_cen', 'Kontrola cen', 'Ceny lístku k prověření v každé kategorii od 4 položek: položka pod polovinou nebo nad dvojnásobkem běžné ceny kategorie (u nápojů různých objemů za litr) ' +
-    's navrženou cenou na dolním nebo horním kvartilu, mezery v cenové řadě (od 5 položek) s cenou uprostřed a ceny s neobvyklou poslední číslicí (ending: aspoň tři čtvrtiny kategorie končí na pár číslic) s nejbližší obvyklou cenou. Jen k posouzení, cena může být záměr. webGaps = co doplnit v lístku na webu: jídlo nebo koktejl bez popisu či složení (s místem, odkud ho převzít), nápoj bez objemu, stejná položka za dvě ceny. Částky v haléřích.', {},
+    's navrženou cenou na dolním nebo horním kvartilu, mezery v cenové řadě (od 5 položek) s cenou uprostřed a ceny s neobvyklou poslední číslicí (ending: aspoň tři čtvrtiny kategorie končí na pár číslic) s nejbližší obvyklou cenou. Jen k posouzení, cena může být záměr. webGaps = co doplnit v lístku na webu: jídlo nebo koktejl bez popisu či složení (s místem, odkud ho převzít), nápoj bez objemu, stejná položka za dvě ceny. competitors = naše ceny proti všem barům a restauracím v Dlouhé a V Kolkovně (z jejich veřejných lístků, datum čtení checkedOn): celý lístek, jídlo, alkoholické i nealkoholické nápoje; sections = každá část lístku celkově (medián našich rozdílů v %, kolik položek je o 15 % a víc dražších či levnějších), rows = po položkách medián, rozpětí, ceny podniků a rozdíl v %, nápoje přepočtené na objem; venues = podniky, u podniku bez cen online items 0 a důvod v note. Částky v haléřích.', {},
   async () => {
     const check = await context.venue.posPriceCheck();
     return check ? result(check) : failed('Lístek zatím do OKO1 nedorazil.');
@@ -190,6 +190,14 @@ export function createServer(context: ToolContext): McpServer {
     if (!isDate(datum)) return badDate;
     const trends = await context.venue.posTrends(datum);
     return trends ? result(trends) : failed('Provozovna není v OKO1 nastavená.');
+  });
+  tool('report_dne_texty', 'Texty Report dne', 'Textové reporty manažerů („Report dne“) za období (nejvýš 400 dní), po dnech: celý text, DJ noci, tržba klubu, témata ' +
+    '(zdravotní incident, konflikt, chybí hotovost na výplaty, porucha, chybí personál, došlo zboží, stížnost, položka se neprodává, slabý provoz, plno, akce ve městě) a rozbor Clauda, je-li. ' +
+    'K tomu kolikrát se které téma za období objevilo s tipem, co s ním dělat, a tržba klubu podle DJe za 12 týdnů do konce období. Pro hledání, co se opakuje a co řešit. Částky v haléřích.',
+  {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
+    const bad = badRange(od, until);
+    if (bad) return bad;
+    return result(await context.venue.posNotes(od, until));
   });
   tool('souhrn_obdobi', 'Souhrn za období', 'Součty za libovolné období (nejvýš 400 dní): tržba a dny s tržbou, potvrzené rezervace a hosté, nedorazili, storna, zdroje rezervací, ' +
     'jak dopředu se rezervuje, návštěvy webu a jejich původ, odeslané formuláře, nové recenze a průměr hvězdiček, akce podniku s hosty a tržbou proti obvyklému dni. Jen počty, částky v haléřích.',

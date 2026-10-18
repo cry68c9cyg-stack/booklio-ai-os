@@ -250,6 +250,17 @@ function eventsCard(ranking) {
     '<div class="muted">průměr potvrzených hostů na jednu akci proti stejným dnům v týdnu bez akce (nejvýš 4 za 8 týdnů před ní); tržba stejně, jen u dnů s tržbou; nahoře akce, které přivedou nejvíc hostů navíc</div></div>';
 }
 
+// Topics of the managers' "Report dne" over 4 weeks with what to do, and the club's revenue by the DJ of the night.
+function themesCard(t, djs) {
+  const has = t && t.themes.length, ranked = djs && djs.length >= 2;
+  if (!has && !ranked) return '';
+  const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.';
+  let html = '<div class="card"><h2>Z textových reportů</h2>';
+  if (has) html += '<div class="muted">' + esc(short(t.from)) + '–' + esc(short(t.to)) + ', ' + t.days + ' dní s textem</div><table>' + t.themes.map(x => '<tr><td' + (x.warn ? ' class="warn"' : '') + '><b>' + esc(x.name) + '</b><div class="muted">' + esc(x.tip) + '</div></td><td class="n">' + x.days + '×</td><td class="n muted">' + esc(short(x.last)) + '</td></tr>').join('') + '</table>';
+  if (ranked) html += '<h3>DJ a tržba klubu (12 týdnů)</h3><table>' + djs.map(r => '<tr><td>' + esc(r.dj) + '</td><td class="n">' + r.nights + '×</td><td class="n">' + kc(r.averageCents) + '</td><td class="n' + (r.changePermille !== null && r.changePermille < 0 ? ' warn' : '') + '">' + (r.changePermille === null ? '–' : (r.changePermille >= 0 ? '+' : '−') + Math.round(Math.abs(r.changePermille) / 10) + ' %') + '</td></tr>').join('') + '</table><div class="muted">průměrná tržba klubu za noc a proti obvyklé tržbě stejného dne v týdnu</div>';
+  return html + '</div>';
+}
+
 // The month up to the shown day against the same days of the month before, and the cash the cash book paid out.
 const monthNames = ['leden', 'únor', 'březen', 'duben', 'květen', 'červen', 'červenec', 'srpen', 'září', 'říjen', 'listopad', 'prosinec'];
 function monthCard(m) {
@@ -331,6 +342,26 @@ function menuCard(m) {
   const gp = m.gaps;
   if (gp) h += '<h3>Co opravit na webu</h3>' + (gp.items.length ? '<ul>' + gp.items.map(g => '<li><b>' + esc(g.name) + '</b> (' + esc(g.group ? g.category + ' › ' + g.group : g.category) + '): ' + esc(g.text) + '</li>').join('') + '</ul>' +
     (gp.total > gp.items.length ? '<div class="muted">… a další ' + (gp.total - gp.items.length) + '</div>' : '') : '<span class="muted">nic, lístek je úplný</span>');
+  const co = m.competitors;
+  if (co) {
+    const vol = ml => ml ? ' <span class="muted">' + (ml < 100 ? ml + ' ml' : String(ml / 1000).replace('.', ',') + ' l') + '</span>' : '';
+    const signed = p => p === 0 ? '±0 %' : (p > 0 ? '+' : '−') + Math.abs(p) + ' %';
+    const diff = p => p === null ? '<span class="muted">–</span>' : '<span class="' + (Math.abs(p) >= 15 ? 'warn' : '') + '">' + signed(p) + '</span>';
+    const count = (n, one, few, many) => n + ' ' + (n === 1 ? one : n >= 2 && n <= 4 ? few : many);
+    const online = co.venues.filter(v => v.items).length;
+    h += '<h3>Ceny proti okolí <span class="muted">(' + count(co.venues.length, 'podnik', 'podniky', 'podniků') + (co.scope ? ' – ' + esc(co.scope) : '') + (online < co.venues.length ? ', s cenami online ' + online : '') + ', ceny z jejich lístků ' + esc(short(co.checkedOn)) + ')</span></h3>' +
+      co.sections.map(sec => {
+        const rows = co.rows.filter(r => r.section === sec.section && r.venues.length);
+        return '<details><summary><b>' + esc(sec.name) + '</b> ' + (sec.medianDiffPct === null ? '<span class="muted">málo srovnatelných cen</span>' : 'celkově ' + diff(sec.medianDiffPct)) +
+          ' <span class="muted">· srovnáno ' + count(sec.compared, 'položka', 'položky', 'položek') + (sec.above ? ', ' + sec.above + ' dráže o 15 % a víc' : '') + (sec.below ? ', ' + sec.below + ' levněji o 15 % a víc' : '') + '</span></summary>' +
+          (rows.length ? '<div class="scroll"><table><tr><th>Položka</th><th class="n">Naše</th><th class="n">Okolí (medián)</th><th class="n">Rozpětí</th><th class="n">Rozdíl</th></tr>' +
+          rows.map(r => '<tr><td title="' + esc(r.venues.map(v => v.name + ': ' + v.line + ' ' + kc(v.cents) + (v.approx ? ' (jen podobné, mimo medián)' : '') + (v.note ? ', ' + v.note : '')).join('\\n')) + '">' + esc(r.label) + vol(r.volumeMl) +
+            (r.ourName ? '<div class="muted">' + esc(r.ourName) + '</div>' : '<div class="muted">u nás není</div>') + '</td><td class="n">' + (r.ourCents === null ? '<span class="muted">–</span>' : kc(r.ourCents)) + '</td><td class="n">' + (r.medianCents === null ? '<span class="muted">–</span>' : kc(r.medianCents)) +
+            ' <span class="muted">(' + r.venues.filter(v => !v.approx).length + (r.venues.some(v => v.approx) ? ' + ' + r.venues.filter(v => v.approx).length + ' podobné' : '') + ')</span></td><td class="n">' + (r.minCents === null ? '–' : kc(r.minCents) + '–' + kc(r.maxCents)) + '</td><td class="n">' + diff(r.diffPct) + '</td></tr>').join('') + '</table></div>' : '<span class="muted">žádný podnik nemá srovnatelnou položku</span>') + '</details>';
+      }).join('') +
+      '<details><summary class="muted">Podniky</summary><div class="muted">' + co.venues.map(v => '<a href="' + esc(v.url) + '" target="_blank" rel="noopener">' + esc(v.name) + '</a>' + (v.area || v.kind ? ' (' + esc([v.area, v.kind].filter(Boolean).join(', ')) + ')' : '') + (v.items ? '' : ' – ' + esc(v.note || 'bez cen online'))).join(' · ') + '</div></details>' +
+      '<div class="muted">celkově = medián našich rozdílů v dané části lístku; destiláty a víno rozlévané přepočtené na uvedený objem, ostatní nápoje jen z objemu do ±20 %; medián a rozpětí jen ze stejných položek, podobné jsou jen pro představu; rozdíl od 3 podniků; ±15 % a víc je zvýrazněné; ceny podniků po najetí na položku</div>';
+  }
   const pr = m.profit;
   if (pr) {
     h += '<h3>Prodej po položkách za 30 dní</h3><div class="scroll"><table><tr><th>Položka</th><th class="n">Kusů</th><th class="n">Tržba</th><th class="n">Zisk</th></tr>' +
@@ -404,6 +435,10 @@ function sourcesCard(s) {
   const rows = s.senders.map(x => '<tr><td>' + esc(x.name) + '</td><td class="n' + (x.silent ? ' warn' : '') + '">' + (x.lastSeen ? esc(x.lastSeen) : 'zatím nic') + (x.silent ? ' · neposílá' : '') + '</td></tr>')
     .concat(s.types.map(x => '<tr><td class="muted">' + esc(x.name) + '</td><td class="n muted">' + esc(x.lastReceived) + '</td></tr>'));
   if (s.report) rows.push('<tr><td>Report manažerů (OneDrive)</td><td class="n">' + esc(s.report.at) + (s.report.found ? '' : ' · <span class="warn">nenalezen</span>') + '</td></tr>');
+  const od = s.onedrive;
+  if (od && od.google) rows.push('<tr><td>Google Drive: složku sdílet jako Čtenář na</td><td class="n"><b>' + esc(od.google) + '</b></td></tr>');
+  else if (od && od.connected) rows.push('<tr><td class="muted">OneDrive připojený</td><td class="n muted">od ' + esc(od.since) + '</td></tr>');
+  else if (od && od.canConnect) rows.push('<tr><td>' + (od.error ? '<span class="warn">Přístup k OneDrive vypršel</span>' : 'OneDrive zatím není připojený') + '</td><td class="n"><a href="' + esc(location.pathname) + '/onedrive">Připojit OneDrive</a></td></tr>');
   if (s.costs) rows.push('<tr><td>Náklady (iÚčto)</td><td class="n">' + esc(s.costs.at) + (s.costs.ok ? '' : ' · <span class="warn">chyba</span>') + '</td></tr>');
   return '<div class="card"><h2>Zdroje dat</h2>' + (rows.length ? '<table>' + rows.join('') + '</table>' : '<span class="muted">zatím žádný zdroj neposlal data</span>') + '</div>';
 }
@@ -467,7 +502,7 @@ function render(data) {
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card" id="todo">' + todoCard(data.todo) + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
-  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast) + weekCard(data.week) + eventsCard(data.eventRanking) + trendsCard(data.trends) + menuInterestCard(data.menuInterest) + monthCard(data.month) + suppliesCard(data.supplies) + menuCard(data.menu) + sourcesCard(data.sources);
+  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast) + weekCard(data.week) + eventsCard(data.eventRanking) + themesCard(data.themes, data.djRanking) + trendsCard(data.trends) + menuInterestCard(data.menuInterest) + monthCard(data.month) + suppliesCard(data.supplies) + menuCard(data.menu) + sourcesCard(data.sources);
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
   if (r) {

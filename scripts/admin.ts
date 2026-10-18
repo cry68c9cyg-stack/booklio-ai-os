@@ -19,7 +19,8 @@ const usage = `Použití:
   node scripts/admin.ts fetch <tenant> <YYYY-MM-DD> [--keep]  načte denní report z OneDrive hned (mimo ranní okno); --keep nepřepíše den, který denní report už má
   node scripts/admin.ts import <tenant> <složka> <od> <do> [--dry-run] [--force]   nahraje dny z excelů manažerů ve složce (deník a denní reporty); den s uloženým denním reportem přeskočí, pokud není --force
   node scripts/admin.ts web <tenant>                          ověří živé čtení webu (adresa, tajemství s tokenem, seznam tabulek); žádná data hostů
-  node scripts/admin.ts ingest <tenant>                       kdo posílá data a kdy naposledy (instalace, poslední dávky, typy záznamů); bez obsahu záznamů`;
+  node scripts/admin.ts ingest <tenant>                       kdo posílá data a kdy naposledy (instalace, poslední dávky, typy záznamů); bez obsahu záznamů
+  node scripts/admin.ts competitors <tenant> <ceny.json>      uloží ceny srovnatelných podniků v okolí (z jejich veřejných lístků)`;
 
 function fail(message: string): never {
   console.error(message);
@@ -120,6 +121,9 @@ switch (command) {
     break;
   case 'ingest':
     console.log(JSON.stringify(await call('GET', 'ingest'), null, 2));
+    break;
+  case 'competitors':
+    console.log(JSON.stringify(await call('PUT', 'competitors', await readJson(arg)), null, 2));
     break;
   default:
     fail(usage);
