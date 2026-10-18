@@ -17,10 +17,11 @@ import {GAP_DAYS, monthBase, monthTarget, shiftSignals, type DataGaps, type Mont
 import {noteThemes, rankDjs, djOf, summarizeThemes, type DjRank, type ThemeSummary} from './themes.ts';
 import {buildBriefing, type Briefing, rankEvents, type EventRank, type MenuWeek, type MenuMonth, dayPart, RAIN_MM, rainFactor, type DayPart, type EventReview, eventFactor, guestOutlookDay, type GuestOutlookDay, forecast, forecastAccuracy, planFrom, reviewDrop, SEASON_MAX, SEASON_MIN, type Forecast, renderBriefing, sumMenuInterest, type MenuInterest, type DiscountHistory, type Month, type MonthPart, type ReviewStats, type Week, type WeekPart} from './briefing.ts';
 import {dashboardHtml} from './dashboard.ts';
-import {sortedTodos, todoList} from './todo.ts';
+import {sortedTodos, todoList, type TodoItem} from './todo.ts';
 import {competitorComparison, competitorSections, COMPETITOR_SHARE, itemProfit, menuChanges, menuGaps, menuItemTax, menuMatrix, menuOverview, nameKey, PART_NAMES, pairSale, priceText, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, type ItemSale, type RepricingInput} from './menu.ts';
 import {deliver, type DeliveryEnv} from './delivery.ts';
 import {renderDigest} from './digest.ts';
+import {CARRY_DAYS, carriedTodos, parseStaff, todoMail, todoWeek, type StoredTodo} from './tasks.ts';
 import {briefingDecision, localHour, reportDate, sendersFrom} from './schedule.ts';
 import {czechHolidays, holidayName} from './holidays.ts';
 import {addDays, businessDate, isDate, localTime, sameClockDaysBefore, weekday, zonedMidnight} from './time.ts';
@@ -66,7 +67,7 @@ export type Env = DeliveryEnv & WebEnv & IuctoEnv & {
   GOOGLE_SERVICE_ACCOUNT?: string;
   /** Workers AI (production): reading PDF invoices from the venue's mailbox. Optional: without it only ISDOC is read. */
   AI?: MailAi;
-} & {[name: `MAIL_ACCOUNT_${string}`]: string | undefined} & {[name: `PAYMENTS_MAIL_TO_${string}`]: string | undefined};
+} & {[name: `MAIL_ACCOUNT_${string}`]: string | undefined} & {[name: `PAYMENTS_MAIL_TO_${string}`]: string | undefined} & {[name: `STAFF_MAIL_${string}`]: string | undefined};
 /** The two Workers AI calls OKO1 makes, typed narrowly so no model list is needed. */
 type MailAi = {
   run(model: string, input: unknown): Promise<unknown>;
@@ -106,6 +107,10 @@ export function smtpAccount(env: Env, tenant: string): SmtpAccount | null {
 export function paymentRecipients(env: Env, tenant: string): string[] {
   const raw = env[`PAYMENTS_MAIL_TO_${tenant.toUpperCase().replace(/-/g, '_')}` as `PAYMENTS_MAIL_TO_${string}`] ?? '';
   return [...new Set(raw.split(/[,;\s]+/).map(address => address.trim().toLowerCase()).filter(validAddress))].slice(0, 5);
+}
+/** Who gets their items of "K vyřízení" where: Worker secret STAFF_MAIL_<TENANT> ("Matěj=matej@…; Nancy=nancy@…"), see src/tasks.ts. */
+export function staffRecipients(env: Env, tenant: string): Map<string, string[]> {
+  return parseStaff(env[`STAFF_MAIL_${tenant.toUpperCase().replace(/-/g, '_')}` as `STAFF_MAIL_${string}`] ?? '', validAddress);
 }
 type Result = {status: number; body: unknown};
 export type VenueSetup = {name: string; timeZone: string; businessDayCutoffHour: number; web: {url: string} | null; today: string; reportDay: string};
@@ -197,6 +202,9 @@ export class TenantObject extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS login_requests(phone_hash TEXT NOT NULL, at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS todo_done(business_date TEXT NOT NULL, item_key TEXT NOT NULL, done_at TEXT NOT NULL, PRIMARY KEY(business_date, item_key));
+      -- The items of "K vyřízení" as the morning message of the day had them, with who handles them: what carries over and who did what (src/tasks.ts).
+      CREATE TABLE IF NOT EXISTS todo_items(business_date TEXT NOT NULL, item_key TEXT NOT NULL, level TEXT NOT NULL, text TEXT NOT NULL, amount_cents INTEGER, owner TEXT,
+        PRIMARY KEY(business_date, item_key));
       -- Posted costs per month and synthetic account from iÚčto (sums only), and the last read of each month.
       CREATE TABLE IF NOT EXISTS costs(month TEXT NOT NULL, account TEXT NOT NULL, name TEXT NOT NULL, amount_cents INTEGER NOT NULL, PRIMARY KEY(month, account));
       CREATE TABLE IF NOT EXISTS cost_fetches(month TEXT PRIMARY KEY, through TEXT NOT NULL, at TEXT NOT NULL, error TEXT);
@@ -551,9 +559,56 @@ export class TenantObject extends DurableObject<Env> {
   /** The to-do list of a day with the "Vyřízeno" switches, as the dashboard shows it. */
   private todoFor(day: string, briefing: Briefing) {
     const done = new Set(this.sql.exec<{item_key: string}>('SELECT item_key FROM todo_done WHERE business_date=?', day).toArray().map(row => row.item_key));
-    return todoList(briefing, this.report(day)?.warnings ?? [])
+    const today = todoList(briefing, this.report(day)?.warnings ?? [])
       // "… a další 3" is not an item of its own: no switch.
       .map(item => item.text.startsWith('… a další') ? {...item, key: null, done: false} : {...item, key: todoKey(item.text), done: done.has(todoKey(item.text))});
+    // What nobody switched to "Vyřízeno" on the days before, with the day it first appeared (src/tasks.ts).
+    const carried = this.carriedFor(day, sortedTodos(briefing, this.report(day)?.warnings ?? []), addDays(day, -1)).slice(0, 10).map(item => ({...item, done: done.has(item.key)}));
+    return [...today, ...carried];
+  }
+
+  private storedTodos(from: string, to: string): StoredTodo[] {
+    return this.sql.exec<{business_date: string; item_key: string; level: string; text: string; amount_cents: number | null; owner: string | null}>(
+      'SELECT business_date, item_key, level, text, amount_cents, owner FROM todo_items WHERE business_date BETWEEN ? AND ?', from, to).toArray()
+      .map(row => ({date: row.business_date, key: row.item_key, level: row.level === 'warn' ? 'warn' : 'info', text: row.text, amountCents: row.amount_cents, owner: row.owner}));
+  }
+  /** Switched to "Vyřízeno" on a day from `since` up to `until` (the dashboard leaves out its own day, so a switch there shows crossed out). */
+  private doneSince(key: string, since: string, until = '9999-12-31'): boolean {
+    return this.sql.exec('SELECT 1 FROM todo_done WHERE item_key=? AND business_date>=? AND business_date<=? LIMIT 1', key, since, until).toArray().length > 0;
+  }
+  /** Warnings of the 7 days before `day` still open and not in its list again. */
+  private carriedFor(day: string, items: TodoItem[], doneUntil?: string) {
+    return carriedTodos(day, this.storedTodos(addDays(day, -CARRY_DAYS), addDays(day, -1)), (key, since) => this.doneSince(key, since, doneUntil), new Set(items.map(item => todoKey(item.text))));
+  }
+  /** Monday: who handled how many in the week and what hangs (src/tasks.ts). */
+  private todoWeekFor(day: string, items: TodoItem[]) {
+    const done = this.sql.exec<{business_date: string; item_key: string}>('SELECT business_date, item_key FROM todo_done WHERE business_date BETWEEN ? AND ?', addDays(day, -6), day).toArray()
+      .map(row => ({date: row.business_date, key: row.item_key}));
+    return todoWeek(day, this.storedTodos(addDays(day, -6 - CARRY_DAYS), day), done, this.carriedFor(day, items));
+  }
+
+  /**
+   * At the send hours, once the day's message is out: each person their items of "K vyřízení" (today's by the money at stake,
+   * then the ones carried over), to their address from STAFF_MAIL or else to the venue's mailbox. Once a day per person (3 tries).
+   */
+  private async todoMailsFor(config: TenantConfig, tenant: string, date: string, at: Date) {
+    const account = smtpAccount(this.env, tenant);
+    if (!account || !config.sendHours.includes(localHour(at, config.timeZone))) return;
+    const today = this.storedTodos(date, date);
+    if (!today.length && !this.sql.exec("SELECT 1 FROM briefings WHERE business_date=? AND status IN ('stored','delivered')", date).toArray().length) return;
+    const carried = this.carriedFor(date, today.map(row => ({level: row.level, text: row.text, amountCents: row.amountCents})));
+    const staff = staffRecipients(this.env, tenant), origin = this.env.PUBLIC_ORIGIN?.replace(/\/+$/, '');
+    const week = weekday(date) === 0 ? this.todoWeekFor(date, today.map(row => ({level: row.level, text: row.text, amountCents: row.amountCents}))) : [];
+    const owners = [...new Set([...today, ...carried].map(row => row.owner).filter((owner): owner is string => !!owner))];
+    for (const owner of owners) {
+      const mine = today.filter(row => row.owner === owner), theirs = carried.filter(row => row.owner === owner);
+      await this.officeMail(`todo:${owner}`, date, at, async () => {
+        const mail = todoMail(owner, date, config.name, mine, theirs, week.find(row => row.owner === owner) ?? null, origin ? `${origin}/d/${tenant}` : null);
+        const result = await sendMail(account, {from: {name: `OKO1 – ${config.name}`, address: account.user}, to: staff.get(owner.toLocaleLowerCase('cs')) ?? [account.user],
+          subject: mail.subject, text: mail.text, attachments: []}, at);
+        return result.ok ? {status: 'sent'} : {status: 'failed', error: result.error};
+      });
+    }
   }
 
   private saveConfig(tenant: string, body: unknown): Result {
@@ -2298,7 +2353,7 @@ export class TenantObject extends DurableObject<Env> {
       supplies: this.supplyBriefFor(config, date, forecast?.month.month === date.slice(0, 7) ? forecast.month.restCents : null), mail: this.mailBriefFor(config, date, now),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     // The KPIs read the briefing's invoices and mail, so they are added once it is built.
-    if (weekday(date) === 0) { briefing.kpi = this.kpiFor(date, briefing); briefing.weekResult = this.weekResultFor(config, date); briefing.dayNight = this.dayNightFor(date); briefing.purchaseShares = this.purchaseSharesFor(config, date); }
+    if (weekday(date) === 0) { briefing.todoWeek = this.todoWeekFor(date, sortedTodos(briefing, this.report(date)?.warnings ?? [])); briefing.kpi = this.kpiFor(date, briefing); briefing.weekResult = this.weekResultFor(config, date); briefing.dayNight = this.dayNightFor(date); briefing.purchaseShares = this.purchaseSharesFor(config, date); }
     if (briefing.month) briefing.monthResult = this.monthResultFor(config, date, this.restRevenue(briefing, date));
     return {briefing, text: renderBriefing(config.name, briefing)};
   }
@@ -2810,6 +2865,7 @@ export class TenantObject extends DurableObject<Env> {
     }
     if (config.sendHours.includes(hour)) await this.paymentMailFor(config, tenant, date, at);
     await this.officeMailsFor(config, tenant, date, at);
+    await this.todoMailsFor(config, tenant, date, at);
     const decision = briefingDecision({localHour: hour, sendHours: config.sendHours, alreadySent: sent, ready: this.ready(config, date)});
     if (decision !== 'send' && decision !== 'send-incomplete') return {decision, businessDate: date};
     const {briefing, text} = this.briefingFor(config, date, decision === 'send-incomplete', at);
@@ -2825,6 +2881,13 @@ export class TenantObject extends DurableObject<Env> {
     this.sql.exec(`INSERT INTO briefings VALUES(?,?,?,?,?,?) ON CONFLICT(business_date) DO UPDATE SET
       status=excluded.status, incomplete=excluded.incomplete, text=excluded.text, json=excluded.json, created_at=excluded.created_at`,
     date, status, briefing.incomplete ? 1 : 0, text, JSON.stringify(briefing), at.toISOString());
+    if (status !== 'failed') {
+      // The day's "K vyřízení" as the message had it: what carries over tomorrow, and each person's e-mail right away.
+      this.sql.exec('DELETE FROM todo_items WHERE business_date=?', date);
+      for (const item of sortedTodos(briefing, this.report(date)?.warnings ?? []))
+        this.sql.exec('INSERT OR IGNORE INTO todo_items VALUES(?,?,?,?,?,?)', date, todoKey(item.text), item.level, item.text, item.amountCents, item.owner ?? null);
+      await this.todoMailsFor(config, tenant, date, at);
+    }
     this.archive(`t/${tenant}/export/${date}.json`, JSON.stringify(this.exportDay(date)));
     return {decision, businessDate: date, status, text};
   }
