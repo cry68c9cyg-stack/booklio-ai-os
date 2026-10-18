@@ -172,7 +172,7 @@ function emptyBrief(): SupplyBrief {
 }
 
 // --- Pošta info@ (synthetic conversations) -----------------------------------------------------------------------------
-import {baseSubject, mailInsights, ownText, pairReplies, parseIncomingReading, parseReplyReading, renderMail, type MailRow} from '../src/mail-insights.ts';
+import {baseSubject, mailInsights, ownText, pairReplies, parseIncomingReading, parseReplyReading, peopleText, renderMail, repeatedCauses, signature, type MailRow} from '../src/mail-insights.ts';
 import {todoList as todos} from '../src/todo.ts';
 import {buildBriefing, renderBriefing} from '../src/briefing.ts';
 import type {TenantConfig} from '../src/validate.ts';
@@ -252,4 +252,39 @@ test('complaints by cause with what to do; drafts only for messages still withou
   assert.deepEqual(unanswered(rows, now, 1).map(r => r.key), ['q1']);
   assert.equal(parseDraft({draft: '  Dobrý den, děkujeme za zprávu. [ověřit] Tým Testovací podnik  '}), 'Dobrý den, děkujeme za zprávu. [ověřit] Tým Testovací podnik');
   assert.equal(parseDraft({draft: 'ok'}), null);
+});
+
+test('who signed a reply', () => {
+  assert.equal(signature('Dobrý den,\nstůl je připravený.\n\nS pozdravem\nKarolína\nJames Dean Prague'), 'Karolína');
+  assert.equal(signature('Hello,\nsee you.\nBest regards, Tomáš Testový'), 'Tomáš Testový');
+  assert.equal(signature('Děkuji, Eva.'), 'Eva');
+  assert.equal(signature('S pozdravem\nTým James Dean'), null);
+  assert.equal(signature('Děkujeme za zprávu a těšíme se na vás'), null);
+  assert.equal(signature('Ok, platí.'), null);
+  assert.equal(signature('S pozdravem\nEva\n\nDne 1. 10. 2026 Host napsal:\n> S pozdravem\n> Host'), 'Eva');
+});
+
+test('replies by person over the week against the week before, and complaint causes that keep coming back', () => {
+  const graded = (quality: number) => ({quality, issues: null, better: null});
+  const complaint = (cause: string) => ({topic: 'complaint', needsReply: true, complaint: true, summary: 'nespokojenost', cause}) as MailRow['reading'];
+  const rows: MailRow[] = [
+    row('a', {at: '2026-10-12T10:00:00.000Z', subject: 'Stůl'}), row('a-r', {direction: 'out', at: '2026-10-12T12:00:00.000Z', from: 'info@example.cz', to: ['host@example.cz'], subject: 'Re: Stůl', inReplyTo: '<a@example.cz>', signer: 'Eva', reading: graded(5)}),
+    row('b', {at: '2026-10-13T10:00:00.000Z', subject: 'Poukaz', from: 'b@example.cz'}), row('b-r', {direction: 'out', at: '2026-10-13T14:00:00.000Z', from: 'info@example.cz', to: ['b@example.cz'], subject: 'Re: Poukaz', inReplyTo: '<b@example.cz>', signer: 'Eva', reading: graded(4)}),
+    row('c', {at: '2026-10-14T10:00:00.000Z', subject: 'Parkování', from: 'c@example.cz'}), row('c-r', {direction: 'out', at: '2026-10-14T11:00:00.000Z', from: 'info@example.cz', to: ['c@example.cz'], subject: 'Re: Parkování', inReplyTo: '<c@example.cz>', reading: graded(2)}),
+    row('o', {at: '2026-10-06T10:00:00.000Z', subject: 'Starší', from: 'o@example.cz'}), row('o-r', {direction: 'out', at: '2026-10-06T16:00:00.000Z', from: 'info@example.cz', to: ['o@example.cz'], subject: 'Re: Starší', inReplyTo: '<o@example.cz>', signer: 'Eva', reading: graded(3)}),
+  ];
+  const now = new Date('2026-10-19T06:00:00.000Z');
+  const week = mailInsights(rows, '2026-10-12T06:00:00.000Z', now.toISOString(), now), before = mailInsights(rows, '2026-10-05T06:00:00.000Z', '2026-10-12T06:00:00.000Z', now);
+  assert.deepEqual(week.people, [{name: 'Eva', replies: 2, medianReplyHours: 3, qualityTenths: 45, graded: 2}, {name: 'bez podpisu', replies: 1, medianReplyHours: 1, qualityTenths: 20, graded: 1}]);
+  assert.equal(peopleText(week, before), 'Eva 2× za 3 h, 4,5/5 (předtím 6 h, 3/5) · bez podpisu 1× za 1 h, 2/5');
+  const lines = renderMail(week, week, null, before);
+  assert.ok(lines.includes('Odpovědi podle lidí za týden: Eva 2× za 3 h, 4,5/5 (předtím 6 h, 3/5) · bez podpisu 1× za 1 h, 2/5'));
+
+  const complaints = ['2026-10-06', '2026-10-10', '2026-10-15', '2026-10-17'].map((day, n) => row(`w${n}`, {at: `${day}T19:00:00.000Z`, from: `w${n}@example.cz`, reading: complaint(n === 0 ? 'food' : 'waiting')}));
+  complaints.push(row('f1', {at: '2026-10-16T19:00:00.000Z', from: 'f1@example.cz', reading: complaint('food')}), row('x1', {at: '2026-10-16T19:00:00.000Z', from: 'x@example.cz', reading: complaint('other')}),
+    row('x2', {at: '2026-10-16T20:00:00.000Z', from: 'x2@example.cz', reading: complaint('other')}), row('x3', {at: '2026-10-16T21:00:00.000Z', from: 'x3@example.cz', reading: complaint('other')}));
+  const repeated = repeatedCauses(complaints, now);
+  assert.deepEqual(repeated.map(entry => [entry.cause, entry.count]), [['waiting', 3]]); // food only twice; "ostatní" is no pattern
+  assert.deepEqual(repeatedCauses(complaints, new Date('2026-10-31T06:00:00.000Z')), []);
+  assert.ok(renderMail(week, null, null, null, repeated).some(line => line.startsWith('⚠ Pošta info@: stížnosti na čekání se opakují (3× za 14 dní): posílit směny')));
 });
