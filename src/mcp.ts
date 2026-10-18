@@ -227,6 +227,14 @@ export function createServer(context: ToolContext): McpServer {
     const list = await context.venue.posIncidents(od, until);
     return list ? result(list) : failed('Provozovna není v OKO1 nastavená.');
   });
+  tool('promo_a_odpisy', 'Promo a odpisy', 'Promo a odpisy z denních reportů za období (nejvýš 400 dní) po prostorech (Club, Restaurace den, Restaurace noc, Texaco) s tržbou prostoru, po dnech, ' +
+    'a prostory, kde promo nebo odpis drží 3 dny po sobě nad obvyklým (stejný den v týdnu za 4 týdny).',
+  {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
+    const bad = badRange(od, until);
+    if (bad) return bad;
+    const promo = await context.venue.posPromo(od, until);
+    return promo ? result(promo) : failed('Provozovna není v OKO1 nastavená.');
+  });
   tool('mzdy_a_smeny', 'Mzdy z kasy a směny', 'Výplaty v hotovosti z peněžního deníku za období (nejvýš 400 dní) po dnech a druzích: noc (security, tanečnice, DJ, popelář, hosteska, animátorky), ' +
     'mzdy mimo noc (kuchyň, barman, uklízečka, výpomoc, brigády) a zkušební směny; výplaty noci jako podíl tržby klubu po nocích; dny v týdnu, kdy texty reportů hlásí chybějící personál. ' +
     'Celé mzdy a odpracované hodiny OKO1 zatím nemá (přijdou s docházkou v Pexesu), jde jen o hotovost z kasy.',

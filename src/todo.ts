@@ -1,4 +1,5 @@
 import {addDays, weekday} from './time.ts';
+import {promoStreakText} from './promo.ts';
 import {nightShareText, staffGapToday} from './wages.ts';
 import {cashNeedText, debtsRising, debtsText, payoutAlarmText} from './cash.ts';
 import {repeatedText, waitingText} from './mail-insights.ts';
@@ -30,6 +31,7 @@ export function todoList(briefing: Briefing, reportWarnings: string[] = []): Tod
   if (briefing.nightShare) warn(`Výplaty noci nad obvyklým podílem: ${nightShareText(briefing.nightShare)}`, briefing.nightShare.overCents);
   const staffGap = staffGapToday(addDays(briefing.businessDate, 1), briefing.staffGaps);
   if (staffGap) items.push({level: 'info', text: `Personál: ${staffGap}`, amountCents: null});
+  for (const streak of briefing.promoStreaks ?? []) warn(promoStreakText(streak), streak.days.reduce((sum, day) => sum + day.cents - day.usualCents, 0));
   for (const row of briefing.unusualDiscounts) warn(`Neobvyklá sleva: ${unusual(row)}`, row.amountCents - row.usualCents);
   if (noShowAlarm(briefing.noShows)) warn(`No-show: ${noShowText(briefing.noShows!)}`);
   if (briefing.week && weekday(briefing.businessDate) === 0 && reviewDrop(briefing.week)) warn(`Recenze klesají: ${reviewDropText(briefing.week)}`);

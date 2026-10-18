@@ -746,12 +746,14 @@ try {
     body: rpc(1, 'initialize', {protocolVersion: '2025-06-18', capabilities: {}, clientInfo: {name: 'test', version: '1'}})})).json();
   assert.equal(initialized.result.serverInfo.name, 'oko1');
   const listed = await (await local('/mcp', {method: 'POST', headers: {...mcpHeaders, authorization: 'Bearer ' + tokens.access_token}, body: rpc(2, 'tools/list')})).json();
-  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['akce_zebricek', 'den', 'historie_ceny', 'hotovost_a_noci', 'incidenty', 'k_vyrizeni', 'kontrola_cen', 'kontrola_lahvi', 'listek', 'menu_engineering', 'mzdy_a_smeny', 'naklady_dodavatele', 'odhad_a_vyhled', 'posta_info', 'preceneni', 'ranni_prehled', 'report_dne_texty', 'report_manazeru', 'souhrn_obdobi', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty', 'vydelek_polozek',
+  assert.deepEqual(listed.result.tools.map(entry => entry.name).sort(), ['akce_zebricek', 'den', 'historie_ceny', 'hotovost_a_noci', 'incidenty', 'k_vyrizeni', 'kontrola_cen', 'kontrola_lahvi', 'listek', 'menu_engineering', 'mzdy_a_smeny', 'naklady_dodavatele', 'odhad_a_vyhled', 'posta_info', 'preceneni', 'promo_a_odpisy', 'ranni_prehled', 'report_dne_texty', 'report_manazeru', 'souhrn_obdobi', 'trzby_dne', 'trzby_obdobi', 'tyden_mesic_trendy', 'ucty', 'vydelek_polozek',
     'web_blokace_a_akce', 'web_darkove_karty', 'web_host', 'web_navstevnost', 'web_platby_lahvi', 'web_prehled', 'web_recenze', 'web_rezervace', 'web_rezervace_detail', 'web_tabulka']);
   assert.ok(listed.result.tools.every(entry => entry.annotations.readOnlyHint === true), 'read only');
 
   const reportTexts = await mcp('report_dne_texty', {od: '2026-10-01', do: '2026-10-31'});
   const nights = await mcp('hotovost_a_noci', {od: '2026-10-01', do: '2026-10-31'});
+  const promoList = await mcp('promo_a_odpisy', {od: '2026-10-01', do: '2026-10-31'});
+  assert.ok(!promoList.error && Array.isArray(promoList.data.days) && Array.isArray(promoList.data.streaks) && Array.isArray(promoList.data.total.rows), 'promo over a period');
   const wageList = await mcp('mzdy_a_smeny', {od: '2026-10-01', do: '2026-10-31'});
   assert.ok(!wageList.error && Array.isArray(wageList.data.days) && Array.isArray(wageList.data.nights) && Array.isArray(wageList.data.staffGaps.byWeekday) && typeof wageList.data.total.nightCents === 'number', 'wages over a period');
   const incidentList = await mcp('incidenty', {od: '2026-10-01', do: '2026-10-31'});
