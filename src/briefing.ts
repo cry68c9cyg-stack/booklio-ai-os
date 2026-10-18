@@ -7,7 +7,7 @@ import type {TableCheck} from './checks.ts';
 import {renderThemes, THEMES, type DjRank, type ThemeSummary} from './themes.ts';
 import {cashNeedText, payoutAlarmText, renderNights, renderTill, type CashNeed, type NightSummary, type PayoutAlarm, type Till} from './cash.ts';
 import {renderKpi, type KpiInput} from './kpi.ts';
-import {renderWeekResult, type WeekResult} from './weekresult.ts';
+import {renderMonthResult, renderWeekResult, type MonthOutcome, type WeekResult} from './weekresult.ts';
 import {renderRisk, renderRiskWeek, riskScore, type Risk} from './risk.ts';
 import {movementMonthText, renderCashForecast, renderCashShare, renderDeposits, type CashForecast, type CashShare, type MovementSum} from './cashflow.ts';
 import {cashDiffRepeatText, renderVoidWeek, voidAndDiffText, voidMonthText, type VoidAndDiff, type VoidSum} from './voids.ts';
@@ -147,6 +147,8 @@ export type Briefing = {
   kpi?: KpiInput | null;
   /** On Monday the week's operating result against the average week of the 4 before (src/weekresult.ts); set by the worker like the KPIs. */
   weekResult?: WeekResult | null;
+  /** With the month's lines (Monday, the month's last day): the month's result so far and to its end (src/weekresult.ts); set by the worker. */
+  monthResult?: MonthOutcome | null;
   /** The target of the month the starting day is in (src/goals.ts). */
   target?: MonthTarget | null;
   /** Days of the 14 before without revenue or with the cash book only; only for this morning's message. */
@@ -951,7 +953,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   // The week in a few numbers once a week, in the message about Sunday (Monday morning).
   if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceResults(briefing.priceResults), ...renderPriceCheck(briefing.priceCheck), ...renderMenuGaps(briefing.menuGaps), ...renderMenuInterest(briefing.menuInterest), ...renderMenuByLanguage(briefing.menuByLanguage), ...renderCompetitors(briefing.competitors), ...renderThemes(briefing.themes), ...renderDjs(briefing.djRanking), ...renderNights(briefing.nights), ...renderNightShares(briefing.nights?.nights), ...renderStaffGaps(briefing.staffGaps), ...renderPromoWeek(briefing.promoWeek), ...renderVoidWeek(briefing.voidWeek), ...renderKpi(briefing.kpi), ...renderWeekResult(briefing.weekResult), ...renderRiskWeek(briefing.riskWeek), ...renderDeposits(briefing.cashForecast), ...renderCashShare(briefing.cashShare), ...renderForeignWeek(briefing.foreignWeek));
   // The month so far once a week, and the whole month in the message about its last day (the 1st in the morning).
-  lines.push(...renderMonth(briefing.month));
+  lines.push(...renderMonth(briefing.month), ...(briefing.month ? renderMonthResult(briefing.monthResult) : []));
   // Which events draw guests, once a month in the message about its last day.
   if (addDays(briefing.businessDate, 1).endsWith('-01')) lines.push(...renderEventRanking(briefing.eventRanking), ...renderMenuMonth(briefing.menuMonth), ...renderSlowSellers(briefing.slowSellers), ...renderIncidents(briefing.businessDate.slice(0, 7), briefing.incidents));
   return lines.join('\n');

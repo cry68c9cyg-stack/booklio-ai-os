@@ -279,6 +279,23 @@ function weekResultCard(w) {
   return html + '<div class="muted">hrubý odhad, vše bez DPH: DPH z tržby podle sazeb pokladny, jinak odhadem (Restaurace den 12 %, noc a Club 21 %); bez nájmu, energií a mezd placených z účtu (ty přijdou s účetnictvím); výdaje z kasy se neodečítají, část z nich jsou zaplacené faktury; jídlo a nápoje = nákup jídla a nápojů z faktur z tržby, obojí bez DPH</div></div>';
 }
 
+// The month's result so far against the same days of the month before, and the projection to its end (src/weekresult.ts).
+function monthResultCard(m) {
+  if (!m || m.now.revenueDays < 5 || !m.now.invoices) return '';
+  const short = d => Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.', pct = p => p === null ? '–' : String(Math.round(p) / 10).replace('.', ',') + ' %';
+  const was = m.previousCents !== null, p = m.previous;
+  let html = '<div class="card"><h2>Výsledek měsíce ' + (m.complete ? 'celkem' : 'do ' + short(m.through)) + '</h2>';
+  html += '<p><b>' + kc(m.resultCents) + '</b>' + (was ? ' · minulý měsíc ' + short(m.previousThrough.slice(0, 8) + '01') + '–' + short(m.previousThrough) + ' ' + kc(m.previousCents) : '') + '</p>';
+  if (m.projectedCents !== null) html += '<p>Odhad za celý měsíc <b>' + kc(m.projectedCents) + '</b>' + (m.previousFullCents !== null ? ' · minulý měsíc celkem ' + kc(m.previousFullCents) : '') + '</p>';
+  html += '<table><tr><th></th><th class="n">tento měsíc</th><th class="n">minulý</th></tr>'
+    + '<tr><td>Tržba bez DPH</td><td class="n">' + kc(m.now.revenueNetCents) + '</td><td class="n muted">' + (was ? kc(p.revenueNetCents) : '–') + '</td></tr>'
+    + '<tr><td>− nákup z faktur bez DPH</td><td class="n">' + kc(m.now.purchasesCents) + '</td><td class="n muted">' + (was ? kc(p.purchasesCents) : '–') + '</td></tr>'
+    + '<tr><td>− výplaty z kasy</td><td class="n">' + kc(m.now.payoutsCents) + '</td><td class="n muted">' + (was ? kc(p.payoutsCents) : '–') + '</td></tr>'
+    + '<tr><td>jídlo a nápoje z tržby bez DPH</td><td class="n">' + pct(m.foodCostPermille) + '</td><td class="n muted">' + pct(m.previousFoodCostPermille) + '</td></tr>'
+    + '<tr><td class="muted">výdaje z kasy (neodečtené)</td><td class="n muted">' + kc(m.now.expensesCents) + '</td><td class="n muted">' + (was ? kc(p.expensesCents) : '–') + '</td></tr></table>';
+  return html + '<div class="muted">stejný hrubý odhad jako výsledek týdne, minulý měsíc za stejné dny; odhad do konce měsíce = předpověď tržby se stejnou marží jako zatím tento měsíc; bez nájmu, energií a mezd z účtu</div></div>';
+}
+
 function riskCard(r, week) {
   if (!r || (!r.score && !(week || []).some(d => d.score))) return '';
   const wd = ['ne', 'po', 'út', 'st', 'čt', 'pá', 'so'], day = d => wd[new Date(d + 'T12:00:00Z').getUTCDay()] + ' ' + Number(d.slice(8)) + '. ' + Number(d.slice(5, 7)) + '.';
@@ -682,7 +699,7 @@ function render(data) {
   let html = '<div class="grid">' + cards.join('') + '</div><div id="web"></div>';
   html += '<div class="card" id="todo">' + todoCard(data.todo) + '</div>';
   html += '<div class="card"><h2>Posledních ' + data.days.length + ' dní</h2>' + chart(data.days, data.businessDate) + '<div class="muted">sloupec = tržba, čárka = plán (průměr stejného dne za 4 týdny)</div></div>';
-  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast, b.target) + weekCard(data.week) + eventsCard(data.eventRanking) + themesCard(data.themes, data.djRanking) + nightsCard(data.nights, b.cashNeed, b.payoutAlarm) + wagesCard(data.wages, b.nightShare) + promoCard(data.promo) + voidsCard(data.voids) + cashFlowCard(data.cashFlow) + kpiCard(data.kpi) + weekResultCard(data.weekResult) + riskCard(data.risk, data.riskWeek) + incidentsCard(data.incidents) + trendsCard(data.trends) + menuInterestCard(data.menuInterest) + monthCard(data.month) + suppliesCard(data.supplies) + mailCard(data.mail) + menuCard(data.menu) + sourcesCard(data.sources);
+  html += guestsCard(b.guestOutlook) + forecastCard(b.forecast, b.target) + weekCard(data.week) + eventsCard(data.eventRanking) + themesCard(data.themes, data.djRanking) + nightsCard(data.nights, b.cashNeed, b.payoutAlarm) + wagesCard(data.wages, b.nightShare) + promoCard(data.promo) + voidsCard(data.voids) + cashFlowCard(data.cashFlow) + kpiCard(data.kpi) + weekResultCard(data.weekResult) + monthResultCard(data.monthResult) + riskCard(data.risk, data.riskWeek) + incidentsCard(data.incidents) + trendsCard(data.trends) + menuInterestCard(data.menuInterest) + monthCard(data.month) + suppliesCard(data.supplies) + mailCard(data.mail) + menuCard(data.menu) + sourcesCard(data.sources);
   if (b.bySection.length) html += '<div class="card"><h2>Části podniku</h2><table>' + b.bySection.map(s => '<tr><td>' + esc(s.label) + '</td><td class="n">' + kc(s.revenueCents) + '</td><td class="n muted">' + (b.revenueCents ? Math.round(s.revenueCents / b.revenueCents * 100) : 0) + ' %</td></tr>').join('') + '</table></div>';
   if (b.notes) html += '<div class="card"><h2>Report dne</h2>' + (b.notes.raw ? '<p class="pre">' + esc(b.notes.raw) + '</p>' : (b.notes.summary ? '<p>' + esc(b.notes.summary) + '</p>' : '') + '<ul>' + b.notes.points.map(p => '<li class="' + (p.kind === 'incident' || p.kind === 'problem' ? 'warn' : '') + '">' + esc(({incident: 'Incident', problem: 'Problém', task: 'Úkol', info: 'Info'})[p.kind]) + ': ' + esc(p.text) + '</li>').join('') + '</ul>') + '</div>';
   if (r) {
