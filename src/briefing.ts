@@ -6,6 +6,7 @@ import {weatherText, type WeatherDay} from './weather.ts';
 import type {TableCheck} from './checks.ts';
 import {renderThemes, THEMES, type DjRank, type ThemeSummary} from './themes.ts';
 import {cashNeedText, payoutAlarmText, renderNights, renderTill, type CashNeed, type NightSummary, type PayoutAlarm, type Till} from './cash.ts';
+import {renderCashForecast, renderCashShare, renderDeposits, type CashForecast, type CashShare} from './cashflow.ts';
 import {cashDiffRepeatText, renderVoidWeek, voidAndDiffText, voidMonthText, type VoidAndDiff, type VoidSum} from './voids.ts';
 import {promoMonthText, promoStreakText, renderPromoWeek, type PromoStreak, type PromoSum, type PromoWeek} from './promo.ts';
 import {nightShareText, renderNightShares, renderStaffGaps, renderWageDay, staffGapToday, wageSumText, type NightShare, type StaffGaps, type WageDay, type WageSum} from './wages.ts';
@@ -134,6 +135,9 @@ export type Briefing = {
   voidWeek?: {week: VoidSum; before: VoidSum} | null;
   cashDiffRepeat?: {date: string; cents: number}[] | null;
   voidAndDiff?: VoidAndDiff | null;
+  /** The cash and safe over the next 7 days and the Vklad JD it takes; on Monday also the cash part of the revenue, the week against the 4 before (src/cashflow.ts). */
+  cashForecast?: CashForecast | null;
+  cashShare?: {week: CashShare; before: CashShare} | null;
   /** The target of the month the starting day is in (src/goals.ts). */
   target?: MonthTarget | null;
   /** Days of the 14 before without revenue or with the cash book only; only for this morning's message. */
@@ -757,6 +761,7 @@ export function buildBriefing(input: {
   wageDay?: WageDay | null; nightShare?: NightShare | null; staffGaps?: StaffGaps | null;
   promoWeek?: PromoWeek | null; promoStreaks?: PromoStreak[];
   voidWeek?: {week: VoidSum; before: VoidSum} | null; cashDiffRepeat?: {date: string; cents: number}[] | null; voidAndDiff?: VoidAndDiff | null;
+  cashForecast?: CashForecast | null; cashShare?: {week: CashShare; before: CashShare} | null;
 }): Briefing {
   const closed = input.bills.filter(bill => bill.status === 'closed');
   const add = <K>(map: Map<K, number>, key: K, value: number) => map.set(key, (map.get(key) ?? 0) + value);
@@ -848,7 +853,7 @@ export function buildBriefing(input: {
     cashNeed: input.cashNeed ?? null, payoutAlarm: input.payoutAlarm ?? null, nights: input.nights ?? null, till: input.till ?? null, incidents: input.incidents ?? null, foreignWeek: input.foreignWeek ?? null,
     wageDay: input.wageDay ?? null, nightShare: input.nightShare ?? null, staffGaps: input.staffGaps ?? null,
     promoWeek: input.promoWeek ?? null, promoStreaks: input.promoStreaks ?? [],
-    voidWeek: input.voidWeek ?? null, cashDiffRepeat: input.cashDiffRepeat ?? null, voidAndDiff: input.voidAndDiff ?? null,
+    voidWeek: input.voidWeek ?? null, cashDiffRepeat: input.cashDiffRepeat ?? null, voidAndDiff: input.voidAndDiff ?? null, cashForecast: input.cashForecast ?? null, cashShare: input.cashShare ?? null,
     lastYearRevenueCents: input.lastYearRevenueCents ?? null, target: input.target ?? null, dataGaps: input.dataGaps ?? null,
     tableChecks: input.tableChecks ?? [], noteThemes: input.noteThemes ?? [], themes: input.themes ?? null, djRanking: input.djRanking ?? null,
     incomplete: input.incomplete,
@@ -907,6 +912,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   if (briefing.cashDiffRepeat) lines.push(`⚠ Kasa: ${cashDiffRepeatText(briefing.cashDiffRepeat)}`);
   if (briefing.nightShare) lines.push(`⚠ Výplaty noci nad obvyklým podílem: ${nightShareText(briefing.nightShare)}`);
   if (briefing.cashNeed) lines.push(`⚠ Hotovost na dnešek: ${cashNeedText(briefing.cashNeed)}; doplň hotovost nebo rozlož výplaty.`);
+  lines.push(...renderCashForecast(briefing.cashForecast));
   lines.push(...renderBottles(briefing));
   lines.push(...renderReservations(briefing.reservations, briefing.outlook));
   lines.push(...renderEvents(briefing.events));
@@ -931,7 +937,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderMenuWeek(briefing.menuDay, 'Lístek se změnil'), ...(briefing.menuProblems ?? []).map(text => `⚠ ${text}`));
   lines.push(...renderNotes(briefing));
   // The week in a few numbers once a week, in the message about Sunday (Monday morning).
-  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceResults(briefing.priceResults), ...renderPriceCheck(briefing.priceCheck), ...renderMenuGaps(briefing.menuGaps), ...renderMenuInterest(briefing.menuInterest), ...renderMenuByLanguage(briefing.menuByLanguage), ...renderCompetitors(briefing.competitors), ...renderThemes(briefing.themes), ...renderDjs(briefing.djRanking), ...renderNights(briefing.nights), ...renderNightShares(briefing.nights?.nights), ...renderStaffGaps(briefing.staffGaps), ...renderPromoWeek(briefing.promoWeek), ...renderVoidWeek(briefing.voidWeek), ...renderForeignWeek(briefing.foreignWeek));
+  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceResults(briefing.priceResults), ...renderPriceCheck(briefing.priceCheck), ...renderMenuGaps(briefing.menuGaps), ...renderMenuInterest(briefing.menuInterest), ...renderMenuByLanguage(briefing.menuByLanguage), ...renderCompetitors(briefing.competitors), ...renderThemes(briefing.themes), ...renderDjs(briefing.djRanking), ...renderNights(briefing.nights), ...renderNightShares(briefing.nights?.nights), ...renderStaffGaps(briefing.staffGaps), ...renderPromoWeek(briefing.promoWeek), ...renderVoidWeek(briefing.voidWeek), ...renderDeposits(briefing.cashForecast), ...renderCashShare(briefing.cashShare), ...renderForeignWeek(briefing.foreignWeek));
   // The month so far once a week, and the whole month in the message about its last day (the 1st in the morning).
   lines.push(...renderMonth(briefing.month));
   // Which events draw guests, once a month in the message about its last day.

@@ -227,6 +227,14 @@ export function createServer(context: ToolContext): McpServer {
     const list = await context.venue.posIncidents(od, until);
     return list ? result(list) : failed('Provozovna není v OKO1 nastavená.');
   });
+  tool('vyhled_hotovosti', 'Výhled hotovosti', 'Hotovost v kase po dnech za období (nejvýš 400 dní) z peněžního deníku: hotovost z tržeb, výplaty a výdaje, přepočet hotovosti a trezoru; ' +
+    'podíl hotovosti z tržeb na celkové tržbě a odhad na 7 dní po posledním dni (průměr stejného dne v týdnu za 4 týdny) s vklady JD, které budou potřeba, po dnech.',
+  {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
+    const bad = badRange(od, until);
+    if (bad) return bad;
+    const cash = await context.venue.posCashFlow(od, until);
+    return cash ? result(cash) : failed('Provozovna není v OKO1 nastavená.');
+  });
   tool('storna_a_kasa', 'Storna a rozdíly v kase', 'Storna z denních reportů proti tržbě a rozdíly přepočtu kasy proti zůstatku v peněžním deníku za období (nejvýš 400 dní), po dnech; ' +
     'dny s rozdílem od 100 Kč, opakovaný rozdíl (3× za 7 dní) a den, kdy jsou storna nad obvyklým a zároveň rozdíl v kase (první signál manka).',
   {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
