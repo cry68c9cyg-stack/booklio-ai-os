@@ -227,12 +227,33 @@ try {
   // Managers' Excel on OneDrive: fetched only at 7, 8 and 9, archived, stored as the day's report; "Report dne" goes to Claude without names.
   await mf.dispose();
   const outbound = [];
+  let microsoftRenewal = 'renew-1';
   const files = {'https://test.files.1drv.com/report.xlsx': await xlsx(reportSheets()), 'https://test.files.1drv.com/book.xlsx': await xlsx(journalSheets())};
   mf = new Miniflare({...options,
-    bindings: {...options.bindings, ANTHROPIC_API_KEY: 'test-only-anthropic'},
+    bindings: {...options.bindings, ANTHROPIC_API_KEY: 'test-only-anthropic', ONEDRIVE_CLIENT_ID: 'test-client'},
     outboundService: async request => {
       const url = new URL(request.url);
       outbound.push({url: request.url, body: request.method === 'POST' ? await request.text() : null, key: request.headers.get('x-api-key')});
+      // OKO1's Microsoft access: sign-in code, then a renewal each morning (rotated); Graph opens the shared folder.
+      if (url.hostname === 'login.microsoftonline.com') {
+        const form = new URLSearchParams(outbound.at(-1).body);
+        if (form.get('client_id') !== 'test-client') return Response.json({error: 'invalid_client'}, {status: 400});
+        if (form.get('grant_type') === 'authorization_code' && form.get('code') === 'test-code' && form.get('code_verifier')) return Response.json({access_token: 'graph-1', refresh_token: 'renew-1'});
+        if (form.get('grant_type') === 'refresh_token' && form.get('refresh_token') === microsoftRenewal) { microsoftRenewal = 'renew-2'; return Response.json({access_token: 'graph-2', refresh_token: 'renew-2'}); }
+        return Response.json({error: 'invalid_grant'}, {status: 400});
+      }
+      if (url.hostname === 'graph.microsoft.com') {
+        if (request.headers.get('authorization') !== 'Bearer graph-2') return new Response('', {status: 401});
+        if (url.pathname.startsWith('/v1.0/shares/')) return Response.json({name: 'Reporty', id: 'root1', folder: {}, parentReference: {driveId: 'drive1'}, children: [
+          {name: '2026-10', id: 'month1', folder: {}, parentReference: {driveId: 'drive1'}, lastModifiedDateTime: '2026-10-11T08:00:00Z'},
+        ]});
+        if (url.pathname === '/v1.0/drives/drive1/items/month1/children') return Response.json({value: [
+          {name: 'Peněžní deník.xlsx', file: {}, size: 5000, '@microsoft.graph.downloadUrl': 'https://test.files.1drv.com/book.xlsx'},
+          {name: 'Denní report 9.10.2026.xlsx', file: {}, size: 5000, '@microsoft.graph.downloadUrl': 'https://test.files.1drv.com/report.xlsx'},
+        ]});
+      }
+      // New personal share links do not open through the public API any more.
+      if (url.hostname === 'api.onedrive.com' && url.pathname.includes('u!' + Buffer.from('https://1drv.ms/f/c/synthetic/test').toString('base64url'))) return new Response('', {status: 401});
       if (url.hostname === 'api.onedrive.com') {
         const day = outbound.filter(entry => entry.url.includes('onedrive')).length;
         return Response.json({name: 'Reporty', folder: {}, children: [
@@ -288,6 +309,38 @@ try {
   const fetchesBefore = outbound.length;
   assert.deepEqual(await (await call('POST', '/admin/t/excel-venue/fetch', {date: '2026-10-09', keep: true})).json(), {found: true, kept: true, warnings: []}, 'history loading keeps a day with the daily report');
   assert.equal(outbound.length, fetchesBefore);
+  // A new personal share link opens only with OKO1's Microsoft access: connected once from the dashboard, then renewed each fetch.
+  const graphConfig = {...excelConfig, reportsLink: 'https://1drv.ms/f/c/synthetic/test'};
+  assert.equal((await call('PUT', '/admin/t/excel-graph/config', graphConfig)).status, 200);
+  const notConnected = await (await call('POST', '/admin/t/excel-graph/fetch', {date: '2026-10-09'})).json();
+  assert.equal(notConnected.found, false);
+  assert.match(notConnected.warnings[0], /nejde otevřít bez přihlášení.*Připojit OneDrive/);
+  const withoutSession = await mf.dispatchFetch('http://local.test/d/excel-graph/onedrive', {redirect: 'manual'});
+  assert.equal(withoutSession.status, 303);
+  assert.equal(withoutSession.headers.get('location'), 'http://local.test/d/excel-graph', 'only a logged-in dashboard starts the sign-in');
+  const graphStub = (await mf.getDurableObjectNamespace('TENANTS')).get((await mf.getDurableObjectNamespace('TENANTS')).idFromName('excel-graph'));
+  const started = await graphStub.onedriveStart('excel-graph', 'http://local.test/onedrive/callback');
+  const signin = new URL(started.body.url);
+  assert.equal(signin.origin + signin.pathname, 'https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize');
+  assert.equal(signin.searchParams.get('scope'), 'Files.Read offline_access');
+  assert.equal(signin.searchParams.get('code_challenge_method'), 'S256');
+  const state = signin.searchParams.get('state');
+  assert.match(state, /^excel-graph~[a-f0-9]{48}$/);
+  const finish = query => mf.dispatchFetch('http://local.test/onedrive/callback?' + new URLSearchParams(query));
+  assert.equal((await finish({state: 'other~' + 'a'.repeat(48), code: 'test-code'})).status, 400);
+  assert.equal((await finish({state, error: 'access_denied'})).status, 400);
+  const connected = await finish({state, code: 'test-code'});
+  assert.equal(connected.status, 200);
+  assert.match(await connected.text(), /OneDrive je připojený/);
+  assert.equal((await finish({state, code: 'test-code'})).status, 400, 'a sign-in is finished once');
+  const fetchedGraph = await (await call('POST', '/admin/t/excel-graph/fetch', {date: '2026-10-09'})).json();
+  assert.equal(fetchedGraph.found, true, JSON.stringify(fetchedGraph.warnings));
+  assert.equal(microsoftRenewal, 'renew-2', 'the rotated renewal is kept');
+  assert.deepEqual((await (await call('GET', '/admin/t/excel-graph/report?date=2026-10-09')).json()).report.files, ['Denní report 9.10.2026.xlsx', 'Peněžní deník.xlsx']);
+  // Microsoft refuses the renewal: no access, the warning says to connect again.
+  microsoftRenewal = 'revoked';
+  const lost = await (await call('POST', '/admin/t/excel-graph/fetch', {date: '2026-10-10'})).json();
+  assert.match(lost.warnings[0], /přístup OKO1 vypršel \(Microsoft 400 invalid_grant\)/);
 
   // Dashboard: page with a strict CSP, login by SMS code to the owner, session cookie, day data, logout.
   await mf.dispose();

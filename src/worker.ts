@@ -12,6 +12,7 @@ import {addDays, businessDate, isDate, localTime, sameClockDaysBefore, weekday} 
 import {JOURNAL_LABEL, validateDailyReport, type DailyReport} from './daily-report.ts';
 import {analyseNotes, type NotesAnalysis} from './notes.ts';
 import {fetchDayFiles, reportFromFiles} from './onedrive.ts';
+import {authorizeUrl, pkce, redeem, renew} from './microsoft.ts';
 import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
 import {counted, drinkMargins, duplicateInvoices, overdueInvoices, priceRises, supplyBrief, supplySummary} from './supplies.ts';
 import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
@@ -31,6 +32,8 @@ export type Env = DeliveryEnv & WebEnv & IuctoEnv & {
   ARCHIVE?: R2Bucket;
   /** OKO1's own Claude API key for "Report dne". Optional: without it the raw text goes into the briefing. */
   ANTHROPIC_API_KEY?: string;
+  /** OKO1's own Microsoft app (public client, read-only OneDrive). Optional: without it OneDrive is read only through the public API. */
+  ONEDRIVE_CLIENT_ID?: string;
 };
 type Result = {status: number; body: unknown};
 export type VenueSetup = {name: string; timeZone: string; businessDayCutoffHour: number; web: {url: string} | null; today: string; reportDay: string};
@@ -143,6 +146,10 @@ export class TenantObject extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS ingest_rejects(at TEXT NOT NULL, installation_id TEXT NOT NULL, code TEXT NOT NULL, types TEXT NOT NULL);
       -- Prices of comparable venues nearby from their public menus (one set, replaced by the deploy).
       CREATE TABLE IF NOT EXISTS competitor_prices(id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL, received_at TEXT NOT NULL);
+      -- OKO1's read-only Microsoft access for OneDrive: the renewal (rotated on each use) and the last error; the
+      -- sign-ins in progress (PKCE verifier, at most 10 minutes).
+      CREATE TABLE IF NOT EXISTS onedrive_access(id INTEGER PRIMARY KEY CHECK(id=1), refresh_token TEXT, connected_at TEXT NOT NULL, error TEXT);
+      CREATE TABLE IF NOT EXISTS onedrive_signins(state TEXT PRIMARY KEY, verifier TEXT NOT NULL, created_at INTEGER NOT NULL);
     `));
     // Wrong codes for unknown venues are counted per venue name in the shared stand-in (see `loginStub`).
     if (!this.sql.exec<{name: string}>('PRAGMA table_info(login_failures)').toArray().some(column => column.name === 'scope')) {
@@ -575,13 +582,53 @@ export class TenantObject extends DurableObject<Env> {
     return {businessDate: report.businessDate, lines: report.lines.length, notes: !!report.notes, warnings: report.warnings};
   }
 
+  /**
+   * Step 1 of connecting OneDrive (from a logged-in dashboard): where to send the browser to sign in at Microsoft.
+   * The state names the venue, so that the callback finds it without a cookie (Microsoft's redirect is cross-site).
+   */
+  async onedriveStart(tenant: string, redirectUri: string): Promise<Result> {
+    const clientId = this.env.ONEDRIVE_CLIENT_ID;
+    if (!clientId) return failure('ONEDRIVE_NOT_CONFIGURED', 503);
+    if (!this.config()?.reportsLink) return failure('NO_REPORTS_LINK', 409);
+    const now = Date.now(), state = `${tenant}~${randomHex(24)}`, {verifier, challenge} = await pkce();
+    this.sql.exec('DELETE FROM onedrive_signins WHERE created_at < ?', now - 10 * 60000);
+    this.sql.exec('INSERT INTO onedrive_signins VALUES(?,?,?)', sha256(state), verifier, now);
+    return ok({url: authorizeUrl(clientId, redirectUri, state, challenge)});
+  }
+
+  /** Step 2: Microsoft's code for the access, once per sign-in and within 10 minutes. */
+  async onedriveFinish(state: string, code: string, redirectUri: string): Promise<Result> {
+    const clientId = this.env.ONEDRIVE_CLIENT_ID;
+    const row = this.sql.exec<{verifier: string; created_at: number}>('SELECT verifier, created_at FROM onedrive_signins WHERE state=?', sha256(state)).toArray()[0];
+    this.sql.exec('DELETE FROM onedrive_signins WHERE state=?', sha256(state));
+    if (!clientId || !row || row.created_at < Date.now() - 10 * 60000) return failure('SIGNIN_EXPIRED', 400);
+    const result = await redeem(clientId, redirectUri, code, row.verifier);
+    if (!result.ok) return failure(result.error, 502);
+    this.sql.exec('INSERT OR REPLACE INTO onedrive_access VALUES(1, ?, ?, NULL)', result.tokens.refreshToken, new Date().toISOString());
+    return ok({connected: true});
+  }
+
+  /** A fresh Microsoft access for this fetch, or null (not connected, not configured, or Microsoft refused: kept as the error). */
+  private async onedriveToken(): Promise<string | null> {
+    const clientId = this.env.ONEDRIVE_CLIENT_ID;
+    const row = this.sql.exec<{refresh_token: string | null}>('SELECT refresh_token FROM onedrive_access WHERE id=1').toArray()[0];
+    if (!clientId || !row?.refresh_token) return null;
+    const result = await renew(clientId, row.refresh_token);
+    if (!result.ok) { this.sql.exec('UPDATE onedrive_access SET error=? WHERE id=1', result.error); return null; }
+    this.sql.exec('UPDATE onedrive_access SET refresh_token=?, error=NULL WHERE id=1', result.tokens.refreshToken);
+    return result.tokens.accessToken;
+  }
+
   /** Reads the day's Excel files from the shared OneDrive folder, archives them and stores the report. */
   private async fetchReport(tenant: string, date: string) {
     const link = this.config()?.reportsLink;
     if (!link) return {found: false, warnings: ['OneDrive: odkaz na složku není nastavený.']};
     let found = false, warnings: string[];
     try {
-      const fetched = await fetchDayFiles(link, date);
+      const access = await this.onedriveToken();
+      const fetched = await fetchDayFiles(link, date, access);
+      const lost = this.sql.exec<{error: string | null}>('SELECT error FROM onedrive_access WHERE id=1').toArray()[0]?.error;
+      if (!access && lost) fetched.warnings.unshift(`OneDrive: přístup OKO1 vypršel (${lost}), na přehledu stačí znovu kliknout na „Připojit OneDrive“.`);
       for (const file of fetched.files) this.archive(`t/${tenant}/onedrive/${date}/${file.name}`, file.bytes);
       const report = await reportFromFiles(fetched.files, date, fetched.warnings);
       if (report) { this.saveReport(report); found = true; }
@@ -1615,6 +1662,13 @@ export class TenantObject extends DurableObject<Env> {
   }
 
   /** Dashboard: every kind of sender and type of data with the time it last arrived, plus the last report and cost fetches. No content. */
+  /** The dashboard's "Připojit OneDrive": shown when the folder is set, OKO1 has its Microsoft app and no working access. */
+  private onedriveStatus(config: TenantConfig) {
+    if (!config.reportsLink) return null;
+    const row = this.sql.exec<{connected_at: string; error: string | null}>('SELECT connected_at, error FROM onedrive_access WHERE id=1').toArray()[0];
+    return {canConnect: !!this.env.ONEDRIVE_CLIENT_ID, connected: !!row && !row.error, since: row ? stamp(new Date(row.connected_at), config.timeZone) : null, error: row?.error ?? null};
+  }
+
   private sources(config: TenantConfig) {
     const at = (value: string | null) => value ? stamp(new Date(value), config.timeZone) : null;
     const names: Record<string, string> = {bill: 'Účty z pokladny', cash_closing: 'Uzávěrky pokladen', bottle_check: 'Kontrola lahví', reservation: 'Rezervace', web_traffic: 'Návštěvnost webu', review_summary: 'Recenze', event: 'Akce podniku', menu: 'Jídelní a nápojový lístek', supplier_invoice: 'Faktury dodavatelů'};
@@ -1626,6 +1680,7 @@ export class TenantObject extends DurableObject<Env> {
         .map(row => ({name: names[row.type] ?? row.type, lastReceived: at(row.last)})),
       report: report ? {at: at(report.at), found: report.found === 1} : null,
       costs: cost ? {at: at(cost.at), ok: !cost.error} : null,
+      onedrive: this.onedriveStatus(config),
     };
   }
 
@@ -1821,6 +1876,13 @@ async function dashboard(request: Request, env: Env, tenant: string, action: str
     if (!known || !await stub.validSession(cookie(request))) return json(failure('UNAUTHORIZED', 401));
     return json(ok({card: await webCard(env, tenant, stub)}));
   }
+  // "Připojit OneDrive": a same-site click from the logged-in dashboard sends the browser to Microsoft's sign-in.
+  if (action === 'onedrive' && request.method === 'GET') {
+    if (!known || !await stub.validSession(cookie(request))) return Response.redirect(new URL(path, request.url).toString(), 303);
+    const start = await stub.onedriveStart(tenant, new URL(ONEDRIVE_CALLBACK, request.url).toString()) as Result;
+    if (start.status !== 200) return onedrivePage(tenant, 'OneDrive teď připojit nejde (' + String((start.body as {error?: string}).error) + ').');
+    return new Response(null, {status: 303, headers: {location: (start.body as {url: string}).url, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer'}});
+  }
   // One menu item over half a year: price and sales by week (the search in the menu card).
   if (action === 'item' && request.method === 'GET') {
     if (!known || !await stub.validSession(cookie(request))) return json(failure('UNAUTHORIZED', 401));
@@ -1894,9 +1956,33 @@ export default {
   },
 };
 
+const ONEDRIVE_CALLBACK = '/onedrive/callback';
+
+/** The short page after the Microsoft sign-in, with the way back to the dashboard. */
+function onedrivePage(tenant: string | null, message: string, status = 200): Response {
+  const esc = (text: string) => text.replace(/[&<>"]/g, char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[char]!);
+  const back = tenant ? `<p><a href="/d/${esc(tenant)}">Zpět na přehled</a></p>` : '';
+  return new Response(`<!doctype html><html lang="cs"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OKO1 – OneDrive</title>` +
+    `<body style="font:16px/1.5 system-ui,sans-serif;max-width:440px;margin:8vh auto;padding:16px"><h1 style="font-size:20px">OKO1 – OneDrive</h1><p>${esc(message)}</p>${back}</body></html>`,
+  {status, headers: {'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer',
+    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"}});
+}
+
+/** Microsoft's redirect after the sign-in: the state names the venue and the sign-in it belongs to. */
+async function onedriveCallback(request: Request, env: Env): Promise<Response> {
+  const params = new URL(request.url).searchParams, state = params.get('state') ?? '', code = params.get('code');
+  const tenant = state.match(/^([a-z0-9-]{3,64})~[a-f0-9]{48}$/)?.[1] ?? null;
+  if (!tenant || !await registry(env).has(tenant)) return onedrivePage(null, 'Odkaz pro připojení neplatí.', 400);
+  if (!code) return onedrivePage(tenant, 'Připojení se nedokončilo: ve vašem účtu Microsoft nebyl přístup povolen. Zkuste to na přehledu znovu.', 400);
+  const result = await tenantStub(env, tenant).onedriveFinish(state, code.slice(0, 2000), new URL(ONEDRIVE_CALLBACK, request.url).toString()) as Result;
+  if (result.status !== 200) return onedrivePage(tenant, `Připojení se nepovedlo (${String((result.body as {error?: string}).error)}). Zkuste to na přehledu znovu.`, 400);
+  return onedrivePage(tenant, 'OneDrive je připojený. OKO1 si odteď bude reporty manažerů ze složky brát každé ráno samo.');
+}
+
 /** Everything but the MCP server: ingest, admin API and the dashboard. */
 async function app(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
+  if (url.pathname === ONEDRIVE_CALLBACK && request.method === 'GET') return onedriveCallback(request, env);
   const board = url.pathname.match(/^\/d\/([a-z0-9-]{3,64})(?:\/([a-z]+))?$/);
   if (board) return dashboard(request, env, board[1], board[2]);
   const match = url.pathname.match(/^\/(v1|admin)\/t\/([a-z0-9-]{3,64})\/([a-z]+)$/);

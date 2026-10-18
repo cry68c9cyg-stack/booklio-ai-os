@@ -231,6 +231,16 @@ jobs:
           k=$(printf '%s' "$KEY" | tr -d '[:space:]')
           if [ -z "$k" ]; then echo "ANTHROPIC_API_KEY není vyplněný, Report dne půjde do zprávy jako text."; exit 0; fi
           printf '%s' "$k" | npx wrangler secret put ANTHROPIC_API_KEY --env production
+      - name: Aplikace OKO1 u Microsoftu pro čtení OneDrive (ONEDRIVE_CLIENT_ID), jen když je vyplněná
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          KEY: ${{ secrets.ONEDRIVE_CLIENT_ID }}
+        run: |
+          k=$(printf '%s' "$KEY" | tr -d '[:space:]')
+          if [ -z "$k" ]; then echo "ONEDRIVE_CLIENT_ID není vyplněný, OneDrive jde číst jen bez přihlášení."; exit 0; fi
+          if ! printf '%s' "$k" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then echo "::warning::ONEDRIVE_CLIENT_ID není ID aplikace (GUID)."; exit 0; fi
+          printf '%s' "$k" | npx wrangler secret put ONEDRIVE_CLIENT_ID --env production
+          echo "Aplikace OKO1 pro OneDrive nastavená."
       - name: Klíč iÚčta pro náklady (IUCTO_API_KEY, v OKO1 jako IUCTO_KEY_JAMES_DEAN), jen když je vyplněný
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

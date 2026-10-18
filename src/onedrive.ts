@@ -1,20 +1,26 @@
 /**
  * Reads the managers' Excel files from a OneDrive folder shared with a read-only link ("anyone with the link can view").
- * No Microsoft account or app for OKO1: the share link is the only credential, and it can only read.
+ * Personal OneDrive no longer opens new share links (1drv.ms/f/c/…) without a sign-in: with OKO1's own read-only
+ * Microsoft access (src/microsoft.ts) the folder is opened through Microsoft Graph, otherwise through the public API.
  */
 import {extractCashBook, extractDailyReport, isJournalBook, JOURNAL_LABEL, type DailyReport} from './daily-report.ts';
 import {readXlsx} from './xlsx.ts';
 
 export type FetchedFile = {name: string; bytes: Uint8Array};
-type Item = {name?: string; size?: number; folder?: unknown; file?: unknown; lastModifiedDateTime?: string; '@content.downloadUrl'?: string; children?: Item[]; id?: string};
+type Item = {name?: string; size?: number; folder?: unknown; file?: unknown; lastModifiedDateTime?: string; '@content.downloadUrl'?: string;
+  '@microsoft.graph.downloadUrl'?: string; children?: Item[]; id?: string; parentReference?: {driveId?: string}};
+/** Where the folder's items are listed: the public API (by share), or Graph with OKO1's access (by drive). */
+type Api = {headers: Record<string, string>; childrenUrl: (folder: Item) => string | null};
+const downloadUrl = (item: Item) => item['@content.downloadUrl'] ?? item['@microsoft.graph.downloadUrl'];
 
 const ONEDRIVE_API = 'https://api.onedrive.com/v1.0';
+const GRAPH_API = 'https://graph.microsoft.com/v1.0';
 const MAX_FILE = 10 * 1024 * 1024;
 const MAX_FOLDERS = 6;
 const MAX_PAGES = 10;
 const TIMEOUT_MS = 15000;
 /** Microsoft hosts that serve shared OneDrive / SharePoint files. Nothing else is ever fetched. */
-const ALLOWED_HOSTS = /(^|\.)(1drv\.ms|1drv\.com|onedrive\.com|onedrive\.live\.com|live\.net|sharepoint\.com)$/;
+const ALLOWED_HOSTS = /(^|\.)(1drv\.ms|1drv\.com|onedrive\.com|onedrive\.live\.com|live\.net|sharepoint\.com|graph\.microsoft\.com|microsoftpersonalcontent\.com)$/;
 
 export function allowedUrl(value: string): boolean {
   try { const url = new URL(value); return url.protocol === 'https:' && ALLOWED_HOSTS.test(url.hostname); } catch { return false; }
@@ -39,9 +45,9 @@ export function pickFiles(names: string[], businessDate: string): {report: strin
   };
 }
 
-async function getJson<T = Item>(url: string): Promise<T | null> {
+async function getJson<T = Item>(url: string, headers: Record<string, string> = {}): Promise<T | null> {
   if (!allowedUrl(url)) return null;
-  const response = await fetch(url, {headers: {accept: 'application/json'}, signal: AbortSignal.timeout(TIMEOUT_MS)}).catch(() => null);
+  const response = await fetch(url, {headers: {accept: 'application/json', ...headers}, signal: AbortSignal.timeout(TIMEOUT_MS)}).catch(() => null);
   return response?.ok ? await response.json().catch(() => null) as T | null : null;
 }
 
@@ -76,13 +82,13 @@ async function download(start: string): Promise<Uint8Array | null> {
 }
 
 /** All children of a folder, following paging. */
-async function children(id: string, folder: Item): Promise<Item[]> {
+async function children(api: Api, folder: Item): Promise<Item[]> {
   if (folder.children && !(folder as {'children@odata.nextLink'?: string})['children@odata.nextLink']) return folder.children;
-  if (!folder.id) return folder.children ?? [];
+  let next: string | undefined = api.childrenUrl(folder) ?? undefined;
+  if (!next) return folder.children ?? [];
   const result: Item[] = [];
-  let next: string | undefined = `${ONEDRIVE_API}/shares/${id}/items/${encodeURIComponent(folder.id)}/children?$top=200`;
   for (let page = 0; next && page < MAX_PAGES; page++) {
-    const body: {value?: Item[]; '@odata.nextLink'?: string} | null = await getJson(next);
+    const body: {value?: Item[]; '@odata.nextLink'?: string} | null = await getJson(next, api.headers);
     if (!body) break;
     result.push(...(body.value ?? []));
     next = body['@odata.nextLink'];
@@ -92,26 +98,40 @@ async function children(id: string, folder: Item): Promise<Item[]> {
 
 /**
  * Lists the shared folder (and up to a few subfolders, newest first, for a folder per month) and downloads the
- * workbooks of the business day. A link to a single workbook is downloaded as it is.
+ * workbooks of the business day. A link to a single workbook is downloaded as it is. `accessToken` = OKO1's Microsoft
+ * access (Graph); without it the public API is tried.
  */
-export async function fetchDayFiles(link: string, businessDate: string): Promise<{files: FetchedFile[]; warnings: string[]}> {
+export async function fetchDayFiles(link: string, businessDate: string, accessToken: string | null = null): Promise<{files: FetchedFile[]; warnings: string[]}> {
   const id = shareId(link);
+  if (accessToken) {
+    const headers = {authorization: `Bearer ${accessToken}`};
+    const api: Api = {headers, childrenUrl: folder => folder.id && folder.parentReference?.driveId
+      ? `${GRAPH_API}/drives/${encodeURIComponent(folder.parentReference.driveId)}/items/${encodeURIComponent(folder.id)}/children?$top=200` : null};
+    const root = await getJson(`${GRAPH_API}/shares/${id}/driveItem?$expand=children`, headers);
+    return root ? dayFiles(api, root, businessDate) : {files: [], warnings: ['OneDrive: složka se ani s přístupem OKO1 neotevřela (odkaz neplatí nebo ho vlastník zrušil).']};
+  }
+  const api: Api = {headers: {}, childrenUrl: folder => folder.id ? `${ONEDRIVE_API}/shares/${id}/items/${encodeURIComponent(folder.id)}/children?$top=200` : null};
   const root = await getJson(`${ONEDRIVE_API}/shares/${id}/root?expand=children`);
   if (!root) {
     if (!allowedUrl(link.trim())) return {files: [], warnings: ['OneDrive: odkaz nevede na OneDrive.']};
     const separator = link.includes('?') ? '&' : '?';
     const single = await download(link.trim() + separator + 'download=1');
-    return single ? {files: [{name: 'sdileny-soubor.xlsx', bytes: single}], warnings: []} : {files: [], warnings: ['OneDrive: sdílený odkaz nejde otevřít bez přihlášení.']};
+    return single ? {files: [{name: 'sdileny-soubor.xlsx', bytes: single}], warnings: []} : {files: [], warnings: ['OneDrive: sdílený odkaz nejde otevřít bez přihlášení. Na přehledu OKO1 v kartě Zdroje dat stačí jednou kliknout na „Připojit OneDrive“.']};
   }
+  return dayFiles(api, root, businessDate);
+}
+
+async function dayFiles(api: Api, root: Item, businessDate: string): Promise<{files: FetchedFile[]; warnings: string[]}> {
   if (root.file) {
-    const bytes = root['@content.downloadUrl'] ? await download(root['@content.downloadUrl']) : null;
+    const url = downloadUrl(root);
+    const bytes = url ? await download(url) : null;
     return bytes ? {files: [{name: root.name ?? 'soubor.xlsx', bytes}], warnings: []} : {files: [], warnings: ['OneDrive: soubor nejde stáhnout.']};
   }
   const files = new Map<string, Item>();
   const queue: Item[] = [root];
   for (let visited = 0; queue.length && visited < MAX_FOLDERS; visited++) {
     const folder = queue.shift()!;
-    const items = await children(id, folder);
+    const items = await children(api, folder);
     for (const child of items) if (child.file && child.name && !files.has(child.name)) files.set(child.name, child);
     const picked = pickFiles([...files.keys()], businessDate);
     if (picked.report && picked.books.length) break;
@@ -124,7 +144,8 @@ export async function fetchDayFiles(link: string, businessDate: string): Promise
   for (const name of [picked.report, ...books]) {
     if (!name) continue;
     const item = files.get(name)!;
-    const bytes = (item.size ?? 0) <= MAX_FILE && item['@content.downloadUrl'] ? await download(item['@content.downloadUrl']) : null;
+    const url = downloadUrl(item);
+    const bytes = (item.size ?? 0) <= MAX_FILE && url ? await download(url) : null;
     if (bytes) result.push({name, bytes}); else warnings.push(`OneDrive: soubor ${name} nejde stáhnout.`);
   }
   if (!picked.report) warnings.push('OneDrive: denní report za tento den ve složce není.');
