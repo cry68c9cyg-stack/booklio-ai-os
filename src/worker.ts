@@ -3,6 +3,7 @@ import {OAuthProvider, type OAuthHelpers} from '@cloudflare/workers-oauth-provid
 import {createHash, randomInt, timingSafeEqual} from 'node:crypto';
 import {cashDay, cashNeed, nightSummary, payoutAlarm, tillDay, type NightSummary, type Till} from './cash.ts';
 import {tableChecks} from './checks.ts';
+import {cashFlowDay, cashForecast, cashShare, type CashFlowDay} from './cashflow.ts';
 import {cashDiffRepeat, sumVoids, voidAndDiff, voidDay, voidPastDates, type VoidDay} from './voids.ts';
 import {promoDay, promoStreaks, sumPromo, type PromoDay} from './promo.ts';
 import {nightShare, staffGaps, sumWages, wageDay, type WageDay} from './wages.ts';
@@ -418,7 +419,7 @@ export class TenantObject extends DurableObject<Env> {
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
       week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day, briefing.forecast?.month.month === day.slice(0, 7) ? briefing.forecast.month.restCents : null), mail: this.mailCardData(),
       themes: briefing.themes ?? this.themeSummary(day), djRanking: briefing.djRanking ?? this.djRanking(day), nights: this.nightsFor(addDays(day, -27), day),
-      incidents: this.incidentsBetween(addDays(day, -89), day).reverse(), wages: this.posWages(addDays(day, -29), day), promo: this.posPromo(addDays(day, -29), day), voids: this.posVoids(addDays(day, -29), day), foreignWeek: briefing.foreignWeek ?? foreignWeek(day, Array.from({length: 15}, (_, i) => this.foreignCash(addDays(day, i - 14))))});
+      incidents: this.incidentsBetween(addDays(day, -89), day).reverse(), wages: this.posWages(addDays(day, -29), day), promo: this.posPromo(addDays(day, -29), day), voids: this.posVoids(addDays(day, -29), day), cashFlow: this.posCashFlow(addDays(day, -29), day), foreignWeek: briefing.foreignWeek ?? foreignWeek(day, Array.from({length: 15}, (_, i) => this.foreignCash(addDays(day, i - 14))))});
   }
 
   /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
@@ -1953,6 +1954,20 @@ export class TenantObject extends DurableObject<Env> {
     return days;
   }
 
+  /** The till of each day of a stretch: cash from the sales, wages and expenses, the cash and safe counted (src/cashflow.ts). */
+  private cashFlowDays(from: string, to: string): (CashFlowDay | null)[] {
+    const days: (CashFlowDay | null)[] = [];
+    for (let entry = from; entry <= to; entry = addDays(entry, 1)) days.push(cashFlowDay(this.report(entry)));
+    return days;
+  }
+
+  /** MCP: the till by day over a stretch, the cash part of the revenue, and the 7 days after its last day. */
+  posCashFlow(from: string, to: string) {
+    if (!this.config()) return null;
+    const days = this.cashFlowDays(from, to);
+    return {from, to, cashShare: cashShare(days), days: days.filter(day => day !== null), forecast: cashForecast(to, this.cashFlowDays(addDays(to, -27), to))};
+  }
+
   /** MCP: voids and cash differences over a stretch, by day, with the checks of its last day. */
   posVoids(from: string, to: string) {
     if (!this.config()) return null;
@@ -2080,6 +2095,8 @@ export class TenantObject extends DurableObject<Env> {
       foreignWeek: weekday(date) === 0 ? foreignWeek(date, Array.from({length: 15}, (_, i) => this.foreignCash(addDays(date, i - 14)))) : null,
       cashNeed: this.cashNeedFor(date), payoutAlarm: this.payoutAlarmFor(date), till: this.tillFor(date), wageDay: wageDay(this.report(date)), nightShare: this.nightShareFor(date), staffGaps: this.staffGapsFor(date), promoStreaks: promoStreaks(this.promoDays(addDays(date, -30), date), date),
       cashDiffRepeat: cashDiffRepeat(this.voidDays(addDays(date, -6), date)), voidAndDiff: voidAndDiff(voidDay(this.report(date)), voidPastDates(date).map(entry => voidDay(this.report(entry)))),
+      cashForecast: cashForecast(date, this.cashFlowDays(addDays(date, -27), date)),
+      cashShare: weekday(date) === 0 ? {week: cashShare(this.cashFlowDays(addDays(date, -6), date)), before: cashShare(this.cashFlowDays(addDays(date, -34), addDays(date, -7)))} : null,
       voidWeek: weekday(date) === 0 ? {week: sumVoids(this.voidDays(addDays(date, -6), date)), before: sumVoids(this.voidDays(addDays(date, -34), addDays(date, -7)))} : null,
       promoWeek: weekday(date) === 0 ? {week: sumPromo(this.promoDays(addDays(date, -6), date)), before: sumPromo(this.promoDays(addDays(date, -34), addDays(date, -7)))} : null,
       nights: weekday(date) === 0 ? this.nightsFor(addDays(date, -27), date) : null,
