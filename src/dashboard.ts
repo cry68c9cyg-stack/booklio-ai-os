@@ -469,6 +469,7 @@ function suppliesCard(s) {
     s.payments.rows.map(o => '<li>' + esc(short(o.dueDate)) + ' ' + esc(o.supplier) + (o.number ? ' č. ' + esc(o.number) : '') + ': ' + kc(o.grossCents) + (o.source === 'posta' ? ' <span class="muted">(z pošty, zaplacení OKO1 nevidí)</span>' : '') + '</li>').join('') + '</ul>';
   if (s.outlook) h += '<div>Výhled nákupů do konce měsíce: <b>' + kc(s.outlook.estimateCents) + '</b> bez DPH <span class="muted">(zatím ' + kc(s.outlook.purchasesCents) + ', podle odhadu tržeb ' + kc(s.outlook.restRevenueCents) + ' na zbytek měsíce' +
     (s.outlook.dueRest ? '; zaplatit ještě ' + s.outlook.dueRest + '× za ' + kc(s.outlook.dueRestCents) : '') + ')</span></div>';
+  if (s.missing && s.missing.length) h += '<div class="warn">Nepřišla obvyklá faktura: ' + s.missing.map(x => esc(x.supplier) + ' (chodí do ' + x.usualDay + '. dne, naposledy ' + esc(czDate(x.lastDate)) + ' ' + kc(x.lastGrossCents) + ')').join(' · ') + '</div>';
   if (s.newFromMail && s.newFromMail.length) h += '<div class="warn">Faktura z pošty od nového dodavatele, ověřit před zaplacením: ' + s.newFromMail.map(n => esc(n.supplier) + (n.supplierId ? ' (IČO ' + esc(n.supplierId) + ')' : '') +
     (n.number ? ' č. ' + esc(n.number) : '') + ' ' + kc(n.grossCents) + (n.sender ? ', poslal ' + esc(n.sender) : '')).join(' · ') + '</div>';
   const thisMonth = m.to.slice(0, 7), prevMonth = new Date(Date.parse(m.to.slice(0, 8) + '01T12:00:00Z') - 86400000).toISOString().slice(0, 7);
@@ -500,6 +501,9 @@ function mailCard(m) {
   h += '<h3>Čeká na odpověď přes 24 h</h3>' + (m.waiting.length ? '<ul>' + m.waiting.map(w => '<li' + (w.complaint ? ' class="warn"' : '') + '>' + esc(when(w.at)) + ' <b>' + esc(w.fromName || w.from) + '</b>: ' + esc(w.subject || 'bez předmětu') +
     ' <span class="muted">(' + ago(w.hours) + (w.summary ? ' · ' + esc(w.summary) : '') + ')</span>' +
     (w.draft ? '<details><summary>Návrh odpovědi</summary><div style="white-space:pre-wrap">' + esc(w.draft) + '</div></details>' : '') + '</li>').join('') + '</ul>' : '<span class="muted">nic nečeká</span>');
+  if (m.repeated && m.repeated.length) h += '<ul>' + m.repeated.map(r => '<li class="warn">Stížnosti na ' + esc(r.name) + ' se opakují: ' + r.count + '× za 14 dní · ' + esc(r.action) + '</li>').join('') + '</ul>';
+  if (m.people && m.people.length) h += '<h3>Odpovědi podle lidí</h3><table>' + m.people.map(p => '<tr><td>' + esc(p.name) + '</td><td class="n">' + p.replies + '×</td><td class="n">' +
+    (p.medianReplyHours !== null ? 'za ' + num(p.medianReplyHours) + ' h' : '–') + '</td><td class="n">' + (p.qualityTenths !== null ? num(p.qualityTenths / 10) + '/5' : '–') + '</td></tr>').join('') + '</table>';
   if (m.causes && m.causes.length) h += '<h3>Stížnosti podle příčin</h3><table>' + m.causes.map(c => '<tr><td>' + esc(c.name) + '</td><td class="n">' + c.count + '</td><td class="muted">' + esc(c.action || '') + '</td></tr>').join('') + '</table>';
   if (m.topics.length) h += '<h3>Témata</h3><table>' + m.topics.map(t => '<tr><td>' + esc(t.name) + '</td><td class="n">' + t.count + '</td><td class="n muted">předtím ' + t.previous + '</td></tr>').join('') + '</table>';
   if (m.complaints.length) h += '<h3>Stížnosti</h3><ul>' + m.complaints.map(c => '<li>' + esc(when(c.at)) + ' <b>' + esc(c.fromName || c.from) + '</b>: ' + esc(c.summary || c.subject) + ' <span class="' + (c.answeredHours === null ? 'warn' : 'muted') + '">(' +
@@ -524,6 +528,7 @@ function sourcesCard(s) {
   if (s.costs) rows.push('<tr><td>Náklady (iÚčto)</td><td class="n">' + esc(s.costs.at) + (s.costs.ok ? '' : ' · <span class="warn">chyba</span>') + '</td></tr>');
   if (s.mail) rows.push('<tr><td>Faktury z pošty info@</td><td class="n">' + esc(s.mail.at) + (s.mail.error ? ' · <span class="warn">' + esc(s.mail.error) + '</span>' : '') +
     (s.mail.readingHistory ? ' · načítám starší poštu' : '') + ' · ' + s.mail.invoices + ' dokladů' + (s.mail.unreadable ? ', <span class="warn">' + s.mail.unreadable + ' nečitelných</span>' : '') + '</td></tr>');
+  if (s.paymentMail) rows.push('<tr><td>Faktury k platbě e-mailem</td><td class="n">' + esc(czDate(s.paymentMail.payDay)) + ' · ' + (s.paymentMail.sent ? 'odesláno ' + esc(s.paymentMail.at) + ' (' + s.paymentMail.invoices + ' faktur, ' + kc(s.paymentMail.totalCents) + ')' : '<span class="warn">' + esc(s.paymentMail.error || 'neodesláno') + '</span>') + '</td></tr>');
   return '<div class="card"><h2>Zdroje dat</h2>' + (rows.length ? '<table>' + rows.join('') + '</table>' : '<span class="muted">zatím žádný zdroj neposlal data</span>') + '</div>';
 }
 

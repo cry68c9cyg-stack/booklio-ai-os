@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {amountConflicts, costOutlook, monthClosing, nextPaymentBatch, paymentBatch, renderSupplies, supplyBrief, supplySummary} from '../src/supplies.ts';
+import {amountConflicts, costOutlook, missingInvoices, missingText, monthClosing, nextPaymentBatch, paymentBatch, paymentMail, renderSupplies, supplyBrief, supplySummary} from '../src/supplies.ts';
+import {dotStuffed, encodedWord, mailMessage, SmtpReader, validAddress} from '../src/smtp.ts';
 import {todoList} from '../src/todo.ts';
 import {buildBriefing} from '../src/briefing.ts';
 import type {SupplierInvoice, TenantConfig} from '../src/validate.ts';
@@ -83,4 +84,59 @@ test('the export ZIP is read back with its file names and contents', async () =>
   const files = await unzip(bytes);
   assert.deepEqual([...files.keys()], ['faktury-2026-10.csv', 'doklady/2026-10-01_Zelenina_č.pdf']);
   assert.deepEqual([...files.get('doklady/2026-10-01_Zelenina_č.pdf')!], [37, 80, 68, 70]);
+});
+
+test('the payment list for the office: exact amounts, a note on mail invoices, a CSV for Excel', () => {
+  const batch = paymentBatch([invoice('a', {dueDate: '2026-10-21', grossCents: 123450, number: 'F-1'}), invoice('b', {dueDate: '2026-10-19', grossCents: 30000, source: 'posta', supplier: 'Led; Test'})], '2026-10-19')!;
+  const mail = paymentMail(batch, 'Test Diner', ['posta']);
+  assert.equal(mail.subject, 'Faktury k platbě úterý 20. 10.: 2× 1 535 Kč');
+  assert.match(mail.text, /19\. 10\.  Led; Test, č\. b  300,00 Kč  \(z pošty\)/);
+  assert.match(mail.text, /21\. 10\.  Zelenina Test, č\. F-1  1 234,50 Kč/);
+  assert.match(mail.text, /zaplacené prosím přeskočte/);
+  const csv = new TextDecoder('utf-8', {fatal: false, ignoreBOM: true}).decode(mail.csv);
+  assert.ok(csv.startsWith('\ufeffSplatnost;Dodavatel;'));
+  assert.match(csv, /2026-10-19;"Led; Test";b;300,00;pošta\r\n/);
+  assert.doesNotMatch(paymentMail(paymentBatch([invoice('a', {dueDate: '2026-10-21'})], '2026-10-19')!, 'Test Diner', ['posta']).text, /přeskočte/);
+});
+
+test('an e-mail for SMTP: encoded subject, attachment, dot-stuffing, replies over several lines', async () => {
+  assert.ok(validAddress('ucetni@example.cz'));
+  assert.ok(!validAddress('ucetni@example') && !validAddress('a b@example.cz') && !validAddress('x@example.cz>\r\nRCPT'));
+  assert.equal(encodedWord('Plain'), 'Plain');
+  assert.ok(encodedWord('Faktury k platbě úterý 20. 10.: 2× 1 535 Kč').split('\r\n ').every(word => word.length <= 75 && word.startsWith('=?UTF-8?B?')));
+  const message = mailMessage({from: {name: 'OKO1 – Test', address: 'info@example.cz'}, to: ['ucetni@example.cz'], subject: 'Platby', text: 'Ahoj\n.tečka',
+    attachments: [{filename: 'platby.csv', contentType: 'text/csv; charset=utf-8', data: new TextEncoder().encode('a;b')}]}, new Date('2026-10-20T05:00:00Z'), 'x1');
+  assert.match(message, /^From: =\?UTF-8\?B\?.+\?= <info@example\.cz>\r\nTo: ucetni@example\.cz\r\nSubject: Platby\r\n/);
+  assert.match(message, /Auto-Submitted: auto-generated/);
+  assert.match(message, /filename="platby\.csv"/);
+  assert.ok(message.endsWith('--oko1-x1--\r\n'));
+  assert.equal(dotStuffed('a\r\n.b\r\n'), 'a\r\n..b\r\n.\r\n');
+  assert.throws(() => mailMessage({from: {name: 'x', address: 'info@example.cz'}, to: ['bad'], subject: 's', text: 't', attachments: []}, new Date(), 'x2'));
+  const chunks = ['250-smtp.example.cz\r\n250-AUTH PLAIN', ' LOGIN\r\n250 OK\r\n235 ok\r\n'].map(text => new TextEncoder().encode(text));
+  const reader = new SmtpReader(async () => chunks.shift() ?? null);
+  assert.equal(await reader.reply(), 250);
+  assert.equal(await reader.reply(), 235);
+  await assert.rejects(reader.reply());
+});
+
+test('a regular supplier whose invoice of the month has not come', () => {
+  const monthly = (id: string, supplier: string, dates: string[], extra: Partial<SupplierInvoice> = {}) => dates.map((date, n) => invoice(`${id}${n}`, {supplier, businessDate: date, ...extra}));
+  const invoices = [
+    ...monthly('m', 'Maso Test', ['2026-07-03', '2026-08-05', '2026-09-04'], {supplierId: '11111111', grossCents: 500000}),
+    ...monthly('z', 'Zelenina Test', ['2026-07-02', '2026-08-02', '2026-09-02', '2026-10-02']), // came this month
+    ...monthly('l', 'Led Test', ['2026-08-03', '2026-09-03']), // only two months: not regular yet
+    ...monthly('p', 'Papír Test', ['2026-07-20', '2026-08-22', '2026-09-21']), // later in the month: not late yet
+    invoice('c', {supplier: 'Nápoje Test', businessDate: '2026-07-01'}), invoice('c2', {supplier: 'Nápoje Test', businessDate: '2026-08-01'}),
+    invoice('c3', {supplier: 'Nápoje Test', businessDate: '2026-09-01', status: 'cancelled'}),
+  ];
+  assert.deepEqual(missingInvoices(invoices, '2026-10-10'), []); // 5. + 5 days of grace
+  const missing = missingInvoices(invoices, '2026-10-11');
+  assert.deepEqual(missing.map(row => [row.supplier, row.usualDay, row.since]), [['Maso Test', 5, '2026-10-11']]);
+  assert.equal(missingText(missing[0]), 'Maso Test (IČO 11111111): faktura za tento měsíc nepřišla, obvykle chodí do 5. dne, naposledy 4. 9. 5 000 Kč');
+  assert.deepEqual(missingInvoices(invoices, '2026-10-28').map(row => row.supplier), ['Maso Test', 'Papír Test']);
+  // The morning message says it on the first day and on Monday; the to-do list every day.
+  const brief = (date: string) => renderSupplies(supplyBrief(invoices, date, {revenueCents: 0, revenueDays: 0})).filter(line => line.includes('Nepřišla'));
+  assert.equal(brief('2026-10-11').length, 1);
+  assert.equal(brief('2026-10-13').length, 0);
+  assert.equal(brief('2026-10-18').length, 1); // Sunday: the Monday message
 });
