@@ -5,7 +5,7 @@ import {allowedWebUrl, pageQuery, parsePage, parseTableList, webOverview, webSit
 
 const config: TenantConfig = {
   name: 'Testovací podnik', timeZone: 'Europe/Prague', businessDayCutoffHour: 6, sendHours: [7, 8, 9],
-  registers: ['bar'], sections: {bar: 'Bar'}, recipients: [], bottleCheck: null, reportsLink: null, dashboardPhones: null, web: null, location: null, disabledSources: [],
+  registers: ['bar'], sections: {bar: 'Bar'}, recipients: [], bottleCheck: null, reportsLink: null, dashboardPhones: null, web: null, location: null, disabledSources: [], foodCostLimitPermille: null,
 };
 
 test('config: web is only the bare HTTPS origin of an allowed website, never a token', () => {

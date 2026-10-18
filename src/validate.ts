@@ -136,6 +136,8 @@ export type TenantConfig = {
   location: {lat: number; lon: number} | null;
   /** Senders (`source` of their records) switched off: their data stays stored but OKO1 leaves it out, e.g. `dishboard`. */
   disabledSources: string[];
+  /** Food cost limit in per mille of revenue with VAT; null = the default 30 %. Above it the morning message warns. */
+  foodCostLimitPermille: number | null;
 };
 /** Websites OKO1 may read (docs/web-v1.md). Nothing else is ever fetched with a web token. */
 export const WEB_HOSTS: readonly string[] = ['jamesdean.cz'];
@@ -479,7 +481,7 @@ export function validateCompetitorPrices(raw: unknown): CompetitorPrices {
 }
 
 export function validateConfig(raw: unknown): TenantConfig {
-  const value = object(raw, ['name', 'timeZone', 'businessDayCutoffHour', 'sendHours', 'registers', 'sections', 'recipients'], ['bottleCheck', 'reportsLink', 'dashboardPhones', 'web', 'location', 'disabledSources']);
+  const value = object(raw, ['name', 'timeZone', 'businessDayCutoffHour', 'sendHours', 'registers', 'sections', 'recipients'], ['bottleCheck', 'reportsLink', 'dashboardPhones', 'web', 'location', 'disabledSources', 'foodCostLimitPermille']);
   const timeZone = text(value.timeZone, 60);
   try { new Intl.DateTimeFormat('en', {timeZone}); } catch { fail(); }
   const sendHours = list(value.sendHours, 6, hour => int(hour, 0, 23));
@@ -497,6 +499,7 @@ export function validateConfig(raw: unknown): TenantConfig {
     web: value.web == null ? null : website(value.web),
     location: value.location == null ? null : coordinates(value.location),
     disabledSources: value.disabledSources == null ? [] : list(value.disabledSources, 20, id),
+    foodCostLimitPermille: value.foodCostLimitPermille == null ? null : int(value.foodCostLimitPermille, 50, 900),
   };
 }
 
