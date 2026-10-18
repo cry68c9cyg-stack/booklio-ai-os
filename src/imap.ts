@@ -83,6 +83,17 @@ export function imapDate(date: string): string {
   return `${day}-${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][month - 1]}-${year}`;
 }
 
+/** A folder name as people read it (IMAP sends names in modified UTF-7: "Ko&AWE-" is "Koš"). */
+export function folderLabel(name: string): string {
+  return name.replace(/&([^-]*)-/g, (_, code: string) => {
+    if (!code) return '&';
+    const binary = atob(code.replace(/,/g, '/') + '='.repeat((4 - code.length % 4) % 4));
+    let out = '';
+    for (let index = 0; index + 1 < binary.length; index += 2) out += String.fromCharCode(binary.charCodeAt(index) << 8 | binary.charCodeAt(index + 1));
+    return out;
+  });
+}
+
 /** Folder names from LIST responses, with the special use (\Sent, \Trash…) when the server tells it. */
 export function parseList(responses: ImapResponse[]): {name: string; flags: string[]}[] {
   const out: {name: string; flags: string[]}[] = [];
@@ -101,7 +112,7 @@ export function parseList(responses: ImapResponse[]): {name: string; flags: stri
 export function sentFolder(folders: {name: string; flags: string[]}[]): string | null {
   const marked = folders.find(folder => folder.flags.includes('\\sent'));
   if (marked) return marked.name;
-  const usual = folders.find(folder => /^(inbox[./])?(sent|sent items|sent messages|odeslan[aá]|odeslan[aá] po[sš]ta|odoslan[aá] po[sš]ta)$/i.test(folder.name));
+  const usual = folders.find(folder => /^(inbox[./])?(sent|sent items|sent messages|odeslan[aá]|odeslan[aá] po[sš]ta|odoslan[aá] po[sš]ta)$/i.test(folderLabel(folder.name)));
   return usual?.name ?? null;
 }
 
@@ -112,6 +123,8 @@ export type ImapSession = {
   since(date: string): Promise<number[]>;
   /** The whole message by UID, or null when it is gone or over the size limit. */
   message(uid: number): Promise<{bytes: Uint8Array; size: number} | null>;
+  /** The first `bytes` bytes of a message by UID (headers and the text, attachments cut off), or null when it is gone. */
+  head(uid: number, bytes: number): Promise<Uint8Array | null>;
   folders(): Promise<{name: string; flags: string[]}[]>;
   /** The MIME structure of each message (as text, file names included), to fetch only those with a document. */
   structures(uids: number[]): Promise<Map<number, string>>;
@@ -179,6 +192,10 @@ export async function withMailbox<T>(account: ImapAccount, work: (session: ImapS
         const responses = await command(`UID FETCH ${uid} (BODY.PEEK[])`);
         const bytes = responses.find(response => /FETCH/i.test(response.text) && response.literals.length)?.literals[0];
         return bytes ? {bytes, size} : null;
+      },
+      async head(uid, bytes) {
+        const responses = await command(`UID FETCH ${uid} (BODY.PEEK[]<0.${bytes}>)`);
+        return responses.find(response => /FETCH/i.test(response.text) && response.literals.length)?.literals[0] ?? null;
       },
       async folders() {
         return parseList(await command('LIST "" "*"'));

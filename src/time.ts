@@ -44,3 +44,10 @@ export function sameClockDaysBefore(at: Date, days: number, timeZone: string): n
   const guess = at.getTime() - days * 86400000;
   return guess + offset(at.getTime()) - offset(guess);
 }
+
+/** The instant (ISO) local midnight starts `date` in `timeZone`. */
+export function zonedMidnight(date: string, timeZone: string): string {
+  const noon = new Date(date + 'T12:00:00Z'), local = localTime(noon, timeZone);
+  const offsetMinutes = (local.date === date ? 0 : local.date > date ? 1440 : -1440) + local.hour * 60 + local.minute - 720;
+  return new Date(Date.parse(date + 'T00:00:00Z') - offsetMinutes * 60000).toISOString();
+}

@@ -278,6 +278,15 @@ Doplněno 18. 10. 2026 zpětně kompatibilně (rozhodnutí MC 18. 10. 2026: Dish
 - **Co nešlo přečíst** (doklad bez čitelného textu nebo s nesmyslnými součty): ranní zpráva (7 dní), seznam k vyřízení a dashboard (30 dní) uvádějí odesílatele, den a předmět. Příloha uložené faktury se archivuje v R2 (EU).
 - Dashboard v kartě „Zdroje dat“ ukazuje poslední návštěvu schránky, chybu, rozpracované načítání starší pošty a počty dokladů.
 
+#### Rozbor pošty info@ (doplněno 18. 10. 2026, rozhodnutí MC 18. 10. 2026)
+
+Při téže návštěvě OKO1 uloží každou zprávu doručené a odeslané pošty od 1. 4. 2026 (jen začátek zprávy bez příloh, vlastní text bez citované konverzace) do databáze provozovny; do logů, exportů ani archivu R2 nic z nich nejde. Workers AI u příchozí zprávy určí téma (rezervace, skupiny a akce, stížnosti, dotazy, poukazy, ztráty a nálezy, práce, nabídky a obchod, faktury a účetnictví, ostatní), zda čeká odpověď, zda jde o stížnost a krátké shrnutí; u odpovědi podniku známku 1–5, co chybí, a u stížnosti nebo slabé odpovědi návrh lepší odpovědi. Automatické zprávy (newslettery, oznámení, automatické odpovědi) odpověď nečekají. Odpověď se páruje přes In-Reply-To/References, jinak stejný předmět na stejnou adresu.
+
+- **Bez odpovědi přes 24 h** (za 30 dní, jedna řádka na konverzaci): ranní zpráva a seznam k vyřízení.
+- **Co nemáme v řízení**: člověk píše znovu bez odpovědi, stížnost bez odpovědi, odpovědi po víc než 48 h, zprávy čekající přes 3 dny.
+- **V pondělí** ranní zpráva shrne týden: zprávy k odpovědi, odpovězené, medián hodin do odpovědi, průměrná známka a témata proti týdnu předtím.
+- Dashboard: karta „Pošta info@ (30 dní)“; MCP: nástroj `posta_info(od, do)`.
+
 ## Kdy posílat
 
 Po uzavření každého účtu nebo v intervalu 5–15 minut, a vždy hned po uzávěrce a po dokončení kontroly lahví. Neodeslané dávky drží pokladna ve své frontě a posílá je s opakováním.
