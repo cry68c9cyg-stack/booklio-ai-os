@@ -5,6 +5,7 @@ import type {NotePoint, NotesAnalysis} from './notes.ts';
 import {weatherText, type WeatherDay} from './weather.ts';
 import type {TableCheck} from './checks.ts';
 import {renderThemes, THEMES, type DjRank, type ThemeSummary} from './themes.ts';
+import {cashNeedText, payoutAlarmText, renderNights, type CashNeed, type NightSummary, type PayoutAlarm} from './cash.ts';
 import {gapsText, hasGaps, shiftSignals, shiftText, type DataGaps, type MonthTarget} from './goals.ts';
 import {renderSupplies, type SupplyBrief} from './supplies.ts';
 import {renderMail, type MailBrief} from './mail-insights.ts';
@@ -109,6 +110,10 @@ export type Briefing = {
   tableChecks?: TableCheck[];
   /** Revenue of the same weekday 52 weeks before (364 days), `null` = no data; a briefing stored before has none. */
   lastYearRevenueCents?: number | null;
+  /** Cash counted last night against what today usually pays out of the till, a day of unusual payouts, on Monday the nights (src/cash.ts). */
+  cashNeed?: CashNeed | null;
+  payoutAlarm?: PayoutAlarm | null;
+  nights?: NightSummary | null;
   /** The target of the month the starting day is in (src/goals.ts). */
   target?: MonthTarget | null;
   /** Days of the 14 before without revenue or with the cash book only; only for this morning's message. */
@@ -722,6 +727,7 @@ export function buildBriefing(input: {
   discountHistory?: DiscountHistory;
   tableChecks?: TableCheck[]; noteThemes?: string[]; themes?: ThemeSummary | null; djRanking?: DjRank[] | null;
   lastYearRevenueCents?: number | null; target?: MonthTarget | null; dataGaps?: DataGaps | null;
+  cashNeed?: CashNeed | null; payoutAlarm?: PayoutAlarm | null; nights?: NightSummary | null;
 }): Briefing {
   const closed = input.bills.filter(bill => bill.status === 'closed');
   const add = <K>(map: Map<K, number>, key: K, value: number) => map.set(key, (map.get(key) ?? 0) + value);
@@ -810,6 +816,7 @@ export function buildBriefing(input: {
     noShows: noShowRate(input.reservations ?? [], input.noShowHistory ?? null),
     unusualDiscounts: report ? unusualDiscounts(report, input.discountHistory ?? {days: 0, totals: {}}) : [],
     silent: input.silent ?? [],
+    cashNeed: input.cashNeed ?? null, payoutAlarm: input.payoutAlarm ?? null, nights: input.nights ?? null,
     lastYearRevenueCents: input.lastYearRevenueCents ?? null, target: input.target ?? null, dataGaps: input.dataGaps ?? null,
     tableChecks: input.tableChecks ?? [], noteThemes: input.noteThemes ?? [], themes: input.themes ?? null, djRanking: input.djRanking ?? null,
     incomplete: input.incomplete,
@@ -860,6 +867,8 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   if (briefing.topItems.length) lines.push('Nejvíc tržeb: ' + briefing.topItems.slice(0, 3).map(row => `${row.name} ${row.quantity}×`).join(', '));
   lines.push(...renderReport(briefing));
   lines.push(...renderTableChecks(briefing.tableChecks));
+  if (briefing.payoutAlarm) lines.push(`⚠ Výplaty v hotovosti: ${payoutAlarmText(briefing.payoutAlarm)}`);
+  if (briefing.cashNeed) lines.push(`⚠ Hotovost na dnešek: ${cashNeedText(briefing.cashNeed)}; doplň hotovost nebo rozlož výplaty.`);
   lines.push(...renderBottles(briefing));
   lines.push(...renderReservations(briefing.reservations, briefing.outlook));
   lines.push(...renderEvents(briefing.events));
@@ -882,7 +891,7 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   lines.push(...renderMenuWeek(briefing.menuDay, 'Lístek se změnil'), ...(briefing.menuProblems ?? []).map(text => `⚠ ${text}`));
   lines.push(...renderNotes(briefing));
   // The week in a few numbers once a week, in the message about Sunday (Monday morning).
-  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceResults(briefing.priceResults), ...renderPriceCheck(briefing.priceCheck), ...renderMenuGaps(briefing.menuGaps), ...renderMenuInterest(briefing.menuInterest), ...renderMenuByLanguage(briefing.menuByLanguage), ...renderCompetitors(briefing.competitors), ...renderThemes(briefing.themes), ...renderDjs(briefing.djRanking));
+  if (weekday(briefing.businessDate) === 0) lines.push(...renderWeek(briefing.week), ...renderMenuWeek(briefing.menuWeek), ...renderPriceResults(briefing.priceResults), ...renderPriceCheck(briefing.priceCheck), ...renderMenuGaps(briefing.menuGaps), ...renderMenuInterest(briefing.menuInterest), ...renderMenuByLanguage(briefing.menuByLanguage), ...renderCompetitors(briefing.competitors), ...renderThemes(briefing.themes), ...renderDjs(briefing.djRanking), ...renderNights(briefing.nights));
   // The month so far once a week, and the whole month in the message about its last day (the 1st in the morning).
   lines.push(...renderMonth(briefing.month));
   // Which events draw guests, once a month in the message about its last day.

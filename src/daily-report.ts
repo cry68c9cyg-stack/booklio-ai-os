@@ -177,7 +177,7 @@ export function dayColumn(sheet: Sheet, businessDate: string): {row: number; col
 }
 
 /** Staff paid in cash in the journal: the role alone ("DJ", "Security"), or a wage, trial shift or help. */
-const JOURNAL_PAYOUT = /^(security|tanecnice|dj|popelar|hosteska|barback|uklizec\w*)$|vyplat|zkousk|brigad|vypomoc|animator|procent/;
+const JOURNAL_PAYOUT = /^(security|tanecnice|dj|popelar|hosteska|barback|uklizec\w*)$|^hosteska\b|vyplat|zkousk|brigad|vypomoc|animator|procent/;
 
 /**
  * The "Peněžní deník" as the managers keep it: a journal with one block per day. The block starts with the row

@@ -210,6 +210,14 @@ export function createServer(context: ToolContext): McpServer {
     if (bad) return bad;
     return result(await context.venue.posNotes(od, until));
   });
+  tool('hotovost_a_noci', 'Hotovost a výsledek noci', 'Po dnech za období (nejvýš 400 dní) z peněžního deníku: tržba klubu, výplaty noci (security, tanečnice, DJ, popelář, hosteska, animátorky…), ' +
+    'všechny výplaty a výdaje z kasy, výsledek noci (tržba klubu − výplaty noci) a DJ; k tomu průměrný výsledek podle dne v týdnu a podle DJe (od 2 nocí). Částky v haléřích.',
+  {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
+    const bad = badRange(od, until);
+    if (bad) return bad;
+    const nights = await context.venue.posNights(od, until);
+    return nights ? result(nights) : failed('Provozovna není v OKO1 nastavená.');
+  });
   tool('souhrn_obdobi', 'Souhrn za období', 'Součty za libovolné období (nejvýš 400 dní): tržba a dny s tržbou, potvrzené rezervace a hosté, nedorazili, storna, zdroje rezervací, ' +
     'jak dopředu se rezervuje, návštěvy webu a jejich původ, odeslané formuláře, nové recenze a průměr hvězdiček, akce podniku s hosty a tržbou proti obvyklému dni. Jen počty, částky v haléřích.',
   {od: from, do: to}, async ({od, do: until}: {od: string; do: string}) => {
