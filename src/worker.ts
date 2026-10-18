@@ -5,6 +5,7 @@ import {cashDay, cashNeed, nightSummary, payoutAlarm, tillDay, type NightSummary
 import {tableChecks} from './checks.ts';
 import {riskScore, type Risk} from './risk.ts';
 import {kpiRows, type KpiInput, type KpiPart} from './kpi.ts';
+import {weekResultFigures, type ResultPart, type WeekResult} from './weekresult.ts';
 import {cashFlowDay, cashForecast, cashShare, movementDay, sumMovements, type CashFlowDay} from './cashflow.ts';
 import {cashDiffRepeat, sumVoids, voidAndDiff, voidDay, voidPastDates, type VoidDay} from './voids.ts';
 import {promoDay, promoStreaks, sumPromo, type PromoDay} from './promo.ts';
@@ -436,7 +437,7 @@ export class TenantObject extends DurableObject<Env> {
     return ok({name: config.name, businessDate: day, briefing, report, balances, days: series, todo, briefingText: stored?.text ?? text,
       week: briefing.week ?? this.week(day), month: briefing.month ?? this.month(config, day), trends: this.trends(day), menuInterest: this.menuInterestWeeks(day), sources: this.sources(config), menu: this.menuCard(config, day), eventRanking: briefing.eventRanking ?? this.eventRanking(day), supplies: this.suppliesCard(config, day, briefing.forecast?.month.month === day.slice(0, 7) ? briefing.forecast.month.restCents : null), mail: this.mailCardData(),
       themes: briefing.themes ?? this.themeSummary(day), djRanking: briefing.djRanking ?? this.djRanking(day), nights: this.nightsFor(addDays(day, -27), day),
-      incidents: this.incidentsBetween(addDays(day, -89), day).reverse(), wages: this.posWages(addDays(day, -29), day), promo: this.posPromo(addDays(day, -29), day), voids: this.posVoids(addDays(day, -29), day), cashFlow: this.posCashFlow(addDays(day, -29), day), risk: riskScore(briefing), kpi: (() => { const input = briefing.kpi ?? this.kpiFor(day, briefing); return {from: input.from, to: input.to, rows: kpiRows(input)}; })(), riskWeek: briefing.riskWeek ?? this.riskDays(config, addDays(day, -6), day), foreignWeek: briefing.foreignWeek ?? foreignWeek(day, Array.from({length: 15}, (_, i) => this.foreignCash(addDays(day, i - 14))))});
+      incidents: this.incidentsBetween(addDays(day, -89), day).reverse(), wages: this.posWages(addDays(day, -29), day), promo: this.posPromo(addDays(day, -29), day), voids: this.posVoids(addDays(day, -29), day), cashFlow: this.posCashFlow(addDays(day, -29), day), risk: riskScore(briefing), kpi: (() => { const input = briefing.kpi ?? this.kpiFor(day, briefing); return {from: input.from, to: input.to, rows: kpiRows(input)}; })(), riskWeek: briefing.riskWeek ?? this.riskDays(config, addDays(day, -6), day), weekResult: (() => { const result = briefing.weekResult ?? this.weekResultFor(config, day); return {...result, ...weekResultFigures(result)}; })(), foreignWeek: briefing.foreignWeek ?? foreignWeek(day, Array.from({length: 15}, (_, i) => this.foreignCash(addDays(day, i - 14))))});
   }
 
   /** "Vyřízeno" on the dashboard's to-do list: kept per business day and item, undone by the same switch. */
@@ -2052,6 +2053,27 @@ export class TenantObject extends DurableObject<Env> {
       before: this.kpiPart(addDays(date, -34), addDays(date, -7)), overdue: {count: overdue.length, grossCents: overdue.reduce((sum, row) => sum + row.grossCents, 0)}};
   }
 
+  /** A stretch of the week result (src/weekresult.ts): revenue, supplier invoices without VAT, cash wages and cash spent. */
+  private resultPart(invoices: SupplierInvoice[], from: string, to: string): ResultPart {
+    const revenue = this.revenueBetween(from, to), summary = supplySummary(invoices, from, to, revenue);
+    const total = (kind: 'payout' | 'expense') => this.reportSums(kind, from, to).reduce((sum, row) => sum + row.amountCents, 0);
+    return {revenueCents: revenue.revenueCents, revenueDays: revenue.revenueDays, invoices: summary.invoices, purchasesCents: summary.netCents,
+      foodDrinkCents: summary.byKind.filter(row => row.kind === 'food' || row.kind === 'beverage').reduce((sum, row) => sum + row.netCents, 0),
+      payoutsCents: total('payout'), expensesCents: total('expense')};
+  }
+  /** The week up to `date` against the 4 weeks before. */
+  private weekResultFor(config: TenantConfig, date: string): WeekResult {
+    const invoices = this.invoices(config, addDays(date, -34), date);
+    return {from: addDays(date, -6), to: date, week: this.resultPart(invoices, addDays(date, -6), date), before: this.resultPart(invoices, addDays(date, -34), addDays(date, -7))};
+  }
+  /** MCP: the operating result of the 7 days up to a day against the average week of the 4 before. */
+  posWeekResult(date: string) {
+    const config = this.config();
+    if (!config) return null;
+    const result = this.weekResultFor(config, date);
+    return {...result, ...weekResultFigures(result)};
+  }
+
   /** Vklad JD, cash from the bank and cash taken to an account over a stretch. */
   private movements(from: string, to: string) {
     const days = [];
@@ -2207,7 +2229,7 @@ export class TenantObject extends DurableObject<Env> {
       supplies: this.supplyBriefFor(config, date, forecast?.month.month === date.slice(0, 7) ? forecast.month.restCents : null), mail: this.mailBriefFor(config, date, now),
       costs: this.monthResult(date.slice(0, 7), date), costsPrevious: Number(date.slice(8)) <= 15 ? this.monthResult(addDays(date.slice(0, 7) + '-01', -1).slice(0, 7), addDays(date.slice(0, 7) + '-01', -1)) : null});
     // The KPIs read the briefing's invoices and mail, so they are added once it is built.
-    if (weekday(date) === 0) briefing.kpi = this.kpiFor(date, briefing);
+    if (weekday(date) === 0) { briefing.kpi = this.kpiFor(date, briefing); briefing.weekResult = this.weekResultFor(config, date); }
     return {briefing, text: renderBriefing(config.name, briefing)};
   }
 
