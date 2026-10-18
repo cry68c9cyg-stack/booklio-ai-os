@@ -421,6 +421,8 @@ function website(raw: unknown): {url: string} {
 export const COMPETITOR_SECTIONS = ['food', 'alcohol', 'soft'] as const;
 export type CompetitorPrices = {
   checkedOn: string;
+  /** Where the venues are, for the dashboard ("Dlouhá a V Kolkovně"). */
+  scope: string | null;
   /**
    * What is compared (decision of MC 14. 10. 2026: the whole menu, food and all drinks). `volumeMl` = the volume prices are
    * recalculated to; `perVolume` = by the millilitre from any volume (spirits, wine by the glass), else only from within 20 %.
@@ -433,7 +435,7 @@ export type CompetitorPrices = {
 };
 const VOLUME_MAX_ML = 5000;
 export function validateCompetitorPrices(raw: unknown): CompetitorPrices {
-  const value = object(raw, ['checkedOn', 'basket', 'venues']);
+  const value = object(raw, ['checkedOn', 'basket', 'venues'], ['scope']);
   const volume = (ml: unknown) => ml == null ? null : int(ml, 1, VOLUME_MAX_ML);
   const flag = (input: unknown) => {
     if (input !== undefined && typeof input !== 'boolean') fail();
@@ -463,7 +465,7 @@ export function validateCompetitorPrices(raw: unknown): CompetitorPrices {
       })};
   });
   if (new Set(venues.map(row => row.key)).size !== venues.length) fail();
-  return {checkedOn: date(value.checkedOn), basket, venues};
+  return {checkedOn: date(value.checkedOn), scope: optionalText(value.scope, 100), basket, venues};
 }
 
 export function validateConfig(raw: unknown): TenantConfig {

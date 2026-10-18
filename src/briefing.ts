@@ -357,7 +357,7 @@ export function renderCompetitors(competitors: Briefing['competitors']): string[
   const named = (rows: CompetitorRow[]) => rows.slice(0, COMPETITOR_NAMED).map(row).join(', ') + (rows.length > COMPETITOR_NAMED ? ` a další ${rows.length - COMPETITOR_NAMED}` : '');
   const sections = (competitors.sections ?? []).filter(section => section.medianDiffPct !== null).map(section => `${SECTION_SHORT[section.section]} ${signed(section.medianDiffPct!)}`);
   const parts = [competitors.above.length ? `dráže ${named(competitors.above)}` : '', competitors.below.length ? `levněji ${named(competitors.below)}` : ''].filter(Boolean);
-  return [`Ceny proti okolí (${word(competitors.venues, 'podnik', 'podniky', 'podniků')}, ${date}, ${word(competitors.compared, 'položka', 'položky', 'položek')}): ` +
+  return [`Ceny proti okolí (${word(competitors.compared, 'položka', 'položky', 'položek')} proti ${competitors.venues} ${competitors.venues === 1 ? 'podniku' : 'podnikům'} s cenami online, ${date}): ` +
     (sections.length ? `celkově ${sections.join(', ')}; ` : '') +
     (parts.length ? parts.join('; ') : 'všechno do ±15 % od mediánu')];
 }

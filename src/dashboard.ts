@@ -338,11 +338,11 @@ function menuCard(m) {
     const diff = p => p === null ? '<span class="muted">–</span>' : '<span class="' + (Math.abs(p) >= 15 ? 'warn' : '') + '">' + signed(p) + '</span>';
     const count = (n, one, few, many) => n + ' ' + (n === 1 ? one : n >= 2 && n <= 4 ? few : many);
     const online = co.venues.filter(v => v.items).length;
-    h += '<h3>Ceny proti okolí <span class="muted">(' + count(co.venues.length, 'podnik', 'podniky', 'podniků') + ' v Dlouhé a V Kolkovně' + (online < co.venues.length ? ', s cenami online ' + online : '') + ', ceny z jejich lístků ' + esc(short(co.checkedOn)) + ')</span></h3>' +
+    h += '<h3>Ceny proti okolí <span class="muted">(' + count(co.venues.length, 'podnik', 'podniky', 'podniků') + (co.scope ? ' – ' + esc(co.scope) : '') + (online < co.venues.length ? ', s cenami online ' + online : '') + ', ceny z jejich lístků ' + esc(short(co.checkedOn)) + ')</span></h3>' +
       co.sections.map(sec => {
         const rows = co.rows.filter(r => r.section === sec.section && r.venues.length);
         return '<details><summary><b>' + esc(sec.name) + '</b> ' + (sec.medianDiffPct === null ? '<span class="muted">málo srovnatelných cen</span>' : 'celkově ' + diff(sec.medianDiffPct)) +
-          ' <span class="muted">· srovnáno ' + count(sec.compared, 'položka', 'položky', 'položek') + (sec.above ? ', dráže o 15 % a víc ' + sec.above : '') + (sec.below ? ', levněji o 15 % a víc ' + sec.below : '') + '</span></summary>' +
+          ' <span class="muted">· srovnáno ' + count(sec.compared, 'položka', 'položky', 'položek') + (sec.above ? ', ' + sec.above + ' dráže o 15 % a víc' : '') + (sec.below ? ', ' + sec.below + ' levněji o 15 % a víc' : '') + '</span></summary>' +
           (rows.length ? '<div class="scroll"><table><tr><th>Položka</th><th class="n">Naše</th><th class="n">Okolí (medián)</th><th class="n">Rozpětí</th><th class="n">Rozdíl</th></tr>' +
           rows.map(r => '<tr><td title="' + esc(r.venues.map(v => v.name + ': ' + v.line + ' ' + kc(v.cents) + (v.approx ? ' (jen podobné, mimo medián)' : '') + (v.note ? ', ' + v.note : '')).join('\\n')) + '">' + esc(r.label) + vol(r.volumeMl) +
             (r.ourName ? '<div class="muted">' + esc(r.ourName) + '</div>' : '<div class="muted">u nás není</div>') + '</td><td class="n">' + (r.ourCents === null ? '<span class="muted">–</span>' : kc(r.ourCents)) + '</td><td class="n">' + (r.medianCents === null ? '<span class="muted">–</span>' : kc(r.medianCents)) +

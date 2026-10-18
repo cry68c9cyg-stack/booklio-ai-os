@@ -1,5 +1,6 @@
 {
  "checkedOn": "2026-10-18",
+ "scope": "Dlouhá a V Kolkovně",
  "basket": [
   {
    "item": "eggs-scrambled",
@@ -404,12 +405,7 @@
    "item": "beer-nonalc",
    "label": "Nealkoholické pivo (lahev)",
    "section": "soft",
-   "volumeMl": 330,
-   "ours": {
-    "name": "Budvar Original",
-    "category": "Pivo & cider",
-    "group": "Lahvové"
-   }
+   "volumeMl": 330
   },
   {
    "item": "beer-import",
@@ -2313,7 +2309,8 @@
     {
      "item": "sauce",
      "name": "Kečup",
-     "priceCzk": 25
+     "priceCzk": 25,
+     "approx": true
     },
     {
      "item": "beer-draft-05",

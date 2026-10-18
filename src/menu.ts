@@ -60,8 +60,11 @@ const kc = (cents: number) => String(Math.round(cents / 100)).replace(/\B(?=(\d{
 export const COMPETITOR_SHARE = 15, COMPETITOR_MIN_VENUES = 3;
 /** How far a drink's volume may be from the basket's to be recalculated to it (a 0,5 l beer is not a 0,3 l one by the litre). */
 export const COMPETITOR_VOLUME_SHARE = 0.2;
-/** Volumes recalculated by the millilitre (spirits, wine by the glass) only from a glass, not from a bottle: 0,4× to 2,5× the basket's. */
-const PER_VOLUME_RANGE = [0.4, 2.5];
+/**
+ * Volumes recalculated by the millilitre (spirits, wine by the glass) only from a similar glass: 0,75× to 1,5× the
+ * basket's (3 to 6 cl for a 4 cl shot). A small pour costs more than its share, so 2 cl doubled would look cheap.
+ */
+const PER_VOLUME_RANGE = [0.75, 1.5];
 export const COMPETITOR_SECTION_NAMES: Record<CompetitorPrices['basket'][number]['section'], string> = {food: 'Jídlo', alcohol: 'Alkoholické nápoje', soft: 'Nealkoholické nápoje'};
 export type CompetitorRow = {
   item: string; label: string; section: CompetitorPrices['basket'][number]['section']; volumeMl: number | null; ourName: string | null; ourCents: number | null;
@@ -74,7 +77,7 @@ const median = (sorted: number[]) => !sorted.length ? null : sorted.length % 2 ?
   : Math.round((sorted[(sorted.length >> 1) - 1] + sorted[sorted.length >> 1]) / 2);
 /**
  * Our current price of each compared item against the venues nearby. With a basket volume, prices are recalculated to it:
- * by the millilitre for `perVolume` items (from a glass of 0,4× to 2,5× the volume), otherwise only from a volume within
+ * by the millilitre for `perVolume` items (from a glass of 0,75× to 1,5× the volume), otherwise only from a volume within
  * 20 % of it; a price without its volume is left out. Our own item is looked up in the current menu by name, category,
  * group and volume. The median is of the exact matches only.
  */

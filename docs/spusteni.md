@@ -81,8 +81,8 @@ Připojení v Claudovi (každý, kdo smí na dashboard):
 
 Rozhodnutí MC 14. 10. 2026: Claude jednou měsíčně přečte veřejné lístky **všech barů a restaurací v ulicích Dlouhá a V Kolkovně** a porovná s nimi **celý náš lístek: jídlo i všechny nápoje, alkoholické i nealkoholické**. Ceny zapíše do `.github/oko1/<tenant>.competitors.json`:
 
-- `checkedOn`: datum čtení;
-- `basket`: srovnávané položky, u každé část lístku (`section`: `food` jídlo, `alcohol` alkohol, `soft` nealko), naše položka lístku podle názvu, kategorie, případně skupiny, objemu a pořadí ceny, a u nápojů objem, na který se ceny přepočítají (`volumeMl`; `perVolume: true` = přepočet po mililitrech z jakékoli sklenky, např. destiláty 4 vs. 5 cl a víno rozlévané, jinak jen z objemu do ±20 %); položka, kterou nemáme, má `ours: null` a ukazuje jen okolí;
+- `checkedOn`: datum čtení; `scope`: kde podniky jsou (pro dashboard, např. „Dlouhá a V Kolkovně“);
+- `basket`: srovnávané položky, u každé část lístku (`section`: `food` jídlo, `alcohol` alkohol, `soft` nealko), naše položka lístku podle názvu, kategorie, případně skupiny, objemu a pořadí ceny, a u nápojů objem, na který se ceny přepočítají (`volumeMl`; `perVolume: true` = přepočet po mililitrech ze sklenky 0,75× až 1,5× objemu, např. destiláty 3–6 cl na 4 cl a víno rozlévané; malý panák 2 cl ani lahev se nepřepočítá, protože malá porce stojí víc než svůj díl; jinak jen z objemu do ±20 %); položka, kterou nemáme, má `ours: null` a ukazuje jen okolí;
 - `venues`: každý prohlédnutý podnik s adresou (`area`), druhem (`kind`) a adresou stránky, ze které ceny pochází; podnik bez cen online má prázdné `items` a důvod v `note`.
 
 Jsou to veřejná data, nic o hostech ani o nás. Nasazení soubor uloží do OKO1 (`npm run admin -- competitors james-dean soubor.json`, nejvýš 1 MB).

@@ -902,7 +902,7 @@ export class TenantObject extends DurableObject<Env> {
     const data = this.competitors();
     if (!data) return null;
     const rows = competitorComparison(this.menu(), data);
-    return {checkedOn: data.checkedOn, venues: data.venues.map(venue => ({name: venue.name, area: venue.area, kind: venue.kind, url: venue.url, note: venue.note, items: venue.items.length})),
+    return {checkedOn: data.checkedOn, scope: data.scope ?? null, venues: data.venues.map(venue => ({name: venue.name, area: venue.area, kind: venue.kind, url: venue.url, note: venue.note, items: venue.items.length})),
       sections: competitorSections(rows), rows};
   }
 
