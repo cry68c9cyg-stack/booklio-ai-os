@@ -753,6 +753,7 @@ test('supplier invoices: costs by kind, food cost, price rises, overdue invoices
     'Nákupy od 1. 10. do 7. 10. (faktury, bez DPH): 1 438 Kč · jídlo 1 138 Kč · nápoje 300 Kč · food cost 14,4 % z tržeb s DPH',
     '⚠ Zdražení za 7 dní: limety / ks (Makro) 100,00 → 110,00 Kč (+10 %)',
     '⚠ Faktury po splatnosti: 1 za 990 Kč (nejstarší Makro, 990 Kč, splatná 5. 10. (3 dny))',
+    'Hromadná platba čtvrtek 8. 10.: 1 faktura za 990 Kč (splatné do 12. 10.): Makro 990 Kč',
     'Provozní výsledek od 1. 10.: tržby 10 000 Kč − nákupy 1 438 Kč = 8 562 Kč (hrubý odhad, bez mezd mimo kasu a režií)',
   ]);
   assert.equal(supplyBrief([], '2026-10-07', {revenueCents: 0, revenueDays: 0}), null);
