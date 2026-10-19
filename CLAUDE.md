@@ -14,3 +14,4 @@
 - Každá zpráva MC, ve které nečekáš na jeho rozhodnutí (nasazeno, hotovo, odesláno, čekáme na někoho třetího), končí konkrétním návrhem další dávky několika bodů a otázkou „jo?“; nikdy nečekej, až se zeptá „co dál“ (MC, 13. 10. 2026).
 - Každé nové pravidlo od MC zapiš přes skill Task Observer sem do „Working preferences“ (a do paměti projektu) (MC, 13. 10. 2026).
 - U každých stažených tabulek projdi všechny záložky všech sešitů, zkontroluj, že čísla mezi soubory sedí (report × deník × Bilance × Graf, výčetka × zůstatek, součty × řádky), a nálezy dej MC jako problém a řešení (MC, 18. 10. 2026).
+- Když chybí denní report manažerů, pošli vždy důležitý e-mail (vysoká priorita) na info@jamesdean.cz: chybí report, doplnit (MC, 19. 10. 2026).
