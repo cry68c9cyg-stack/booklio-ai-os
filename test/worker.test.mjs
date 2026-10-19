@@ -371,7 +371,7 @@ try {
   const fetchedGoogle = await (await call('POST', '/admin/t/excel-google/fetch', {date: '2026-10-09'})).json();
   assert.equal(fetchedGoogle.found, true, JSON.stringify(fetchedGoogle.warnings));
   assert.deepEqual((await (await call('GET', '/admin/t/excel-google/report?date=2026-10-09')).json()).report.files, ['Denní report 9.10.2026.xlsx', 'Peněžní deník.xlsx']);
-  assert.equal((await (await call('POST', '/admin/t/excel-google/fetch', {date: '2026-10-08'})).json()).warnings[0], 'Google Drive: denní report za tento den ve složce není.');
+  assert.equal((await (await call('POST', '/admin/t/excel-google/fetch', {date: '2026-10-08'})).json()).warnings[0], 'Google Drive: denní report za tento den ve složce není (naposledy uložené: Denní report 9.10.2026.xlsx, Peněžní deník.xlsx).');
   assert.equal((await call('PUT', '/admin/t/excel-google/config', {...excelConfig, reportsLink: 'https://drive.google.com/drive/folders/1NotSharedFolder'})).status, 200);
   assert.match((await (await call('POST', '/admin/t/excel-google/fetch', {date: '2026-10-09'})).json()).warnings[0], /není nasdílená účtu OKO1/);
   // No link at all: OKO1 finds the folder "OKO1 reporty" that someone shared with its Google account.
