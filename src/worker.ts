@@ -75,6 +75,8 @@ type MailAi = {
 /** The language model that turns an invoice's text into fields (structured JSON output). */
 /** The hourly visit to the mailbox (wrangler.jsonc). */
 const MAIL_CRON = '30 * * * *';
+/** How many past business days a late daily report is still looked for (hourly). */
+const LATE_REPORT_DAYS = 3;
 const INVOICE_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 /** How long one visit to the mailbox may take, and how many documents it reads; the rest waits for the next visit a minute later. */
 const MAIL_BUDGET_MS = 120000, MAIL_DOCUMENTS_PER_VISIT = 12;
@@ -2315,6 +2317,24 @@ export class TenantObject extends DurableObject<Env> {
    * from MAIL_HISTORY_FROM on with a PDF or ISDOC attachment, in every folder but sent, drafts, spam and trash.
    * Read-only; each folder is read on from the last message seen, so every message is looked at once.
    */
+  /**
+   * A daily report saved late is picked up by itself (MC, 19. 10. 2026): every hour outside the morning send hours the last
+   * LATE_REPORT_DAYS business days without the managers' report are looked for again, until it is in.
+   */
+  async lateReports(tenant: string, now = new Date()) {
+    const config = this.config();
+    if (!config || (!config.reportsLink && !this.env.GOOGLE_SERVICE_ACCOUNT) || config.sendHours.includes(localHour(now, config.timeZone))) return {fetched: []};
+    const today = businessDate(now, config.timeZone, 0), fetched: string[] = [];
+    for (let back = 1; back <= LATE_REPORT_DAYS; back++) {
+      const date = addDays(today, -back);
+      if (this.hasReport(date)) continue;
+      // Only the managers' report counts: a day the cash book alone covers is looked for again.
+      await this.fetchReport(tenant, date);
+      if (this.hasReport(date)) fetched.push(date);
+    }
+    return {fetched};
+  }
+
   async mailVisit(tenant: string, now = new Date()) {
     const config = this.config(), account = mailAccount(this.env, tenant);
     if (!config || !account) return {visited: false};
@@ -3052,6 +3072,7 @@ export default {
     // The hourly cron visits the venues' mailboxes; the morning ones prepare and send the briefing.
     if (event.cron === MAIL_CRON) {
       for (const tenant of tenants) if (mailAccount(env, tenant)) ctx.waitUntil(tenantStub(env, tenant).mailVisit(tenant, new Date(event.scheduledTime)));
+      for (const tenant of tenants) ctx.waitUntil(tenantStub(env, tenant).lateReports(tenant, new Date(event.scheduledTime)));
       return;
     }
     for (const tenant of tenants) ctx.waitUntil(tenantStub(env, tenant).tick(new Date(event.scheduledTime), tenant));
