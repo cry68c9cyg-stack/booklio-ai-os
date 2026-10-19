@@ -368,6 +368,12 @@ try {
   assert.deepEqual((await (await call('GET', '/admin/t/excel-graph/report?date=2026-10-09')).json()).report.files, ['Denní report 9.10.2026.xlsx', 'Peněžní deník.xlsx']);
   // A Google Drive folder shared only with OKO1's Google account (read-only); a folder not shared with it says so.
   assert.equal((await call('PUT', '/admin/t/excel-google/config', {...excelConfig, reportsLink: 'https://drive.google.com/drive/folders/1GoogleRootFolder?usp=sharing'})).status, 200);
+  // A report saved late is picked up by the hourly visit outside the send hours (MC, 19. 10. 2026).
+  assert.equal((await call('PUT', '/admin/t/excel-late/config', {...excelConfig, reportsLink: 'https://drive.google.com/drive/folders/1GoogleRootFolder?usp=sharing'})).status, 200);
+  const lateStub = (await mf.getDurableObjectNamespace('TENANTS')).get((await mf.getDurableObjectNamespace('TENANTS')).idFromName('excel-late'));
+  assert.deepEqual([...(await lateStub.lateReports('excel-late', new Date('2026-10-10T05:00:00Z'))).fetched], [], 'the send hours are the morning fetch');
+  assert.deepEqual([...(await lateStub.lateReports('excel-late', new Date('2026-10-10T10:30:00Z'))).fetched], ['2026-10-09']);
+  assert.deepEqual([...(await lateStub.lateReports('excel-late', new Date('2026-10-10T11:30:00Z'))).fetched], [], 'a day with its report is not fetched again');
   const fetchedGoogle = await (await call('POST', '/admin/t/excel-google/fetch', {date: '2026-10-09'})).json();
   assert.equal(fetchedGoogle.found, true, JSON.stringify(fetchedGoogle.warnings));
   assert.deepEqual((await (await call('GET', '/admin/t/excel-google/report?date=2026-10-09')).json()).report.files, ['Denní report 9.10.2026.xlsx', 'Peněžní deník.xlsx']);
