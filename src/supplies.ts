@@ -603,3 +603,19 @@ export function renderSupplies(brief: SupplyBrief | null): string[] {
   if (brief.weekly?.growing?.length) lines.push(`Nejvíc rostou proti minulému měsíci (stejné dny): ${brief.weekly.growing.map(row => `${row.name} ${signed(row.changeCents)}`).join(' · ')}`);
   return lines;
 }
+
+const DAY_NAMES = ['neděli', 'pondělí', 'úterý', 'středu', 'čtvrtek', 'pátek', 'sobotu'];
+
+/**
+ * The managers' daily report is missing after the last send hour (MC, 19. 10. 2026): an important e-mail to the venue's
+ * mailbox, every time, saying what is missing and where to save it.
+ */
+export function reportMissingMail(date: string, venue: string, folder: string, found: string[]): {subject: string; text: string} {
+  const day = `${DAY_NAMES[weekday(date)]} ${shortDate(date)}`;
+  return {subject: `[DŮLEŽITÉ] Chybí denní report za ${day}, doplnit`, text: [`Dobrý den,`, ``,
+    `ve složce „${folder}“ na Google Drive chybí denní report za ${day}. Ranní zpráva proto odešla bez něj a čísla dne nejsou konečná.`, ``,
+    `Prosím uložte ho tam ještě dnes jako sešit Excelu s datem v názvu, například „Denní report ${Number(date.slice(8))}.${Number(date.slice(5, 7))}.${date.slice(0, 4)}.xlsx“. ` +
+    `OKO1 si ho samo načte a doplní do přehledu.`,
+    ...(found.length ? [``, `Co OKO1 ve složce našlo: ${found.join(' ')}`] : []), ``,
+    `OKO1, ${venue}`, `(automatická zpráva)`].join('\n')};
+}
