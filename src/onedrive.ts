@@ -43,7 +43,8 @@ export function shareId(link: string): string {
  */
 export function pickFiles(names: string[], businessDate: string): {report: string | null; books: string[]; text?: string} {
   const [year, month, day] = businessDate.split('-').map(Number);
-  const dated = new RegExp(`(^|[^0-9])0?${day}[._ -]+0?${month}[._ -]+(${year}|${year % 100})([^0-9]|$)`);
+  // The year may be left out ("Report 18.10.xlsx"): the newest such file is the day's.
+  const dated = new RegExp(`(^|[^0-9])0?${day}[._ -]+0?${month}(?:[._ -]+(?:${year}|${year % 100})(?![0-9])|(?![._ -]*[0-9]))`);
   const workbooks = names.filter(name => /\.xlsx$/i.test(name) && !name.startsWith('~$'));
   const text = names.find(name => /\.docx$/i.test(name) && !name.startsWith('~$') && dated.test(name));
   return {
@@ -222,9 +223,15 @@ export async function googleDayFiles(folderId: string, businessDate: string, acc
     const bytes = await download(entry.mimeType === GOOGLE_SHEET ? `${GOOGLE_API}/files/${id}/export?mimeType=${encodeURIComponent(XLSX)}` : `${GOOGLE_API}/files/${id}?alt=media&supportsAllDrives=true`, headers);
     if (bytes) result.push({name, bytes}); else warnings.push(`Google Drive: soubor ${name} nejde stáhnout.`);
   }
-  if (!picked.report) warnings.push('Google Drive: denní report za tento den ve složce není.');
+  if (!picked.report) warnings.push('Google Drive: denní report za tento den ve složce není' + latestNames(files) + '.');
   if (!books.length) warnings.push('Google Drive: peněžní deník ve složce není.');
   return {files: result, warnings};
+}
+
+/** The newest file names in the folder, so a report saved under an unexpected name is visible at once. */
+function latestNames(files: Map<string, GoogleFile>): string {
+  const names = [...files.entries()].sort(([, a], [, b]) => (b.modifiedTime ?? '').localeCompare(a.modifiedTime ?? '')).slice(0, 4).map(([name]) => name);
+  return names.length ? ` (naposledy uložené: ${names.join(', ')})` : '';
 }
 
 const plain = (name: string) => name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();

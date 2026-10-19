@@ -30,7 +30,7 @@ import {fetchDayFiles, googleDayFiles, googleFolderByName, reportFromFiles} from
 import {authorizeUrl, pkce, redeem, renew} from './microsoft.ts';
 import {googleAccess, serviceAccount} from './google.ts';
 import {fetchCosts, iuctoKey, type CostRow, type IuctoEnv} from './iucto.ts';
-import {aboMail, amountConflicts, COST_KIND_NAMES, missingDraft, monthExportMail, receiptsMail, missingInvoices, receiptsReminder, paymentBatch, paymentMail, PAYMENT_UNKNOWN_SOURCES, costOutlook, counted, drinkMargins, dueSoon, newSuppliersFromMail, nextPaymentBatch, FOOD_COST_LIMIT_PERMILLE, duplicateInvoices, foodCostAlert, monthOverMonth, overdueInvoices, type PaymentBatch, priceRises, supplyBrief, supplySummary, unusualPurchases} from './supplies.ts';
+import {aboMail, reportMissingMail, amountConflicts, COST_KIND_NAMES, missingDraft, monthExportMail, receiptsMail, missingInvoices, receiptsReminder, paymentBatch, paymentMail, PAYMENT_UNKNOWN_SOURCES, costOutlook, counted, drinkMargins, dueSoon, newSuppliersFromMail, nextPaymentBatch, FOOD_COST_LIMIT_PERMILLE, duplicateInvoices, foodCostAlert, monthOverMonth, overdueInvoices, type PaymentBatch, priceRises, supplyBrief, supplySummary, unusualPurchases} from './supplies.ts';
 import {CODE_MS, DAY_MS, HOUR_MS, nextCode, RESEND_MS, seconds, WRONG_PER_HOUR, type Wait} from './login.ts';
 import {DEFAULT_BOTTLE_LOSS_CENTS, googleFolderId, InputError, validateBatch, withoutGuest, validateCompetitorPrices, validateConfig, validateHistory, type Batch, type CompetitorPrices, type Bill, type BottleCheck, type CashClosing, type Menu, type Reservation, type ReviewSummary, type SupplierInvoice, type TenantConfig, type WebTraffic} from './validate.ts';
 import {webSite, webTables, webToken, webTokenName, type WebEnv} from './web-client.ts';
@@ -2761,6 +2761,18 @@ export class TenantObject extends DurableObject<Env> {
     });
   }
 
+  private async reportMissingMailFor(config: TenantConfig, tenant: string, date: string, at: Date) {
+    const account = smtpAccount(this.env, tenant);
+    if (!account) return;
+    await this.officeMail('report-missing', date, at, async () => {
+      const fetched = this.sql.exec<{warnings: string}>('SELECT warnings FROM report_fetches WHERE business_date=? ORDER BY at DESC LIMIT 1', date).toArray()[0];
+      const mail = reportMissingMail(date, config.name, GOOGLE_REPORTS_FOLDER, fetched ? JSON.parse(fetched.warnings) as string[] : []);
+      const result = await sendMail(account, {from: {name: `OKO1 – ${config.name}`, address: account.user}, to: [account.user], subject: mail.subject, text: mail.text,
+        attachments: [], important: true}, at);
+      return result.ok ? {status: 'sent'} : {status: 'failed', error: result.error};
+    });
+  }
+
   /** The office messages of the last weeks (sources): kind, period, when, and how it went. */
   private officeMailStatus(config: TenantConfig) {
     const row = (kind: string) => {
@@ -2810,6 +2822,8 @@ export class TenantObject extends DurableObject<Env> {
     }
     if (config.sendHours.includes(hour)) await this.paymentMailFor(config, tenant, date, at);
     await this.officeMailsFor(config, tenant, date, at);
+    // After the last fetch the report is still missing: an important e-mail to the venue's mailbox, every time (MC, 19. 10. 2026).
+    if (hour === Math.max(...config.sendHours) && !this.hasReport(date)) await this.reportMissingMailFor(config, tenant, date, at);
     const decision = briefingDecision({localHour: hour, sendHours: config.sendHours, alreadySent: sent, ready: this.ready(config, date)});
     if (decision !== 'send' && decision !== 'send-incomplete') return {decision, businessDate: date};
     const {briefing, text} = this.briefingFor(config, date, decision === 'send-incomplete', at);

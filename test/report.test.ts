@@ -178,6 +178,11 @@ test('OneDrive: share id, picking the day\'s files, report from the downloaded w
   const names = ['Denní report 8.10.2026.xlsx', 'Denní report 9.10.2026.xlsx', 'Denní report 19.10.2026.xlsx', 'Peněžní deník 2026.xlsx', '~$Denní report 9.10.2026.xlsx'];
   assert.deepEqual(pickFiles(names, '2026-10-09'), {report: 'Denní report 9.10.2026.xlsx', books: ['Peněžní deník 2026.xlsx']});
   assert.deepEqual(pickFiles(['Denni report 09_10_26.xlsx'], '2026-10-09'), {report: 'Denni report 09_10_26.xlsx', books: []});
+  // Without the year it is still the day's report, but never another year's or another day's.
+  assert.deepEqual(pickFiles(['Report 18.10..xlsx'], '2026-10-18'), {report: 'Report 18.10..xlsx', books: []});
+  assert.deepEqual(pickFiles(['Report 18. 10.xlsx'], '2026-10-18'), {report: 'Report 18. 10.xlsx', books: []});
+  assert.deepEqual(pickFiles(['Report 18.10.2025.xlsx', 'Report 18.10.2026.xlsx'], '2026-10-18'), {report: 'Report 18.10.2026.xlsx', books: []});
+  assert.deepEqual(pickFiles(['Report 18.10.2025.xlsx', 'Report 18.1.xlsx', 'Report 8.10.xlsx'], '2026-10-18'), {report: null, books: []});
   // "Report dne" as its own Word file with the date: its text becomes the day's notes.
   assert.deepEqual(pickFiles(['Textový report 9.10.2026.docx', 'Textový report 8.10.2026.docx', 'Denní report 9.10.2026.xlsx'], '2026-10-09'),
     {report: 'Denní report 9.10.2026.xlsx', books: [], text: 'Textový report 9.10.2026.docx'});

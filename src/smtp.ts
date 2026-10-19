@@ -8,6 +8,8 @@ export type SmtpAccount = {host: string; port: number; user: string; password: s
 export type OutgoingMail = {
   from: {name: string; address: string}; to: string[]; subject: string; text: string;
   attachments: {filename: string; contentType: string; data: Uint8Array}[];
+  /** Marked as high priority in mail clients (Importance, X-Priority). */
+  important?: boolean;
 };
 export type Sent = {ok: true} | {ok: false; error: string};
 
@@ -45,6 +47,7 @@ export function mailMessage(mail: OutgoingMail, now: Date, id: string): string {
   const headers = [
     `From: ${encodedWord(mail.from.name)} <${mail.from.address}>`, `To: ${mail.to.join(', ')}`, `Subject: ${encodedWord(mail.subject)}`,
     `Date: ${now.toUTCString().replace('GMT', '+0000')}`, `Message-ID: <${id}@oko1>`, 'MIME-Version: 1.0', 'Auto-Submitted: auto-generated',
+    ...(mail.important ? ['Importance: high', 'X-Priority: 1'] : []),
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
   ];
   const parts = [

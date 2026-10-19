@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {aboPlan, buildAbo, knownAccounts, normalAccount, parseAbo, symbolFromNumber} from '../src/abo.ts';
 import {hasPhoto, mailInvoiceId, NO_HEADER_SUPPLIER, parseExtraction, photosAreDocuments, photoType, invoiceAttachments, parseIsdoc} from '../src/mail-invoices.ts';
-import {aboMail, missingDraft, monthExportMail, receiptsMail, receiptsReminder, receiptsText, type PaymentBatch} from '../src/supplies.ts';
+import {aboMail, missingDraft, monthExportMail, receiptsMail, receiptsReminder, receiptsText, reportMissingMail, type PaymentBatch} from '../src/supplies.ts';
 import type {Mail} from '../src/mime.ts';
 
 // Synthetic ABO file of a fictitious venue and fictitious suppliers (accounts made up).
@@ -145,4 +145,13 @@ test('accountant: the firm address first, then the name; never the venue itself'
   assert.deepEqual(findAccountant(rows.filter(row => row.direction === 'in'), 'podnik.test'), {address: 'p.dvorak@example.net', messages: 2});
   assert.equal(findAccountant(rows.slice(4), 'podnik.test'), null);
   assert.deepEqual(findAccountant([{direction: 'in', sender: 'jana@ucetni.test', senderName: 'Jana Šafránková', recipients: []}], 'podnik.test'), {address: 'jana@ucetni.test', messages: 1});
+});
+
+test('Missing daily report: an important e-mail with the day, the folder and what was found', () => {
+  const mail = reportMissingMail('2026-10-18', 'Testovací podnik', 'Testovací reporty', ['Google Drive: denní report za tento den ve složce není (naposledy uložené: Deník.xlsx).']);
+  assert.equal(mail.subject, '[DŮLEŽITÉ] Chybí denní report za neděli 18. 10., doplnit');
+  assert.match(mail.text, /„Testovací reporty“/);
+  assert.match(mail.text, /Denní report 18\.10\.2026\.xlsx/);
+  assert.match(mail.text, /naposledy uložené: Deník\.xlsx/);
+  assert.doesNotMatch(reportMissingMail('2026-10-19', 'Testovací podnik', 'Testovací reporty', []).text, /Co OKO1/);
 });

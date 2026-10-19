@@ -108,6 +108,9 @@ test('an e-mail for SMTP: encoded subject, attachment, dot-stuffing, replies ove
     attachments: [{filename: 'platby.csv', contentType: 'text/csv; charset=utf-8', data: new TextEncoder().encode('a;b')}]}, new Date('2026-10-20T05:00:00Z'), 'x1');
   assert.match(message, /^From: =\?UTF-8\?B\?.+\?= <info@example\.cz>\r\nTo: ucetni@example\.cz\r\nSubject: Platby\r\n/);
   assert.match(message, /Auto-Submitted: auto-generated/);
+  assert.doesNotMatch(message, /Importance/);
+  assert.match(mailMessage({from: {name: 'x', address: 'info@example.cz'}, to: ['info@example.cz'], subject: 's', text: 't', attachments: [], important: true}, new Date(), 'x3'),
+    /Importance: high\r\nX-Priority: 1\r\n/);
   assert.match(message, /filename="platby\.csv"/);
   assert.ok(message.endsWith('--oko1-x1--\r\n'));
   assert.equal(dotStuffed('a\r\n.b\r\n'), 'a\r\n..b\r\n.\r\n');
