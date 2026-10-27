@@ -154,4 +154,8 @@ test('Missing daily report: an important e-mail with the day, the folder and wha
   assert.match(mail.text, /Denní report 18\.10\.2026\.xlsx/);
   assert.match(mail.text, /naposledy uložené: Deník\.xlsx/);
   assert.doesNotMatch(reportMissingMail('2026-10-19', 'Testovací podnik', 'Testovací reporty', []).text, /Co OKO1/);
+  const streak = reportMissingMail('2026-10-26', 'Testovací podnik', 'Testovací reporty', [], '2026-10-17');
+  assert.equal(streak.subject, '[DŮLEŽITÉ] Chybí denní report za pondělí 26. 10. (už 9 dní, poslední 17. 10.), doplnit');
+  assert.match(streak.text, /nepřišel už 9 dní, poslední je za 17\. 10\. Prosím doplňte i chybějící dny\./);
+  assert.equal(reportMissingMail('2026-10-18', 'Testovací podnik', 'Testovací reporty', [], '2026-10-17').subject, mail.subject, 'one day: as before');
 });
