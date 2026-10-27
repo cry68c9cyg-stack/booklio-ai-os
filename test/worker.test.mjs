@@ -374,6 +374,20 @@ try {
   assert.deepEqual([...(await lateStub.lateReports('excel-late', new Date('2026-10-10T05:00:00Z'))).fetched], [], 'the send hours are the morning fetch');
   assert.deepEqual([...(await lateStub.lateReports('excel-late', new Date('2026-10-10T10:30:00Z'))).fetched], ['2026-10-09']);
   assert.deepEqual([...(await lateStub.lateReports('excel-late', new Date('2026-10-10T11:30:00Z'))).fetched], [], 'a day with its report is not fetched again');
+  // A report missing for longer (MC, 27. 10. 2026): up to 14 days back, the days older than 3 only every 6 hours.
+  assert.equal((await call('PUT', '/admin/t/excel-late-old/config', {...excelConfig, reportsLink: 'https://drive.google.com/drive/folders/1GoogleRootFolder?usp=sharing'})).status, 200);
+  const oldStub = (await mf.getDurableObjectNamespace('TENANTS')).get((await mf.getDurableObjectNamespace('TENANTS')).idFromName('excel-late-old'));
+  const folderReads = () => outbound.filter(entry => entry.url.includes('www.googleapis.com/drive/v3/files') && (new URL(entry.url).searchParams.get('q') ?? '').startsWith("'1GoogleRootFolder' in parents")).length;
+  let reads = folderReads();
+  assert.deepEqual([...(await oldStub.lateReports('excel-late-old', new Date('2026-10-20T10:30:00Z'))).fetched], ['2026-10-09'], '11 days back');
+  assert.equal(folderReads() - reads, 14, 'each of the 14 days read once');
+  reads = folderReads();
+  await oldStub.lateReports('excel-late-old', new Date('2026-10-20T11:30:00Z'));
+  assert.equal(folderReads() - reads, 3, 'an hour later only the last 3 days');
+  reads = folderReads();
+  await oldStub.lateReports('excel-late-old', new Date('2026-10-20T16:31:00Z'));
+  assert.equal(folderReads() - reads, 3 + 10, '6 hours later the older ones again too, without 9. 10. that has its report');
+  assert.deepEqual([...(await oldStub.lateReports('excel-late-old', new Date('2026-10-24T10:30:00Z'))).fetched], [], 'beyond 14 days nothing');
   const fetchedGoogle = await (await call('POST', '/admin/t/excel-google/fetch', {date: '2026-10-09'})).json();
   assert.equal(fetchedGoogle.found, true, JSON.stringify(fetchedGoogle.warnings));
   assert.deepEqual((await (await call('GET', '/admin/t/excel-google/report?date=2026-10-09')).json()).report.files, ['Denní report 9.10.2026.xlsx', 'Peněžní deník.xlsx']);
