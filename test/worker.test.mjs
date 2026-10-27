@@ -1223,7 +1223,7 @@ try {
   const nextMorning = await tickWeather('2026-10-15T05:00:00Z');
   assert.equal(weatherCalls.length, 2, 'a new read the next morning');
   assert.equal(nextMorning.decision, 'send');
-  assert.match(nextMorning.text, /\nTržba: 0 Kč \(plán 12 500 Kč, −100 %\)\n/);
+  assert.match(nextMorning.text, /\nTržba: neznámá, chybí report i peněžní deník \(plán 12 500 Kč\)\n/);
   assert.equal((await (await call('GET', '/admin/t/weather-venue/briefing?date=2026-10-14')).json()).briefing.forecast.days[0].weatherText, '14 °C, déšť');
 
   // Events of the venue: today's events with the guests booked there, the factor from past event days in the forecast, bookings by lead time and source.
