@@ -75,8 +75,11 @@ type MailAi = {
 /** The language model that turns an invoice's text into fields (structured JSON output). */
 /** The hourly visit to the mailbox (wrangler.jsonc). */
 const MAIL_CRON = '30 * * * *';
-/** How many past business days a late daily report is still looked for (hourly). */
-const LATE_REPORT_DAYS = 3;
+/**
+ * How many past business days a late daily report is still looked for: the last LATE_REPORT_HOURLY_DAYS every hour, the older
+ * ones up to LATE_REPORT_DAYS every LATE_REPORT_OLDER_HOURS (MC, 27. 10. 2026: reports missing for 10 days load by themselves once saved).
+ */
+const LATE_REPORT_DAYS = 14, LATE_REPORT_HOURLY_DAYS = 3, LATE_REPORT_OLDER_HOURS = 6;
 const INVOICE_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 /** How long one visit to the mailbox may take, and how many documents it reads; the rest waits for the next visit a minute later. */
 const MAIL_BUDGET_MS = 120000, MAIL_DOCUMENTS_PER_VISIT = 12;
@@ -744,7 +747,7 @@ export class TenantObject extends DurableObject<Env> {
    * Reads the day's Excel files, archives them and stores the report. With OKO1's Google account the folder
    * "OKO1 reporty" shared with it wins (no link needed); otherwise the configured OneDrive or Google Drive link.
    */
-  private async fetchReport(tenant: string, date: string) {
+  private async fetchReport(tenant: string, date: string, at = new Date()) {
     const link = this.config()?.reportsLink ?? null;
     const account = serviceAccount(this.env.GOOGLE_SERVICE_ACCOUNT);
     if (!link && !account) return {found: false, warnings: ['OneDrive: odkaz na složku není nastavený.']};
@@ -771,7 +774,7 @@ export class TenantObject extends DurableObject<Env> {
     } catch (error) {
       warnings = [`OneDrive: chyba při čtení (${String(error).slice(0, 100)}).`];
     }
-    this.sql.exec('INSERT INTO report_fetches VALUES(?,?,?,?)', date, new Date().toISOString(), found ? 1 : 0, JSON.stringify(warnings));
+    this.sql.exec('INSERT INTO report_fetches VALUES(?,?,?,?)', date, at.toISOString(), found ? 1 : 0, JSON.stringify(warnings));
     return {found, warnings};
   }
 
@@ -2325,7 +2328,8 @@ export class TenantObject extends DurableObject<Env> {
    */
   /**
    * A daily report saved late is picked up by itself (MC, 19. 10. 2026): every hour outside the morning send hours the last
-   * LATE_REPORT_DAYS business days without the managers' report are looked for again, until it is in.
+   * LATE_REPORT_HOURLY_DAYS business days without the managers' report are looked for again, until it is in; the older ones up
+   * to LATE_REPORT_DAYS when their last look is LATE_REPORT_OLDER_HOURS old, so a long gap fills in without 14 reads every hour.
    */
   async lateReports(tenant: string, now = new Date()) {
     const config = this.config();
@@ -2334,8 +2338,12 @@ export class TenantObject extends DurableObject<Env> {
     for (let back = 1; back <= LATE_REPORT_DAYS; back++) {
       const date = addDays(today, -back);
       if (this.hasReport(date)) continue;
+      if (back > LATE_REPORT_HOURLY_DAYS) {
+        const last = this.sql.exec<{at: string | null}>('SELECT max(at) AS at FROM report_fetches WHERE business_date=?', date).toArray()[0]?.at;
+        if (last && now.getTime() - Date.parse(last) < LATE_REPORT_OLDER_HOURS * HOUR_MS) continue;
+      }
       // Only the managers' report counts: a day the cash book alone covers is looked for again.
-      await this.fetchReport(tenant, date);
+      await this.fetchReport(tenant, date, now);
       if (this.hasReport(date)) fetched.push(date);
     }
     return {fetched};
