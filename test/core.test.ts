@@ -5,7 +5,7 @@ import {bottleLosses, buildBriefing, noShowAlarm, noShowRate, outlook, crowns, r
 import {iuctoKey, parseChart, parseJournalPage, sumCosts} from '../src/iucto.ts';
 import {briefingDecision, reportDate, sendersFrom} from '../src/schedule.ts';
 import {nextCode, seconds} from '../src/login.ts';
-import {ownerOf, todoList} from '../src/todo.ts';
+import {ownerOf, sortedTodos, todoList} from '../src/todo.ts';
 import {counted, drinkMargins, dueSoon, duplicateInvoices, foodCostAlert, litresPerUnit, monthOverMonth, overdueInvoices, priceRises, renderSupplies, risesBySupplier, supplyBrief, supplySummary, unitPrice, unusualPurchases} from '../src/supplies.ts';
 import {weatherDays, weatherText} from '../src/weather.ts';
 import {competitorComparison, competitorSections, itemProfit, menuGaps, menuItemTax, menuMatrix, nameKey, pairSale, priceCheck, priceExperiment, priceMismatches, pricesOfText, repricing, volumeOf, type ItemSale} from '../src/menu.ts';
@@ -71,6 +71,20 @@ test('briefing sums revenue, sections, payments, voids and cash differences', ()
   assert.match(text, /⚠ Storna po zaplacení: 1× 60 Kč/);
   assert.match(text, /⚠ Rozdíl v hotovosti: bar −20 Kč/);
   assert.doesNotMatch(text, /Report chybí/);
+});
+
+test('Report missing for days: the message says since when, the revenue is unknown instead of 0 Kč, K vyřízení says the same', () => {
+  const briefing = buildBriefing({businessDate: '2026-10-26', config, incomplete: true, lastReportDate: '2026-10-17', bills: [], closings: [], planHistory: [{revenueCents: 9000000}]});
+  const text = renderBriefing('X', briefing);
+  assert.match(text, /⚠ Denní report chybí už 9 dní \(poslední 17\. 10\.\), do složky reportů nic nového nepřišlo\./);
+  assert.match(text, /Tržba: neznámá, chybí report i peněžní deník/);
+  assert.doesNotMatch(text, /0 Kč|−100 %|Účty 0/);
+  assert.equal(sortedTodos(briefing)[0].text, 'Denní report chybí už 9 dní (poslední 17. 10.): uložit do složky reportů.');
+  assert.equal(sortedTodos(briefing)[0].owner, 'Matěj');
+  // Only yesterday missing: the usual line, the streak only from two days on (2 dny, 5 dní).
+  assert.match(renderBriefing('X', buildBriefing({businessDate: '2026-10-18', config, incomplete: true, lastReportDate: '2026-10-17', bills: [], closings: [], planHistory: []})), /⚠ Report chybí/);
+  assert.match(renderBriefing('X', buildBriefing({businessDate: '2026-10-19', config, incomplete: true, lastReportDate: '2026-10-17', bills: [], closings: [], planHistory: []})), /už 2 dny/);
+  assert.doesNotMatch(renderBriefing('X', buildBriefing({businessDate: '2026-10-26', config, incomplete: false, lastReportDate: '2026-10-17', bills: [], closings: [], planHistory: []})), /Denní report chybí/);
 });
 
 test('incomplete briefing says which closing is missing', () => {

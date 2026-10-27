@@ -172,6 +172,8 @@ export type Briefing = {
   /** The venue's mailbox (info@): messages waiting for an answer, what is not under control; on Monday the week. */
   mail?: MailBrief | null;
   incomplete: boolean;
+  /** The last earlier business day with the managers' report, while this day has none: shows how long nothing has come in. */
+  lastReportDate?: string | null;
 };
 export type WeekPart = {revenueCents: number; revenueDays: number; reservations: number; guests: number; noShows: number; noShowGuests: number;
   /** Bookings for these days that were cancelled (by the guest or the staff); a week stored before this field has none. */
@@ -752,7 +754,7 @@ export function planFrom(history: {revenueCents: number}[]): Briefing['plan'] {
 
 export function buildBriefing(input: {
   businessDate: string; config: TenantConfig; bills: Bill[]; closings: CashClosing[];
-  planHistory: {revenueCents: number}[]; incomplete: boolean; bottleChecks?: BottleCheck[];
+  planHistory: {revenueCents: number}[]; incomplete: boolean; lastReportDate?: string | null; bottleChecks?: BottleCheck[];
   report?: DailyReport | null; notes?: NotesAnalysis | null;
   reservations?: Reservation[]; reservationsToday?: Reservation[];
   web?: WebTraffic; webLastWeek?: WebTraffic;
@@ -876,7 +878,22 @@ export function buildBriefing(input: {
     lastYearRevenueCents: input.lastYearRevenueCents ?? null, target: input.target ?? null, dataGaps: input.dataGaps ?? null,
     tableChecks: input.tableChecks ?? [], noteThemes: input.noteThemes ?? [], themes: input.themes ?? null, djRanking: input.djRanking ?? null,
     incomplete: input.incomplete,
+    lastReportDate: input.incomplete ? input.lastReportDate ?? null : null,
   };
+}
+
+/**
+ * How long the managers' report has been missing, when it is more than this one day: "už 10 dní (poslední 17. 10.)".
+ * The days are counted from the last report to this business day.
+ * Without it every morning's message looked the same and did not say that nothing had come in for days (MC, 27. 10. 2026).
+ */
+export function reportGap(briefing: Pick<Briefing, 'businessDate' | 'incomplete' | 'lastReportDate'>): string | null {
+  if (!briefing.incomplete) return null;
+  if (!briefing.lastReportDate) return null;
+  const days = Math.round((Date.parse(briefing.businessDate) - Date.parse(briefing.lastReportDate)) / 86400000);
+  if (days < 2) return null;
+  const [, month, day] = briefing.lastReportDate.split('-').map(Number);
+  return `už ${days} ${days <= 4 ? 'dny' : 'dní'} (poslední ${day}. ${month}.)`;
 }
 
 const days = ['neděle', 'pondělí', 'úterý', 'středa', 'čtvrtek', 'pátek', 'sobota'];
@@ -897,11 +914,16 @@ function czechDate(date: string): string {
 /** Plain text for WhatsApp or SMS. Short lines, warnings marked with ⚠. */
 export function renderBriefing(name: string, briefing: Briefing): string {
   const lines = [`${name} · ${czechDate(briefing.businessDate)}`];
-  if (briefing.incomplete) lines.push(`⚠ Report chybí${briefing.missingClosings.length ? ': ' + briefing.missingClosings.join(', ') : ''}. Čísla nemusí být konečná.`);
+  const gap = reportGap(briefing);
+  if (gap) lines.push(`⚠ Denní report chybí ${gap}, do složky reportů nic nového nepřišlo.`);
+  else if (briefing.incomplete) lines.push(`⚠ Report chybí${briefing.missingClosings.length ? ': ' + briefing.missingClosings.join(', ') : ''}. Čísla nemusí být konečná.`);
   for (const source of briefing.silent) lines.push(`⚠ ${source.name} neposílá data od ${source.since}.`);
   if (hasGaps(briefing.dataGaps)) lines.push(`⚠ Chybí data za 14 dní: ${gapsText(briefing.dataGaps!)}`);
-  let revenue = `Tržba: ${crowns(briefing.revenueCents)}`;
-  if (briefing.plan) {
+  // No bills, no report and no cash book for the day: the revenue is unknown, not zero.
+  const unknown = briefing.source === 'none' && !briefing.revenueCents;
+  let revenue = unknown ? 'Tržba: neznámá, chybí report i peněžní deník' : `Tržba: ${crowns(briefing.revenueCents)}`;
+  if (briefing.plan && unknown) revenue += ` (plán ${crowns(briefing.plan.revenueCents)})`;
+  else if (briefing.plan) {
     const delta = briefing.plan.revenueCents ? Math.round((briefing.revenueCents / briefing.plan.revenueCents - 1) * 100) : 0;
     revenue += ` (plán ${crowns(briefing.plan.revenueCents)}, ${delta >= 0 ? '+' : '−'}${Math.abs(delta)} %)`;
   }
@@ -909,13 +931,14 @@ export function renderBriefing(name: string, briefing: Briefing): string {
   if (briefing.lastYearRevenueCents && briefing.revenueCents && !briefing.incomplete) revenue += ` · loni ${crowns(briefing.lastYearRevenueCents)}${change(briefing.revenueCents, briefing.lastYearRevenueCents)}`;
   lines.push(revenue);
   if (briefing.bySection.length > 1) lines.push(briefing.bySection.map(row => `${row.label} ${crowns(row.revenueCents)}`).join(' · '));
-  if (briefing.source !== 'report') lines.push(`Účty ${briefing.bills} · hosté ${briefing.guests}${briefing.averageBillCents === null ? '' : ` · průměrný účet ${crowns(briefing.averageBillCents)}`}`);
+  if (briefing.source === 'pos') lines.push(`Účty ${briefing.bills} · hosté ${briefing.guests}${briefing.averageBillCents === null ? '' : ` · průměrný účet ${crowns(briefing.averageBillCents)}`}`);
   // Shares of what was paid in; a negative cash part (more on cards than the bill) is shown as an amount.
   const paid = briefing.payments.filter(row => row.amountCents > 0).reduce((sum, row) => sum + row.amountCents, 0);
   if (paid > 0) lines.push('Platby: ' + briefing.payments.map(row => `${methods[row.method] ?? row.method} ${row.amountCents < 0 ? crowns(row.amountCents) : `${Math.round(row.amountCents / paid * 100)} %`}`).join(', '));
   const control = [`slevy ${crowns(briefing.discountsCents)}`, `storna ${briefing.voids.count}× ${crowns(briefing.voids.amountCents)}`];
   if (briefing.cancelledBills) control.push(`zrušené účty ${briefing.cancelledBills}`);
-  lines.push('Kontrola: ' + control.join(' · '));
+  // Without any data for the day the zeros say nothing.
+  if (!unknown) lines.push('Kontrola: ' + control.join(' · '));
   if (briefing.voids.afterPaymentCount) lines.push(`⚠ Storna po zaplacení: ${briefing.voids.afterPaymentCount}× ${crowns(briefing.voids.afterPaymentCents)}`);
   const differences = briefing.cash.filter(row => row.differenceCents !== 0);
   if (differences.length) lines.push('⚠ Rozdíl v hotovosti: ' + differences.map(row => `${row.registerId} ${row.differenceCents > 0 ? '+' : ''}${crowns(row.differenceCents)}`).join(', '));

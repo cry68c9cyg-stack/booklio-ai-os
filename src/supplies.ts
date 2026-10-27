@@ -610,10 +610,15 @@ const DAY_NAMES = ['neděli', 'pondělí', 'úterý', 'středu', 'čtvrtek', 'p�
  * The managers' daily report is missing after the last send hour (MC, 19. 10. 2026): an important e-mail to the venue's
  * mailbox, every time, saying what is missing and where to save it.
  */
-export function reportMissingMail(date: string, venue: string, folder: string, found: string[]): {subject: string; text: string} {
+export function reportMissingMail(date: string, venue: string, folder: string, found: string[], lastReport: string | null = null): {subject: string; text: string} {
   const day = `${DAY_NAMES[weekday(date)]} ${shortDate(date)}`;
-  return {subject: `[DŮLEŽITÉ] Chybí denní report za ${day}, doplnit`, text: [`Dobrý den,`, ``,
-    `ve složce „${folder}“ na Google Drive chybí denní report za ${day}. Ranní zpráva proto odešla bez něj a čísla dne nejsou konečná.`, ``,
+  // Days in a row without a report are said at once in the subject, so that a repeated alert does not look like yesterday's.
+  const days = lastReport ? Math.round((Date.parse(date) - Date.parse(lastReport)) / 86400000) : 0;
+  const count = `${days} ${days <= 4 ? 'dny' : 'dní'}`;
+  const streak = days >= 2 ? ` (už ${count}, poslední ${shortDate(lastReport!)})` : '';
+  return {subject: `[DŮLEŽITÉ] Chybí denní report za ${day}${streak}, doplnit`, text: [`Dobrý den,`, ``,
+    `ve složce „${folder}“ na Google Drive chybí denní report za ${day} Ranní zpráva proto odešla bez něj a čísla dne nejsou konečná.`,
+    ...(streak ? [`Denní report nepřišel už ${count}, poslední je za ${shortDate(lastReport!)} Prosím doplňte i chybějící dny.`] : []), ``,
     `Prosím uložte ho tam ještě dnes jako sešit Excelu s datem v názvu, například „Denní report ${Number(date.slice(8))}.${Number(date.slice(5, 7))}.${date.slice(0, 4)}.xlsx“. ` +
     `OKO1 si ho samo načte a doplní do přehledu.`,
     ...(found.length ? [``, `Co OKO1 ve složce našlo: ${found.join(' ')}`] : []), ``,

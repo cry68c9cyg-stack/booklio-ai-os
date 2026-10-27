@@ -1424,6 +1424,12 @@ export class TenantObject extends DurableObject<Env> {
   }
 
   /** A stored report counts only when the managers' daily report has revenue: the cash book alone is not the day's report. */
+  /** The last business day before `date` with the managers' report (not the cash book alone), or null. */
+  private lastReportBefore(date: string): string | null {
+    return this.sql.exec<{day: string | null}>("SELECT max(business_date) AS day FROM report_lines WHERE business_date < ? AND kind='revenue_section' AND substr(label, 1, ?) <> ?",
+      date, JOURNAL_LABEL.length, JOURNAL_LABEL).toArray()[0]?.day ?? null;
+  }
+
   private hasReport(date: string): boolean {
     return this.sql.exec("SELECT 1 FROM report_lines WHERE business_date=? AND kind='revenue_section' AND substr(label, 1, ?) <> ? LIMIT 1",
       date, JOURNAL_LABEL.length, JOURNAL_LABEL).toArray().length > 0;
@@ -2263,7 +2269,7 @@ export class TenantObject extends DurableObject<Env> {
     const guestOutlook = this.guestOutlook(config, date, now), forecast = this.forecast(date);
     const planHistory = [7, 14, 21, 28].map(days => this.dayRevenue(addDays(date, -days))).filter((value): value is number => value !== null).map(revenueCents => ({revenueCents}));
     const briefing = buildBriefing({businessDate: date, config, bills: this.day<Bill>('bill', date), closings: this.day<CashClosing>('cash_closing', date),
-      bottleChecks: this.day<BottleCheck>('bottle_check', date), planHistory, incomplete, report: this.report(date), notes: this.notes(date),
+      bottleChecks: this.day<BottleCheck>('bottle_check', date), planHistory, incomplete, lastReportDate: incomplete ? this.lastReportBefore(date) : null, report: this.report(date), notes: this.notes(date),
       reservations: this.day<Reservation>('reservation', date), reservationsToday: this.day<Reservation>('reservation', addDays(date, 1)),
       web: this.day<WebTraffic>('web_traffic', date)[0], webLastWeek: this.day<WebTraffic>('web_traffic', addDays(date, -7))[0],
       webUsual: [7, 14, 21, 28].map(back => this.day<WebTraffic>('web_traffic', addDays(date, -back))[0]).filter((web): web is WebTraffic => !!web)
@@ -2786,7 +2792,7 @@ export class TenantObject extends DurableObject<Env> {
     if (!account) return;
     await this.officeMail('report-missing', date, at, async () => {
       const fetched = this.sql.exec<{warnings: string}>('SELECT warnings FROM report_fetches WHERE business_date=? ORDER BY at DESC LIMIT 1', date).toArray()[0];
-      const mail = reportMissingMail(date, config.name, GOOGLE_REPORTS_FOLDER, fetched ? JSON.parse(fetched.warnings) as string[] : []);
+      const mail = reportMissingMail(date, config.name, GOOGLE_REPORTS_FOLDER, fetched ? JSON.parse(fetched.warnings) as string[] : [], this.lastReportBefore(date));
       const result = await sendMail(account, {from: {name: `OKO1 – ${config.name}`, address: account.user}, to: [account.user], subject: mail.subject, text: mail.text,
         attachments: [], important: true}, at);
       return result.ok ? {status: 'sent'} : {status: 'failed', error: result.error};
