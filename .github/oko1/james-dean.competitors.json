@@ -1,5 +1,5 @@
 {
- "checkedOn": "2026-10-18",
+ "checkedOn": "2026-11-01",
  "scope": "Dlouhá a V Kolkovně",
  "basket": [
   {
@@ -2233,6 +2233,481 @@
    ]
   },
   {
+   "key": "bed-lounge",
+   "name": "Bed Lounge",
+   "area": "Dlouhá 2",
+   "kind": "cocktail bar",
+   "url": "https://bedlounge.cz/pdf/BD_MENU_2025_21x21_CZE.pdf",
+   "items": [
+    {
+     "item": "wine-white",
+     "name": "Chardonnay Roche Mazet 0,1 l",
+     "priceCzk": 229,
+     "volumeMl": 100,
+     "approx": true
+    },
+    {
+     "item": "wine-red",
+     "name": "Roche Mazet Merlot 0,1 l",
+     "priceCzk": 229,
+     "volumeMl": 100,
+     "approx": true
+    },
+    {
+     "item": "prosecco-glass",
+     "name": "Prosecco 0,1 l",
+     "priceCzk": 229,
+     "volumeMl": 100,
+     "approx": true
+    },
+    {
+     "item": "wine-bottle",
+     "name": "Chardonnay Roche Mazet 0,75 l",
+     "priceCzk": 990,
+     "volumeMl": 750,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "prosecco-bottle",
+     "name": "Prosecco 0,75 l",
+     "priceCzk": 890,
+     "volumeMl": 750,
+     "note": "cena z PDF s nejistým párováním; dříve 990",
+     "approx": true
+    },
+    {
+     "item": "moet-bottle",
+     "name": "Moët & Chandon Imperial Brut",
+     "priceCzk": 2900,
+     "volumeMl": 750,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "caipirinha",
+     "name": "Caipirinha",
+     "priceCzk": 325
+    },
+    {
+     "item": "espresso-martini",
+     "name": "Espresso Martini",
+     "priceCzk": 325
+    },
+    {
+     "item": "moscow-mule",
+     "name": "Moscow Mule",
+     "priceCzk": 325
+    },
+    {
+     "item": "cosmopolitan",
+     "name": "Cosmopolitan",
+     "priceCzk": 325
+    },
+    {
+     "item": "white-russian",
+     "name": "White Russian",
+     "priceCzk": 325
+    },
+    {
+     "item": "negroni",
+     "name": "Negroni",
+     "priceCzk": 325
+    },
+    {
+     "item": "gin-fizz",
+     "name": "Gin Fizz",
+     "priceCzk": 325
+    },
+    {
+     "item": "old-fashioned",
+     "name": "Old Fashioned (Jim Beam)",
+     "priceCzk": 325
+    },
+    {
+     "item": "aperol-spritz",
+     "name": "Aperol Spritz",
+     "priceCzk": 325
+    },
+    {
+     "item": "mojito",
+     "name": "Mojito (small)",
+     "priceCzk": 325,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "daiquiri",
+     "name": "Daiquiri (small)",
+     "priceCzk": 325,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "margarita",
+     "name": "Margarita (small)",
+     "priceCzk": 325,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "hugo",
+     "name": "Hugo Spritz (small)",
+     "priceCzk": 325,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "long-island",
+     "name": "Long Island Iced Tea (small)",
+     "priceCzk": 325,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "pina-colada",
+     "name": "Piña Colada",
+     "priceCzk": 325,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "cuba-libre",
+     "name": "Cuba Libre (small)",
+     "priceCzk": 325,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "b52",
+     "name": "B52",
+     "priceCzk": 190,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "virgin-mojito",
+     "name": "Virgin Mojito",
+     "priceCzk": 165,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "vodka",
+     "name": "Finlandia",
+     "priceCzk": 150,
+     "volumeMl": 40
+    },
+    {
+     "item": "vodka",
+     "name": "Absolut",
+     "priceCzk": 150,
+     "volumeMl": 40
+    },
+    {
+     "item": "vodka-premium",
+     "name": "Grey Goose",
+     "priceCzk": 230,
+     "volumeMl": 40
+    },
+    {
+     "item": "rum-white",
+     "name": "Bacardi Carta Blanca",
+     "priceCzk": 160,
+     "volumeMl": 40,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "rum-spiced",
+     "name": "Captain Morgan Spiced Gold",
+     "priceCzk": 160,
+     "volumeMl": 40,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "rum-zacapa",
+     "name": "Zacapa 23 Y.O.",
+     "priceCzk": 270,
+     "volumeMl": 40,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "rum-diplomatico",
+     "name": "Diplomático",
+     "priceCzk": 270,
+     "volumeMl": 40,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "gin",
+     "name": "Beefeater",
+     "priceCzk": 160,
+     "volumeMl": 40,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "gin",
+     "name": "Bombay Sapphire",
+     "priceCzk": 160,
+     "volumeMl": 40,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "gin-hendricks",
+     "name": "Hendrick's",
+     "priceCzk": 190,
+     "volumeMl": 40,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "tequila-patron",
+     "name": "Patrón Silver",
+     "priceCzk": 260,
+     "volumeMl": 40,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "jack",
+     "name": "Jack Daniel's",
+     "priceCzk": 160,
+     "volumeMl": 40,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "jameson",
+     "name": "Jameson",
+     "priceCzk": 160,
+     "volumeMl": 40,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "jw-red",
+     "name": "Johnnie Walker Red Label",
+     "priceCzk": 170,
+     "volumeMl": 40,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "jw-black",
+     "name": "Johnnie Walker Black Label",
+     "priceCzk": 220,
+     "volumeMl": 40,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "chivas",
+     "name": "Chivas Regal 12 Y.O.",
+     "priceCzk": 170,
+     "volumeMl": 40,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "jim-beam",
+     "name": "Jim Beam",
+     "priceCzk": 160,
+     "volumeMl": 40,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "jager",
+     "name": "Jägermeister",
+     "priceCzk": 160,
+     "volumeMl": 40
+    },
+    {
+     "item": "baileys",
+     "name": "Bailey's",
+     "priceCzk": 160,
+     "volumeMl": 40
+    },
+    {
+     "item": "becherovka",
+     "name": "Becherovka",
+     "priceCzk": 160,
+     "volumeMl": 40
+    },
+    {
+     "item": "aperol-shot",
+     "name": "Aperol / Campari",
+     "priceCzk": 160,
+     "volumeMl": 40
+    },
+    {
+     "item": "beer-draft-05",
+     "name": "Pilsner Urquell 0,5 l",
+     "priceCzk": 149,
+     "volumeMl": 500,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "beer-import",
+     "name": "Corona Extra",
+     "priceCzk": 130,
+     "note": "objem neuveden; cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "cola",
+     "name": "Coca-Cola / Fanta / Sprite 0,2 l",
+     "priceCzk": 129,
+     "volumeMl": 200,
+     "note": "objem 0,2 l",
+     "approx": true
+    },
+    {
+     "item": "tonic",
+     "name": "Kinley tonic 0,2 l",
+     "priceCzk": 129,
+     "volumeMl": 200,
+     "note": "objem 0,2 l",
+     "approx": true
+    },
+    {
+     "item": "ginger-beer",
+     "name": "Kinley ginger beer 0,2 l",
+     "priceCzk": 129,
+     "volumeMl": 200,
+     "note": "objem 0,2 l",
+     "approx": true
+    },
+    {
+     "item": "water-small",
+     "name": "Natura 0,3 l",
+     "priceCzk": 129,
+     "volumeMl": 300
+    },
+    {
+     "item": "water-large",
+     "name": "Römerquelle 0,75 l",
+     "priceCzk": 185,
+     "volumeMl": 750
+    },
+    {
+     "item": "water-carafe",
+     "name": "Karafa vody (citron / máta) 1 l",
+     "priceCzk": 140,
+     "volumeMl": 1000
+    },
+    {
+     "item": "red-bull",
+     "name": "Red Bull 0,25 l",
+     "priceCzk": 150,
+     "volumeMl": 250
+    },
+    {
+     "item": "juice",
+     "name": "Cappy 0,25 l",
+     "priceCzk": 129,
+     "volumeMl": 250,
+     "note": "objem 0,25 l",
+     "approx": true
+    },
+    {
+     "item": "lemonade",
+     "name": "Domácí limonády 0,5 l",
+     "priceCzk": 195,
+     "volumeMl": 500
+    },
+    {
+     "item": "ice-tea",
+     "name": "Fuzetea 0,25 l",
+     "priceCzk": 95,
+     "volumeMl": 250,
+     "note": "průmyslový ledový čaj",
+     "approx": true
+    },
+    {
+     "item": "espresso",
+     "name": "Espresso",
+     "priceCzk": 125
+    },
+    {
+     "item": "espresso-double",
+     "name": "Espresso Doppio",
+     "priceCzk": 145
+    },
+    {
+     "item": "cappuccino",
+     "name": "Cappuccino",
+     "priceCzk": 135
+    },
+    {
+     "item": "latte",
+     "name": "Latte Macchiato",
+     "priceCzk": 155,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "tea",
+     "name": "Čaj",
+     "priceCzk": 145
+    },
+    {
+     "item": "hot-chocolate",
+     "name": "Horká čokoláda",
+     "priceCzk": 175
+    },
+    {
+     "item": "caesar",
+     "name": "Salát Caesare",
+     "priceCzk": 390,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "steak",
+     "name": "Steak z hovězí svíčkové 200 g",
+     "priceCzk": 790,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "ribs",
+     "name": "Pečená BBQ žebírka s kukuřicí",
+     "priceCzk": 650,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "chicken-main",
+     "name": "Farmářské kuřecí prso sous vide 200 g",
+     "priceCzk": 550,
+     "note": "cena z PDF s nejistým párováním",
+     "approx": true
+    },
+    {
+     "item": "cake",
+     "name": "Karamelový cheesecake",
+     "priceCzk": 295,
+     "approx": true
+    },
+    {
+     "item": "cake",
+     "name": "Jablečný štrúdl s vanilkovou zmrzlinou",
+     "priceCzk": 295,
+     "note": "se zmrzlinou",
+     "approx": true
+    }
+   ],
+   "note": "lístek PDF z 11/2026 přečten novým převodem; ceny označené approx mají nejisté párování sloupců; cheeseburger bez ceny na lístku"
+  },
+  {
    "key": "zakladna",
    "name": "Základna Restaurace",
    "area": "Dlouhá 36",
@@ -2242,7 +2717,8 @@
     {
      "item": "soup",
      "name": "Silný hovězí vývar s masem, zeleninou a nudlemi",
-     "priceCzk": 99
+     "priceCzk": 99,
+     "approx": true
     },
     {
      "item": "broth",
@@ -2287,7 +2763,7 @@
     },
     {
      "item": "ribs",
-     "name": "Pečená vepřová žebra v bbq omáčce",
+     "name": "Pečená vepřová žebra v bbq omáčce 450 g",
      "priceCzk": 395
     },
     {
@@ -2604,6 +3080,26 @@
      "item": "tea",
      "name": "Čaj",
      "priceCzk": 69
+    },
+    {
+     "item": "beer-nonalc",
+     "name": "Birell nealko 0,5 l",
+     "priceCzk": 79,
+     "volumeMl": 500,
+     "approx": true
+    },
+    {
+     "item": "beer-nonalc",
+     "name": "Birell nealko 0,3 l",
+     "priceCzk": 69,
+     "volumeMl": 300,
+     "approx": true
+    },
+    {
+     "item": "cake",
+     "name": "Čokoládový fondán s vanilkovou zmrzlinou",
+     "priceCzk": 189,
+     "approx": true
     }
    ]
   },
@@ -2701,7 +3197,8 @@
      "name": "Diplomático Clásico",
      "priceCzk": 125,
      "volumeMl": 40,
-     "approx": true
+     "approx": true,
+     "note": "Clásico, ne Reserva Exclusiva"
     },
     {
      "item": "gin",
@@ -2875,6 +3372,104 @@
      "item": "bloody-mary",
      "name": "Bloody Mary",
      "priceCzk": 165
+    },
+    {
+     "item": "cider",
+     "name": "Frisco 0,33",
+     "priceCzk": 75,
+     "volumeMl": 330
+    },
+    {
+     "item": "rum-white",
+     "name": "Havana Club (bílý/Añejo Especial)",
+     "priceCzk": 95,
+     "volumeMl": 40,
+     "approx": true,
+     "note": "ne Bacardi"
+    },
+    {
+     "item": "tonic",
+     "name": "Schweppes Tonic 0,25 l",
+     "priceCzk": 55,
+     "volumeMl": 250
+    },
+    {
+     "item": "cola",
+     "name": "Pepsi Cola 0,25 l",
+     "priceCzk": 55,
+     "volumeMl": 250,
+     "approx": true,
+     "note": "Pepsi, 0,25 l"
+    },
+    {
+     "item": "water-small",
+     "name": "Toma 0,33 l",
+     "priceCzk": 45,
+     "volumeMl": 330
+    },
+    {
+     "item": "espresso",
+     "name": "Espresso (Nespresso)",
+     "priceCzk": 55
+    },
+    {
+     "item": "tea",
+     "name": "Čaj",
+     "priceCzk": 55
+    },
+    {
+     "item": "cuba-libre",
+     "name": "Cuba Libre",
+     "priceCzk": 145
+    },
+    {
+     "item": "pina-colada",
+     "name": "Piña Colada",
+     "priceCzk": 165
+    },
+    {
+     "item": "white-russian",
+     "name": "White Russian",
+     "priceCzk": 165
+    },
+    {
+     "item": "virgin-mojito",
+     "name": "Virgin Mojito",
+     "priceCzk": 105
+    },
+    {
+     "item": "b52",
+     "name": "B-52",
+     "priceCzk": 95
+    },
+    {
+     "item": "juice",
+     "name": "Juice 1 dl",
+     "priceCzk": 25,
+     "volumeMl": 100,
+     "approx": true,
+     "note": "1 dl"
+    },
+    {
+     "item": "beer-draft-05",
+     "name": "Guinness 0,5 l",
+     "priceCzk": 155,
+     "volumeMl": 500,
+     "approx": true,
+     "note": "tmavé"
+    },
+    {
+     "item": "ice-tea",
+     "name": "Ice tea 0,25 l",
+     "priceCzk": 55,
+     "volumeMl": 250,
+     "approx": true
+    },
+    {
+     "item": "red-bull",
+     "name": "Red Bull 0,25 l",
+     "priceCzk": 85,
+     "volumeMl": 250
     }
    ]
   },
@@ -3092,10 +3687,16 @@
     },
     {
      "item": "soup",
-     "name": "Polévka",
+     "name": "Miso Shiru",
      "priceCzk": 78,
-     "approx": true,
-     "note": "pravděpodobně miso"
+     "volumeMl": 200,
+     "approx": true
+    },
+    {
+     "item": "wine-white",
+     "name": "Sauvignon Blanc Sileni",
+     "priceCzk": 145,
+     "volumeMl": 150
     }
    ]
   },
@@ -3109,7 +3710,7 @@
     {
      "item": "beer-draft-05",
      "name": "Plzeň světlý ležák hladinka",
-     "priceCzk": 74,
+     "priceCzk": 76,
      "volumeMl": 500
     },
     {
@@ -3252,149 +3853,37 @@
      "name": "Rakvička se šlehačkou",
      "priceCzk": 69,
      "approx": true
+    },
+    {
+     "item": "beer-draft-05",
+     "name": "Náš Kozel černý nefiltrovaný 0,5 l",
+     "priceCzk": 78,
+     "volumeMl": 500,
+     "approx": true,
+     "note": "tmavé"
+    },
+    {
+     "item": "beer-draft-03",
+     "name": "Plzeň světlý ležák (šnyt/mlíko)",
+     "priceCzk": 57,
+     "volumeMl": 300
+    },
+    {
+     "item": "beer-nonalc",
+     "name": "Birell 0,3 l",
+     "priceCzk": 57,
+     "volumeMl": 300,
+     "approx": true
+    },
+    {
+     "item": "cola",
+     "name": "Kofola 0,3 l",
+     "priceCzk": 59,
+     "volumeMl": 300,
+     "approx": true,
+     "note": "Kofola, ne Coca-Cola"
     }
    ]
-  },
-  {
-   "key": "bed-lounge",
-   "name": "Bed Lounge",
-   "area": "Dlouhá 2",
-   "kind": "cocktail bar",
-   "url": "https://bedlounge.cz/pdf/BD_MENU_2025_21x21_CZE.pdf",
-   "items": [
-    {
-     "item": "wine-white",
-     "name": "Chardonnay Roche Mazet 0,1 l",
-     "priceCzk": 229,
-     "volumeMl": 100,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    },
-    {
-     "item": "wine-red",
-     "name": "Rulandské modré barrique 0,1 l",
-     "priceCzk": 229,
-     "volumeMl": 100,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    },
-    {
-     "item": "prosecco-glass",
-     "name": "Prosecco 0,1 l",
-     "priceCzk": 229,
-     "volumeMl": 100,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    },
-    {
-     "item": "prosecco-bottle",
-     "name": "Prosecco 0,75 l",
-     "priceCzk": 990,
-     "volumeMl": 750,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    },
-    {
-     "item": "moet-bottle",
-     "name": "Moët & Chandon Imperial Brut",
-     "priceCzk": 2900,
-     "volumeMl": 750,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    },
-    {
-     "item": "mojito",
-     "name": "Mojito",
-     "priceCzk": 325,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    },
-    {
-     "item": "daiquiri",
-     "name": "Daiquiri",
-     "priceCzk": 325,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    },
-    {
-     "item": "caipirinha",
-     "name": "Caipirinha",
-     "priceCzk": 325,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    },
-    {
-     "item": "espresso-martini",
-     "name": "Espresso Martini",
-     "priceCzk": 325,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    },
-    {
-     "item": "moscow-mule",
-     "name": "Moscow Mule",
-     "priceCzk": 325,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    },
-    {
-     "item": "cosmopolitan",
-     "name": "Cosmopolitan",
-     "priceCzk": 325,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    },
-    {
-     "item": "negroni",
-     "name": "Negroni",
-     "priceCzk": 325,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    },
-    {
-     "item": "gin-fizz",
-     "name": "Gin Fizz",
-     "priceCzk": 325,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    },
-    {
-     "item": "margarita",
-     "name": "Margarita",
-     "priceCzk": 325,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    },
-    {
-     "item": "old-fashioned",
-     "name": "Old Fashioned",
-     "priceCzk": 325,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    },
-    {
-     "item": "aperol-spritz",
-     "name": "Aperol Spritz",
-     "priceCzk": 325,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    },
-    {
-     "item": "hugo",
-     "name": "Hugo Spritz",
-     "priceCzk": 325,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    },
-    {
-     "item": "long-island",
-     "name": "Long Island Iced Tea (small)",
-     "priceCzk": 325,
-     "note": "cena z PDF nejistá (špatně čitelné sloupce)",
-     "approx": true
-    }
-   ],
-   "note": "lístek PDF čten jen přes textový převod se špatným zarovnáním; destiláty, pivo a jídla bez jistých cen vynechány"
   },
   {
    "key": "vipet-coffee",
@@ -3448,6 +3937,14 @@
      "name": "naše limonáda",
      "priceCzk": 80,
      "approx": true
+    },
+    {
+     "item": "americano",
+     "name": "Batch brew 0,2 l (filtrovaná káva)",
+     "priceCzk": 60,
+     "volumeMl": 200,
+     "note": "filtrovaná káva",
+     "approx": true
     }
    ]
   },
@@ -3472,7 +3969,7 @@
      "note": "cena z lístku 14. 10. 2026"
     }
    ],
-   "note": null
+   "note": "web 11/2026: jídelní lístek „zatím nepřipraven / currently closed“; ceny z 14. 10. 2026 neověřeny, ponechány"
   },
   {
    "key": "au-gourmand",
@@ -3481,7 +3978,7 @@
    "kind": "café",
    "url": "https://augourmand.cz/",
    "items": [],
-   "note": "web nedostupný, lístek bez cen online"
+   "note": "web bez lístku a cen; francouzská cukrárna/bistro, provoz web potvrzuje"
   },
   {
    "key": "bokovka",
@@ -3490,7 +3987,7 @@
    "kind": "wine bar",
    "url": "https://bokovka.com/",
    "items": [],
-   "note": "Ceny online nenalezeny; web blokuje čtení, provoz neověřen (zivefirmy ji vede jako zavřenou)."
+   "note": "web blokuje čtení (robots), ceny online nenalezeny; provoz neověřen (zivefirmy ji vede jako zavřenou)"
   },
   {
    "key": "banh-mi-makers-dlouha",
@@ -3499,7 +3996,7 @@
    "kind": "bistro",
    "url": "https://spinach.guide/venues/banh-mi-makers-dlouha-994/",
    "items": [],
-   "note": "lístek s cenami online nenalezen"
+   "note": "lístek s cenami online nenalezen (wolt/web bez výsledku)"
   },
   {
    "key": "cafe-domecek",
@@ -3517,7 +4014,7 @@
    "kind": "café",
    "url": "https://prague.eu/cs/objevujte/cukrar-skala-v-dlouhe/",
    "items": [],
-   "note": "cukrárna s kávou a limonádou, web cukrarskala.cz bez cen online; po-pá 8-20, so-ne 10-20"
+   "note": "cukrárna, ceny online nenalezeny (cukrarskala.cz bez cen)"
   },
   {
    "key": "el-mojito",
@@ -3526,7 +4023,7 @@
    "kind": "cocktail bar",
    "url": "https://www.elmojito.cz/napoje/",
    "items": [],
-   "note": "Lístek nápojů online bez cen; po prázdninové pauze (do 13. 10. 2026) otevřeno."
+   "note": "web uvádí nápoje bez cen a objemů; provoz ano (adresa, telefon, delivery)"
   },
   {
    "key": "lfleur-mixology-champagne",
@@ -3535,7 +4032,7 @@
    "kind": "cocktail bar",
    "url": "https://lfleur.cz/menu/",
    "items": [],
-   "note": "lístek jen jako obrázky PNG, text bez cen; obrázky se nepodařilo přečíst"
+   "note": "lístek jen jako obrázky PNG (menucz1/2, Cocktails.png); WebFetch i curl obrázky nepřečetly"
   },
   {
    "key": "la-bottega-bistroteka",
@@ -3544,7 +4041,7 @@
    "kind": "bistro",
    "url": "https://bistroteka.lacollezione.cz/",
    "items": [],
-   "note": "Lístek bez cen online, web zastaralý, provoz neověřen."
+   "note": "Lístek bez cen online (jen sezónní novinky bez cen), provoz neověřen."
   },
   {
    "key": "la-casa-argentina",
@@ -3553,7 +4050,7 @@
    "kind": "restaurant",
    "url": "https://www.lacasaargentina.cz/",
    "items": [],
-   "note": "Web blokuje čtení robotem (robots), lístek s cenami jinde nenalezen."
+   "note": "Web blokuje čtení robotem, lístek s cenami jinde nenalezen (ověřeno 1. 11. 2026)."
   },
   {
    "key": "moon-club",
@@ -3562,7 +4059,7 @@
    "kind": "club",
    "url": "https://www.moonclub.cz/en/menu/",
    "items": [],
-   "note": "nápojový lístek 2026_10 jen jako obrázky, nepodařilo se přečíst"
+   "note": "nápojový lístek 2026_10 jen jako JPG (Napojak_2026_10_Page_02-15); WebFetch i curl obrázky nepřečetly"
   },
   {
    "key": "nod-cafe",
@@ -3589,7 +4086,7 @@
    "kind": "restaurant",
    "url": "https://staromacek.cz/menu",
    "items": [],
-   "note": "lístky jsou PDF bez textové vrstvy (sken), ceny nečitelné"
+   "note": "lístky jsou PDF bez textové vrstvy (sken), ceny nečitelné (znovu zkoušeno 1. 11. 2026)"
   },
   {
    "key": "roxy",
@@ -3616,7 +4113,7 @@
    "kind": "cocktail bar",
    "url": "https://steampunkprague.cz/napojovy-listek/",
    "items": [],
-   "note": "lístek jen jako obrázky PNG, text bez cen; obrázky se nepodařilo přečíst"
+   "note": "lístek jen jako obrázky PNG (nové stránky 09/2026), WebFetch obrázek nepřečetl; ceny nezjištěny"
   },
   {
    "key": "the-spot",
@@ -3625,7 +4122,7 @@
    "kind": "bistro",
    "url": "https://www.thespot.cz",
    "items": [],
-   "note": "web nedostupný, lístek bez cen online"
+   "note": "web blokuje automatické čtení (robots), lístek bez cen online"
   }
  ]
 }
